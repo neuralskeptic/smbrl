@@ -1,8 +1,8 @@
 # smbrl code
 
 ## install instructions
-`conda create -f environment.yml`
-`pip install -e .`
+1. `conda create -f environment.yml`
+2. `pip install -e .`
 
 ## execute
 - check in `script.py` and `scripts/`
