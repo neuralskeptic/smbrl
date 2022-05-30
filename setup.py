@@ -4,4 +4,3 @@ setup(
     name="library",
     packages=["library"],
 )
-

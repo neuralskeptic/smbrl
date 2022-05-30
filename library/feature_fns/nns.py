@@ -3,9 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as functional
 from torch.nn.utils.parametrizations import spectral_norm
 
-ACTIVATIONS = {
-    "leakyrelu": functional.leaky_relu
-}
+ACTIVATIONS = {"leakyrelu": functional.leaky_relu}
+
 
 class TwoLayerNormalizedResidualNetwork(nn.Module):
     def __init__(self, d_in, d_out, d_hidden, activation="leakyrelu"):

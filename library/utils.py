@@ -1,5 +1,6 @@
 import torch
 
+
 def vec(x):
     """
     TODO pytorch
@@ -11,6 +12,7 @@ def vec(x):
         return x.reshape((a, b * c), order="F")
     else:
         return x.reshape((-1, 1), order="F")
+
 
 def matrix_gaussian_kl(mean_1, cov_in_1, cov_out_1, mean_2, cov_in_2, cov_out_2):
     """
@@ -44,6 +46,7 @@ def matrix_gaussian_kl(mean_1, cov_in_1, cov_out_1, mean_2, cov_in_2, cov_out_2)
             - n * p
         ).item()
     )
+
 
 def to_torch(x):
     return torch.from_numpy(x).float()

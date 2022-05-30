@@ -1,10 +1,13 @@
+import math
+
 import torch
 import torch.nn as nn
+from torch.distributions import MultivariateNormal, kl_divergence
 from tqdm import tqdm
-import math
-from torch.distributions import kl_divergence, MultivariateNormal
-from library.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
+
 from library import utils
+from library.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
+
 
 class LinearBayesianModel(object):
 
@@ -22,7 +25,9 @@ class LinearBayesianModel(object):
         self.sigma_w_prior_chol = utils.autograd_tensor(torch.eye(dim_features))
         # parameterize in square root form to ensure positive definiteness
         self.sigma_prior_sqrt = utils.autograd_tensor(torch.ones((dim_y,)))
-        assert isinstance(self.features, nn.Module), "Features should have been specified by now."
+        assert isinstance(
+            self.features, nn.Module
+        ), "Features should have been specified by now."
         self.params = [self.mu_w, self.sigma_w_chol, self.sigma_sqrt] + list(
             self.features.parameters()
         )
@@ -32,7 +37,9 @@ class LinearBayesianModel(object):
 
     def sigma_w_prior(self):
         # TODO make regularization more principled
-        return self.sigma_w_prior_chol @ self.sigma_w_prior_chol.t() + 1e-3 * torch.eye(self.d_features)
+        return self.sigma_w_prior_chol @ self.sigma_w_prior_chol.t() + 1e-3 * torch.eye(
+            self.d_features
+        )
 
     def sigma(self):
         return torch.diag(torch.pow(self.sigma_sqrt, 2))
@@ -72,7 +79,8 @@ class LinearBayesianModel(object):
         # TODO replace with matrix normal KL
         return kl_divergence(
             MultivariateNormal(self.mu_w.t(), self.sigma_w()),
-            MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()))
+            MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()),
+        )
 
     def train(self, x, y, n_iter=1000, lr=1e-3):
         # x, y = map(to_torch, [x, y])
@@ -94,12 +102,14 @@ class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
 
     d_approx = 1024  # RFFs require ~512-1024 for accuracy
 
-    def __init__(self,  dim_x, dim_y, dim_features):
-        self.features = TwoLayerNormalizedResidualNetwork(dim_x, self.d_approx, dim_features)
+    def __init__(self, dim_x, dim_y, dim_features):
+        self.features = TwoLayerNormalizedResidualNetwork(
+            dim_x, self.d_approx, dim_features
+        )
         super().__init__(dim_x, dim_y, self.d_approx)
 
-class NeuralLinearModel(LinearBayesianModel):
 
-    def __init__(self,  dim_x, dim_y, dim_features):
+class NeuralLinearModel(LinearBayesianModel):
+    def __init__(self, dim_x, dim_y, dim_features):
         self.features = TwoLayerNetwork(dim_x, dim_features, dim_features)
         super().__init__(dim_x, dim_y, dim_features)
