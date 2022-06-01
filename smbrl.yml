@@ -24,19 +24,25 @@ dependencies:
   - pip:
       - black==22.3.0
       - certifi==2022.5.18.1
+      - cfgv==3.3.1
+      - check-shape==0.2
       - click==8.1.3
       - conda-env-export==0.4.3
       - cycler==0.11.0
       - Cython==0.29.30
       - cytoolz==0.11.2
       - decorator==5.1.1
+      - distlib==0.3.4
+      - filelock==3.7.0
       - fonttools==4.33.3
       - GPy==1.10.0
+      - identify==2.5.1
       - importlib-metadata==4.11.4
       - isort==5.10.1
       - kiwisolver==1.4.2
       - matplotlib==3.5.2
       - mypy-extensions==0.4.3
+      - nodeenv==1.6.0
       - numpy==1.21.6
       - packaging==21.3
       - paramz==0.9.5
@@ -44,17 +50,20 @@ dependencies:
       - Pillow==9.1.1
       - pip==20.3.4
       - platformdirs==2.5.2
+      - pre-commit==2.19.0
       - pyparsing==3.0.9
       - python-dateutil==2.8.2
       - PyYAML==6.0
       - scipy==1.7.3
       - setuptools==61.2.0
       - six==1.16.0
+      - toml==0.10.2
       - tomli==2.0.1
       - toolz==0.11.2
       - torch==1.11.0
       - tqdm==4.64.0
       - typed-ast==1.5.4
       - typing-extensions==4.2.0
+      - virtualenv==20.14.1
       - wheel==0.37.1
       - zipp==3.8.0
