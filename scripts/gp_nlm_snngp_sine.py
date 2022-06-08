@@ -107,7 +107,9 @@ if __name__ == "__main__":
         trace = model.train(
             utils.to_torch(x_train), utils.to_torch(y_train), n_iter=1, lr=1e-3
         )
-        # trace = model.train(utils.to_torch(x_train), utils.to_torch(y_train), n_iter=100, lr=1e-3)
+        # trace = model.train(
+        #     utils.to_torch(x_train), utils.to_torch(y_train), n_iter=100, lr=1e-3
+        # )
 
         fig_trace, ax_trace = plt.subplots()
         ax_trace.plot(trace)
