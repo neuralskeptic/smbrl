@@ -1,6 +1,6 @@
 from distutils.core import setup
 
 setup(
-    name="library",
+    name="smbrl",
     packages=["library"],
 )

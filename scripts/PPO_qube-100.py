@@ -1,60 +1,76 @@
 import gym
 import numpy as np
+import wandb
 from quanser_robots import GentlyTerminating
 from stable_baselines3 import PPO
-
-env = GentlyTerminating(gym.make("Qube-100-v0"))
-
-model = PPO("MlpPolicy", env, verbose=0)
-
-
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.monitor import Monitor
+from wandb.integration.sb3 import WandbCallback
+
+from library.utils import ProgressBarManager
+
+config = {
+    "policy_type": "MlpPolicy",
+    "total_timesteps": 500_000,
+    "env_name": "Qube-100-v0",
+}
+run = wandb.init(
+    project="smbrl_sb3PPO_qube100",
+    entity="showmezeplozz",  # needed ?
+    config=config,
+    sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
+    monitor_gym=True,  # auto-upload the videos of agents playing the game
+    save_code=True,  # optional
+)
 
 
-# same as
-def evaluate(model, num_episodes=100):
-    """
-    Evaluate a RL agent
-    :param model: (BaseRLModel object) the RL Agent
-    :param num_episodes: (int) number of episodes to evaluate it
-    :return: (float) Mean reward for the last num_episodes
-    """
-    # This function will only work for a single Environment
-    env = model.get_env()
-    all_episode_rewards = []
-    for i in range(num_episodes):
-        episode_rewards = []
-        done = False
-        obs = env.reset()
-        while not done:
-            env.render()
-            # _states are only useful when using LSTM policies
-            action, _states = model.predict(obs)
-            # here, action, rewards and dones are arrays
-            # because we are using vectorized env
-            obs, reward, done, info = env.step(action)
-            episode_rewards.append(reward)
-
-        all_episode_rewards.append(sum(episode_rewards))
-
-    mean_episode_reward = np.mean(all_episode_rewards)
-    print("Mean reward:", mean_episode_reward, "Num episodes:", num_episodes)
-
-    return mean_episode_reward
+def make_env():
+    env = gym.make(config["env_name"])
+    env = Monitor(GentlyTerminating(env))  # record stats such as returns
+    return env
 
 
-# Random Agent, before training
-# mean_reward_before_train = evaluate(model, num_episodes=100)
-mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
+env = make_env()
+# env = GentlyTerminating(gym.make("Qube-100-v0"))
+# env.reset()
+
+model = PPO(config["policy_type"], env, verbose=1, tensorboard_log=f"runs/{run.id}")
+
+
+model.learn(
+    total_timesteps=config["total_timesteps"],
+    callback=WandbCallback(
+        gradient_save_freq=100,
+        model_save_path=f"models/{run.id}",
+        verbose=2,
+    ),
+)
+run.finish()
+
+
+# # Random Agent, before training
+# # mean_reward_before_train = evaluate(model, num_episodes=100)
+# # mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
+# # evaluate_policy(model, env, render=True, n_eval_episodes=1)
+# # print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
+
+# # Train
+# N_EPISODES = 10
+# N_TIMESTEPS = 100_000
+# N_TIMESTEPS_EFFECTIVE = (N_TIMESTEPS//model.n_steps + 1)*model.n_steps
+# with ProgressBarManager(N_TIMESTEPS_EFFECTIVE) as cb:
+#     model.learn(total_timesteps=N_TIMESTEPS, callback=cb)
+#     # for i in range(5):
+#     #     model.learn(total_timesteps=N_TIMESTEPS, callback=cb)
+#     #     mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=5)
+#     #     print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}\n")
+
+# # Evaluate the trained agent
+# mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
 # evaluate_policy(model, env, render=True, n_eval_episodes=1)
 
-print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
+# print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}\n")
 
-# Train the agent for 10000 steps
-model.learn(total_timesteps=10000)
 
-# Evaluate the trained agent
-mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
-# evaluate_policy(model, env, render=True, n_eval_episodes=1)
-
-print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
+# # model.save("./models/PPO_tutorial")
+# # loaded_model = PPO.load("./models/PPO_tutorial")

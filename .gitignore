@@ -1,3 +1,8 @@
+# logging
+**/runs/
+**/wandb/
+**/models/
+
 # quanser clients
 quanser-clients-master/
 
