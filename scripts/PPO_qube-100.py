@@ -1,76 +1,92 @@
+import time
+
 import gym
 import numpy as np
-import wandb
+import torch
 from quanser_robots import GentlyTerminating
 from stable_baselines3 import PPO
+from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from wandb.integration.sb3 import WandbCallback
 
-from library.utils import ProgressBarManager
+import wandb
+from library.utils import structdict  # use dicts like classes (structs)
 
-config = {
-    "policy_type": "MlpPolicy",
-    "total_timesteps": 500_000,
-    "env_name": "Qube-100-v0",
-}
-run = wandb.init(
-    project="smbrl_sb3PPO_qube100",
-    entity="showmezeplozz",  # needed ?
-    config=config,
-    sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
-    monitor_gym=True,  # auto-upload the videos of agents playing the game
-    save_code=True,  # optional
-)
+if __name__ == "__main__":
+    ## problem, algo and hyperparams
+    config = structdict(
+        {
+            "env_name": "Qube-100-v0",
+            "policy_type": "MlpPolicy",
+            "policy_kwargs": {
+                "activation_fn": torch.nn.ReLU,
+                "net_arch": [dict(pi=[256, 256], vf=[256, 256])],
+            },
+            "seed": 1234,
+            "total_timesteps": 500_000,
+            "lr": 1e-4,
+            "minibatch_size": 128,
+            "n_epochs": 4,  # TODO correct?
+            "rollouts_per_update": 10,  # TODO where to put this?
+            # "env_steps_per_rollout": 2048, # defined in gym env
+            "ppo_clip_range": 0.2,  # TODO correct?
+        }
+    )
+    # set_random_seed(config["seed"])
 
-
-def make_env():
-    env = gym.make(config["env_name"])
-    env = Monitor(GentlyTerminating(env))  # record stats such as returns
-    return env
-
-
-env = make_env()
-# env = GentlyTerminating(gym.make("Qube-100-v0"))
-# env.reset()
-
-model = PPO(config["policy_type"], env, verbose=1, tensorboard_log=f"runs/{run.id}")
-
-
-model.learn(
-    total_timesteps=config["total_timesteps"],
-    callback=WandbCallback(
+    ## wand config & callback
+    run_name = f"{config.env_name}__sb3PPO__{config.seed}__{int(time.time())}"
+    run = wandb.init(
+        name=run_name,
+        entity="showmezeplozz",  # needed ?
+        project="smbrl_sb3PPO_qube100",
+        group="experiment_1",
+        job_type="train",
+        config=config,
+        sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
+        monitor_gym=True,  # auto-upload the videos of agents playing the game
+        save_code=True,  # optional
+    )
+    wandcallback = WandbCallback(
         gradient_save_freq=100,
         model_save_path=f"models/{run.id}",
         verbose=2,
-    ),
-)
-run.finish()
+    )
 
+    ## create envs
+    env = Monitor(GentlyTerminating(gym.make(config.env_name)))
+    set_random_seed(config.seed)
+    # env = make_vec_env(
+    #     config.env_name,
+    #     n_envs=2,
+    #     seed=config.seed,
+    #     vec_env_cls=DummyVecEnv,
+    #     # vec_env_cls=SubprocVecEnv,
+    #     wrapper_class=GentlyTerminating,
+    # )
 
-# # Random Agent, before training
-# # mean_reward_before_train = evaluate(model, num_episodes=100)
-# # mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
-# # evaluate_policy(model, env, render=True, n_eval_episodes=1)
-# # print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
+    ## create model
+    model = PPO(
+        policy=config.policy_type,
+        env=env,
+        learning_rate=config.lr,
+        # n_steps=???,
+        batch_size=config.minibatch_size,
+        n_epochs=config.n_epochs,
+        tensorboard_log=f"runs/{run.id}",
+        policy_kwargs=config.policy_kwargs,
+        verbose=1,
+        seed=config.seed,
+    )
 
-# # Train
-# N_EPISODES = 10
-# N_TIMESTEPS = 100_000
-# N_TIMESTEPS_EFFECTIVE = (N_TIMESTEPS//model.n_steps + 1)*model.n_steps
-# with ProgressBarManager(N_TIMESTEPS_EFFECTIVE) as cb:
-#     model.learn(total_timesteps=N_TIMESTEPS, callback=cb)
-#     # for i in range(5):
-#     #     model.learn(total_timesteps=N_TIMESTEPS, callback=cb)
-#     #     mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=5)
-#     #     print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}\n")
+    ## train model
+    model.learn(
+        total_timesteps=config.total_timesteps,
+        callback=wandcallback,
+    )
 
-# # Evaluate the trained agent
-# mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
-# evaluate_policy(model, env, render=True, n_eval_episodes=1)
-
-# print(f"mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}\n")
-
-
-# # model.save("./models/PPO_tutorial")
-# # loaded_model = PPO.load("./models/PPO_tutorial")
+    ## tell wandb we're done
+    run.finish()
