@@ -4,7 +4,7 @@
 **/models/
 
 # quanser clients
-quanser-clients-master/
+clients/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

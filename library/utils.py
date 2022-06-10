@@ -1,3 +1,6 @@
+from collections import UserDict
+
+import numpy as np
 import torch
 
 
@@ -55,3 +58,24 @@ def to_torch(x):
 def autograd_tensor(x):
     """Same as torch.Tensor(x, requires_grad=True), but does not cause warnings."""
     return x.clone().detach().requires_grad_(True)
+
+
+class structdict(UserDict):
+    def __init__(self, a_dict: dict):
+        super().__init__(a_dict)
+        [setattr(self, k, v) for k, v in a_dict.items()]
+
+    @classmethod
+    def from_keys_values(cls, keys=[], values=[]):
+        return cls(dict(zip(keys, values)))
+
+    def __setattr__(self, name, val):
+        if name == "data":
+            super().__setattr__(name, val)
+        else:
+            self[name] = val
+            self.__dict__[name] = val
+
+    def __setitem__(self, key, item):
+        super(structdict, self).__setitem__(key, item)
+        self.__dict__[key] = item
