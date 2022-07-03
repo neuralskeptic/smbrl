@@ -105,7 +105,10 @@ if __name__ == "__main__":
         ax.set_title(name)
         model = model_class(1, 1, 512)
         trace = model.train(
-            utils.to_torch(x_train), utils.to_torch(y_train), n_iter=1, lr=1e-3
+            utils.to_torch(x_train),
+            utils.to_torch(y_train),
+            n_iter=100,
+            lr=1e-3,
         )
         # trace = model.train(
         #     utils.to_torch(x_train), utils.to_torch(y_train), n_iter=100, lr=1e-3
