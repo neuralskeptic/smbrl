@@ -33,7 +33,8 @@ class LinearBayesianModel(object):
         )
 
     def sigma_w(self):
-        return self.sigma_w_chol @ self.sigma_w_chol.t()
+        lower_triangular = torch.tril(self.sigma_w_chol)
+        return lower_triangular @ lower_triangular.t()
 
     def sigma_w_prior(self):
         # TODO make regularization more principled
