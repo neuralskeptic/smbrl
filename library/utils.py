@@ -3,6 +3,8 @@ from collections import UserDict
 import numpy as np
 import torch
 
+EPS = torch.finfo(torch.float64).tiny
+
 
 def vec(x):
     """
@@ -15,6 +17,18 @@ def vec(x):
         return x.reshape((a, b * c), order="F")
     else:
         return x.reshape((-1, 1), order="F")
+
+
+def set_random_seed(seed):
+    # https://pytorch.org/docs/stable/notes/randomness.html
+    import random
+
+    import numpy as np
+    import torch
+
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
 
 
 def matrix_gaussian_kl(mean_1, cov_in_1, cov_out_1, mean_2, cov_in_2, cov_out_2):

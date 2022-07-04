@@ -1,16 +1,17 @@
 import torch
+from torch.utils.data import DataLoader
 
 from library import utils
+from library.datasets import toy_datasets
 from library.models.linear_bayesian_models import (
-    NeuralLinearModel,
     SpectralNormalizedNeuralGaussianProcess,
 )
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
+    SEED = 1234
+    utils.set_random_seed(SEED)
 
-    def test_function(x):
-        return torch.sin(x * torch.pi)
+    import matplotlib.pyplot as plt
 
     def plot_gp(axis, x, mu, var):
         axis.plot(x, mu, "b-")
@@ -27,22 +28,15 @@ if __name__ == "__main__":
                 alpha=0.3,
             )
 
-    fig, ax = plt.subplots(1, 1)
-
-    x_max = 1
-    N = 1000
-
-    x_train = torch.concat(
-        (
-            torch.distributions.Uniform(-1, 1).sample((N, 1)),
-            # torch.distributions.Uniform(-1,1).sample([1,]),
-        ),
-        axis=0,
+    train_dataset = toy_datasets.Sine1dDataset(
+        data_spec=[(-0.75, -0.5, 100), (0, 0.25, 100), (0.75, 1, 100)],
+    )
+    test_dataset = toy_datasets.Sine1dDataset(
+        data_spec=[(-3, 3, 500)],
     )
 
-    x_test = torch.linspace(-3, 3, 500)[:, None]
-    y_train = test_function(x_train)
-    y_test = test_function(x_test)
+    train_dataloader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
     # # whiten data here for simplicity
     # x_mean, x_std = x_train.mean(), x_train.std()
@@ -52,7 +46,21 @@ if __name__ == "__main__":
     # y_train = (y_train) / y_std
     # y_test = (y_test) / y_std
 
-    ax.plot(x_test, y_test, "k-")
+    model = SpectralNormalizedNeuralGaussianProcess(1, 1, 512)
+    trace = model.train(train_dataloader, n_epochs=5, lr=4e-3)
+
+    ### plotting
+    x_train, y_train = train_dataset[:]
+    x_test, y_test = test_dataset[:]
+
+    # # sort test data
+    # xy_test = torch.cat([x_test, y_test], dim=1)
+    # xy_test, _ = torch.sort(xy_test, dim=0)
+    # x_test, y_test = xy_test.chunk(2, dim=1)
+
+    fig, ax = plt.subplots(1, 1)
+
+    ax.scatter(x_test, y_test, c="k", s=5)
     ax.plot(x_train, y_train, "mx", markersize=5)
     ax.set_ylabel("$y$")
 
@@ -60,8 +68,6 @@ if __name__ == "__main__":
 
     name = "snngp"
     ax.set_title(name)
-    model = SpectralNormalizedNeuralGaussianProcess(1, 1, 512)
-    trace = model.train(x_train, y_train, n_iter=100, lr=4e-3)
 
     fig_trace, ax_trace = plt.subplots()
     ax_trace.plot(trace)

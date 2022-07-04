@@ -1,9 +1,13 @@
 import math
+from functools import partial
 
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal, kl_divergence
+from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+tqdm = partial(tqdm, position=0, leave=True)
 
 from library import utils
 from library.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
@@ -83,19 +87,19 @@ class LinearBayesianModel(object):
             MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()),
         )
 
-    def train(self, x, y, n_iter=1000, lr=1e-3):
-        # x, y = map(to_torch, [x, y])
-        n_batch = x.shape[0]
+    def train(self, dataloader: DataLoader, n_epochs=1000, lr=1e-3):
         opt = torch.optim.Adam(self.params, lr=lr)
         trace = []
-        for i in tqdm(range(n_iter)):
-            opt.zero_grad()
-            ellh = self.ellh(x, y)
-            kl = self.kl()
-            loss = -ellh + kl
-            loss.backward()
-            opt.step()
-            trace.append(loss.detach().item())
+        for epoch in tqdm(range(n_epochs)):
+            for i_minibatch, minibatch in enumerate(dataloader):
+                x, y = minibatch
+                opt.zero_grad()
+                ellh = self.ellh(x, y)
+                kl = self.kl()
+                loss = -ellh + kl
+                loss.backward()
+                opt.step()
+                trace.append(loss.detach().item())
         return trace
 
 
