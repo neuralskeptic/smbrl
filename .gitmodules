@@ -1,0 +1,6 @@
+[submodule "externals/quanser_robots"]
+	path = externals/quanser_robots
+	url = https://git.ias.informatik.tu-darmstadt.de/quanser/clients.git
+[submodule "externals/mushroom-rl"]
+	path = externals/mushroom_rl
+	url = https://github.com/MushroomRL/mushroom-rl.git
