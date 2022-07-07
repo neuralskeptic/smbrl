@@ -104,10 +104,11 @@ def experiment(alg, n_epochs, n_steps, n_steps_test, env_name="Qube-500-v0"):
     tau = 0.005
     lr_alpha = 5e-5  # 3e-4
 
-    use_cuda = torch.cuda.is_available()
+    use_cuda = False  # torch.cuda.is_available() # cpu is faster
     print(torch.__version__)
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    print(device)
+    # torch.backends.mps is ony MacOS
+    device = torch.device("cpu")
+    print(torch.device)
 
     # Approximator
     actor_input_shape = mdp.info.observation_space.shape
