@@ -1,32 +1,30 @@
 import os
 import time
 
-import numpy as np
+import quanser_robots
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from experiment_launcher import run_experiment, save_args
+from mushroom_rl.algorithms.actor_critic import SAC
 from mushroom_rl.core import Core
 from mushroom_rl.core.logger.logger import Logger
 from mushroom_rl.environments import Gym
 from mushroom_rl.utils.callbacks import PlotDataset
-from mushroom_rl.utils.dataset import compute_J
 from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
 
-import wandb
-from scripts.exploration.exp_sac_base import evaluate_policy
-from scripts.off_policy.sac_networks import ActorNetwork, CriticNetworkQfunction
-from src.algs.step_based.msg_pg import MSG_PolicyGradient
+from src.models.sac_networks import ActorNetwork, CriticNetworkQfunction
+from src.utils.evaluate_policy import evaluate_policy
 from src.utils.seeds import fix_random_seed
-
-########################################################################################################################
-from src.utils.set_evaluation import SetEval
 from src.utils.set_logging import SetLogging
+from src.utils.time_utils import timestamp
+
+# os.environ["WANDB_MODE"] = "offline"  # TODO uncomment to try things out
 
 
 def experiment(
-    alg: str = "msg",
-    env_id: str = "Pendulum-v1",
+    alg: str = "SAC",
+    env_id: str = "Qube-100-v0",
     horizon: int = 200,
     gamma: float = 0.99,
     n_epochs: int = 100,
@@ -42,7 +40,7 @@ def experiment(
     n_features_critic: int = 64,
     lr_actor: float = 3e-4,
     lr_critic: float = 3e-4,
-    n_critics_ensemble: int = 5,
+    n_critics_ensemble: int = 2,
     n_epochs_critic: int = 1,
     m_ensemble: int = 2,
     policy_grad_reduction: str = "min",
@@ -54,26 +52,25 @@ def experiment(
     lambda_entropy: float = 0.01,
     entropy_lower_bound: float = -10.0,
     mvd_random_directions: int = -1,
-    exploration_policy_class: str = "policy",
-    ucb_coeff: float = 1.0,
-    use_entropy: bool = False,
-    alpha_q_regularizer: float = 0.1,
-    beta_ucb: float = -4.0,
     preprocess_states: bool = False,
     use_cuda: bool = False,
     debug: bool = False,
     verbose: bool = False,
-    log_wandb: bool = False,
-    wandb_project: str = None,
-    wandb_entity: str = None,
+    log_wandb: bool = True,
+    wandb_project: str = "smbrl",
+    wandb_entity: str = "showmezeplozz",
+    wandb_group: str = "SAC",
+    wandb_job_type: str = "train",
     seed: int = 0,
-    results_dir: str = "./logs/tmp/exp_msg/pendulum/",
+    results_dir: str = "./logs/tmp/",
 ):
 
     ####################################################################################################################
     # SETUP
+    s = time.time()
+
     # Results directory
-    results_dir = os.path.join(results_dir, str(seed))
+    results_dir = os.path.join(results_dir, wandb_group, env_id, str(seed), timestamp())
     os.makedirs(results_dir, exist_ok=True)
     # Save arguments
     save_args(results_dir, locals(), git_repo_path="./")
@@ -85,17 +82,18 @@ def experiment(
         results_dir=results_dir,
         project=wandb_project,
         entity=wandb_entity,
-        tags=["env_id", "entity", "exploration_policy_class"],
+        wandb_kwargs={"group": wandb_group, "job_type": wandb_job_type},
+        tags=["env_id", "entity"],
         log_console=verbose,
         log_wandb=log_wandb,
     )
 
     ####################################################################################################################
     # EXPERIMENT
-    s = time.time()
 
     if use_cuda:
         torch.set_num_threads(1)
+    # print(torch.device)
 
     print(f"Env id: {env_id}, Alg: {alg}, Seed: {seed}")
 
@@ -121,6 +119,7 @@ def experiment(
         output_shape=mdp.info.action_space.shape,
         use_cuda=use_cuda,
     )
+    # print(mdp.info.action_space.low, mdp.info.action_space.high)
 
     actor_optimizer = {"class": optim.Adam, "params": {"lr": lr_actor}}
 
@@ -137,34 +136,7 @@ def experiment(
     )
 
     # Agent
-    mc_gradient_estimator = {"estimator": "reptrick", "n_samples": mc_samples_gradient}
-
-    # Exploration policy options
-    exploration_policy = {"name": "policy"}
-    if exploration_policy_class == "policy_oac":
-        exploration_policy = {
-            "name": "policy_oac",
-            "beta_UB": beta_UB,
-            "kl_upper_bound": kl_upper_bound,
-        }
-    elif exploration_policy_class == "policy_troac":
-        exploration_policy = {
-            "name": "policy_troac",
-            "beta_UB": beta_UB,
-            "kl_upper_bound": kl_upper_bound,
-        }
-    elif exploration_policy_class == "policy_troac_reptrick":
-        exploration_policy = {
-            "name": "policy_troac_reptrick",
-            "beta_UB": beta_UB,
-            "kl_upper_bound": kl_upper_bound,
-            "lambda_kl": lambda_kl,
-            "lambda_entropy": lambda_entropy,
-        }
-    elif exploration_policy_class == "policy_random_bounds":
-        exploration_policy = {"name": "policy_random_bounds"}
-
-    agent = MSG_PolicyGradient(
+    agent = SAC(
         mdp.info,
         actor_mu_params,
         actor_sigma_params,
@@ -177,11 +149,6 @@ def experiment(
         tau,
         lr_alpha,
         critic_fit_params=dict(n_epochs=n_epochs_critic),
-        mc_gradient_estimator=mc_gradient_estimator,
-        exploration_policy=exploration_policy,
-        use_entropy=use_entropy,
-        alpha_q_regularizer=alpha_q_regularizer,
-        beta_ucb=beta_ucb,
     )
 
     # Save the agent before training
@@ -227,7 +194,9 @@ def experiment(
     core.learn(n_steps=initial_replay_size, n_steps_per_fit=initial_replay_size)
 
     for n in range(1, n_epochs + 1):
-        with SetLogging(logger, [agent.exploration_policy]):
+        with SetLogging(
+            logger, [agent.policy]
+        ):  # TODO check if okay (was exploration_policy)
             # Learn and evaluate
             core.learn(
                 n_steps=n_steps, n_steps_per_fit=1, quiet=not verbose, render=False

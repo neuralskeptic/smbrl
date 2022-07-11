@@ -12,7 +12,7 @@ from src.utils.eval import replay_agent
 from src.utils.seeds import fix_random_seed
 
 # PATH_TO_EXPERIMENT = '/home/carvalho/Projects/MVD/mvd-stepbased/scripts/on_policy/logs/ppo_trpo_2022-03-30_16-49-00/env_id___PointMassMaze00/alg___ppo/0'
-PATH_TO_EXPERIMENT = "/home/carvalho/Projects/MVD/mvd-stepbased/scripts/on_policy/logs/tmp/exp_tree_pg/pendulum/0"
+PATH_TO_EXPERIMENT = "./scripts/logs/tmp/exp_tree_pg/pendulum/0"
 AGENT_EPOCH = "19"
 
 args = json.load(open(os.path.join(PATH_TO_EXPERIMENT, "args.json")))
