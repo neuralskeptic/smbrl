@@ -3,8 +3,9 @@ yml:
 src: FORCE
 	pip install -e .
 externals: FORCE
-	cd externals/quanser-robots; pip install -e .
-	cd externals/mushroom-rl; pip install --no-use-pep517 -e .[all,mujoco,plots]
+	cd externals/quanser_robots; pip install -e .
+	cd externals/mushroom_rl; pip install --no-use-pep517 -e .[all,mujoco,plots]
+	cd externals/experiment_launcher; pip install -e .
 lint:
 	black . && isort --gitignore .
 

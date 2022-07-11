@@ -9,4 +9,4 @@ repos:
     rev: 5.10.1 # newer tags https://github.com/timothycrosley/isort/releases
     hooks:
       - id: isort
-        args: [--gitignore]
+        args: [--gitignore, --settings-path=pyproject.toml]
