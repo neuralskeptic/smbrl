@@ -82,7 +82,9 @@ def qube_rwd(self, x, a):
 def experiment(alg, n_epochs, n_steps, n_steps_test, env_name="Qube-500-v0"):
     np.random.seed()
 
-    logger = Logger(alg.__name__, results_dir=None)
+    logger = Logger(
+        {}, log_name=alg.__name__, results_dir=None, log_console=False, log_wandb=False
+    )
     logger.strong_line()
     logger.info("Experiment Algorithm: " + alg.__name__)
 
@@ -193,9 +195,7 @@ def experiment(alg, n_epochs, n_steps, n_steps_test, env_name="Qube-500-v0"):
             n + 1, J=J, R=R, entropy=E, max_r=max_r
         )  # , min_a=min_a, max_a=max_a)
 
-    logger.info("Press a button to visualize pendulum")
-    input()
-    core.evaluate(n_episodes=5, render=True)
+    return core
 
 
 if __name__ == "__main__":
@@ -204,10 +204,16 @@ if __name__ == "__main__":
     for alg in algs:
         # experiment(alg=alg, n_epochs=200, n_steps=2000, n_steps_test=2000, env_name='CartpoleSwingShort-v0')
 
-        experiment(
+        model = experiment(
             alg=alg,
             n_epochs=240,
             n_steps=2000,
             n_steps_test=2000,
-            env_name="Qube-500-v0",
+            env_name="Qube-100-v0",
         )
+        import time
+
+        model.agent.save(f"models/sac_agent_{int(time.time())}.zip")
+
+        input("Press a button to visualize pendulum")
+        model.evaluate(n_episodes=5, render=True)
