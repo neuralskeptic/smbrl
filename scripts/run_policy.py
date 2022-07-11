@@ -2,28 +2,22 @@ import json
 import os
 
 import numpy as np
+import quanser_robots
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import compute_J
 from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
 
-from scripts.on_policy.environments import MAZE_ENVIRONMENTS
-from src.utils.eval import replay_agent
+from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
 
-# PATH_TO_EXPERIMENT = '/home/carvalho/Projects/MVD/mvd-stepbased/scripts/on_policy/logs/ppo_trpo_2022-03-30_16-49-00/env_id___PointMassMaze00/alg___ppo/0'
-PATH_TO_EXPERIMENT = "./scripts/logs/tmp/exp_tree_pg/pendulum/0"
-AGENT_EPOCH = "19"
+PATH_TO_EXPERIMENT = "./logs/tmp/SAC/Qube-100-v0/0/2022-07-11--18-41-16"
+AGENT_EPOCH = "2"
 
 args = json.load(open(os.path.join(PATH_TO_EXPERIMENT, "args.json")))
 
 # MDP
-env_id = args["env_id"]
-if env_id in MAZE_ENVIRONMENTS:
-    env_d = MAZE_ENVIRONMENTS[env_id]
-    mdp = env_d["env"](gamma=args["gamma"], **env_d["kwargs"])
-else:
-    mdp = Gym(env_id, gamma=args["gamma"])
+mdp = Gym(args["env_id"], gamma=args["gamma"])
 
 # Fix seed
 fix_random_seed(args["seed"], mdp=None)

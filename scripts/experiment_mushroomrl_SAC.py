@@ -24,18 +24,27 @@ from src.utils.time_utils import timestamp
 
 def experiment(
     alg: str = "SAC",
-    env_id: str = "Qube-100-v0",
-    horizon: int = 200,
+    # env_id: str = "Qube-100-v0",
+    env_id: str = "Qube-500-v0",
+    # horizon: int = 200,
+    horizon: int = 3000,
     gamma: float = 0.99,
-    n_epochs: int = 100,
-    n_steps: int = 1000,
-    n_episodes_test: int = 10,
-    initial_replay_size: int = 256,
+    # n_epochs: int = 100,
+    n_epochs: int = 240,
+    # n_steps: int = 1000,
+    n_steps: int = 2000,
+    # n_episodes_test: int = 10,
+    n_episodes_test: int = 2000,
+    # initial_replay_size: int = 256,
+    initial_replay_size: int = 3000,
     max_replay_size: int = 500000,
-    batch_size: int = 64,
-    warmup_transitions: int = 256,
+    # batch_size: int = 64,
+    batch_size: int = 256,
+    # warmup_transitions: int = 256,
+    warmup_transitions: int = 3000,
     tau: float = 0.005,
-    lr_alpha: float = 3e-4,
+    # lr_alpha: float = 3e-4,
+    lr_alpha: float = 5e-5,
     n_features_actor: int = 64,
     n_features_critic: int = 64,
     lr_actor: float = 3e-4,
@@ -43,19 +52,11 @@ def experiment(
     n_critics_ensemble: int = 2,
     n_epochs_critic: int = 1,
     m_ensemble: int = 2,
-    policy_grad_reduction: str = "min",
-    mc_samples_gradient: int = 1,
-    coupling: bool = False,
-    beta_UB: float = 1.0,
-    kl_upper_bound: float = 6.86,
-    lambda_kl: float = 0.01,
-    lambda_entropy: float = 0.01,
-    entropy_lower_bound: float = -10.0,
-    mvd_random_directions: int = -1,
     preprocess_states: bool = False,
     use_cuda: bool = False,
-    debug: bool = False,
+    debug: bool = False,  # crashes ipython kernel???
     verbose: bool = False,
+    model_save_frequency: bool = 1,  # every x epochs
     log_wandb: bool = True,
     wandb_project: str = "smbrl",
     wandb_entity: str = "showmezeplozz",
@@ -218,6 +219,9 @@ def experiment(
 
         # save the current logged data to keep an intermediate results if the training breaks
         logger.save_logs()
+        if n % model_save_frequency == 0:
+            # Save the agent
+            agent.save(os.path.join(results_dir, f"agent_{n}.msh"), full_save=True)
 
     # Save the agent after training
     agent.save(os.path.join(results_dir, "agent_end.msh"), full_save=True)
@@ -225,6 +229,7 @@ def experiment(
     logger.finish()
 
     print(f"Seed: {seed} - Took {time.time()-s:.2f} seconds")
+    print(f"Logs in {results_dir}")
 
 
 if __name__ == "__main__":
