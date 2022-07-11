@@ -5,7 +5,9 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 line_length = 88
-skip_glob = "externals/**"
+skip_glob = "externals/*"
+skip_gitignore = true
+filter_files = true
 
 [tool.black]
-extend-exclude = "externals"
+force-exclude = "externals/"
