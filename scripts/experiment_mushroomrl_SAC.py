@@ -154,7 +154,7 @@ def experiment(
     )
 
     # Save the agent before training
-    agent.save(os.path.join(results_dir, "agent_begin.msh"), full_save=True)
+    agent.save(os.path.join(results_dir, "agent_begin.msh"), full_save=False)
 
     # Algorithm
     prepro = None
@@ -222,10 +222,10 @@ def experiment(
         logger.save_logs()
         if n % model_save_frequency == 0:
             # Save the agent
-            agent.save(os.path.join(results_dir, f"agent_{n}.msh"), full_save=True)
+            agent.save(os.path.join(results_dir, f"agent_{n}.msh"), full_save=False)
 
     # Save the agent after training
-    agent.save(os.path.join(results_dir, "agent_end.msh"), full_save=True)
+    agent.save(os.path.join(results_dir, "agent_end.msh"), full_save=False)
 
     logger.finish()
 
