@@ -1,7 +1,0 @@
-dist/
-.idea/
-*.swp
-__pycache__/
-logs/
-*.egg-info/
-

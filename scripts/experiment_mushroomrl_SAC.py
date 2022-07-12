@@ -5,7 +5,8 @@ import quanser_robots
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from experiment_launcher import run_experiment, save_args
+from experiment_launcher import run_experiment
+from experiment_launcher.utils import save_args
 from mushroom_rl.algorithms.actor_critic import SAC
 from mushroom_rl.core import Core
 from mushroom_rl.core.logger.logger import Logger

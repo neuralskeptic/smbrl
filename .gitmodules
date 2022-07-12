@@ -4,3 +4,6 @@
 [submodule "externals/mushroom-rl"]
 	path = externals/mushroom_rl
 	url = https://github.com/MushroomRL/mushroom-rl.git
+[submodule "externals/experiment_launcher"]
+	path = externals/experiment_launcher
+	url = git@git.ias.informatik.tu-darmstadt.de:common/experiment_launcher.git
