@@ -1,0 +1,26 @@
+#python==3.8 with conda
+
+# special
+pre-commit
+conda-env-export
+#check-shape
+black
+isort
+
+# spyder
+spyder
+
+# ml
+numpy
+torch
+matplotlib
+mujoco-py
+gym
+scipy
+scikit-learn
+#pandas
+#GPy
+
+# logging
+wandb
+tensorboard
