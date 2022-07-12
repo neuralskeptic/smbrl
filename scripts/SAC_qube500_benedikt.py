@@ -30,7 +30,7 @@ def experiment(
     gamma: float = 0.99,
     n_epochs: int = 240,
     n_steps: int = 2000,
-    n_episodes_test: int = 2000,
+    n_episodes_test: int = 10,  # 2000, # training gets really slow when too high
     initial_replay_size: int = 3000,
     max_replay_size: int = 500000,
     batch_size: int = 256,
