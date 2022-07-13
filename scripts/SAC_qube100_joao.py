@@ -1,7 +1,6 @@
 import os
 import time
 
-import quanser_robots
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -19,8 +18,6 @@ from src.utils.evaluate_policy import evaluate_policy
 from src.utils.seeds import fix_random_seed
 from src.utils.set_logging import SetLogging
 from src.utils.time_utils import timestamp
-
-# os.environ["WANDB_MODE"] = "offline"  # TODO uncomment to try things out
 
 
 def experiment(
@@ -46,7 +43,7 @@ def experiment(
     m_ensemble: int = 2,
     preprocess_states: bool = False,
     use_cuda: bool = False,
-    debug: bool = False,  # crashes ipython kernel???
+    plotting: bool = False,  # crashes ipython kernel???
     verbose: bool = False,
     model_save_frequency: bool = 1,  # every x epochs
     log_wandb: bool = True,
@@ -56,11 +53,19 @@ def experiment(
     wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "./logs/tmp/",
+    debug: bool = False,
 ):
+    import quanser_robots  # every forked process needs to register gym envs
 
     ####################################################################################################################
     # SETUP
     s = time.time()
+
+    if debug:
+        # disable wandb logging and redirect normal logging to ./debug directory
+        print("@@@@@@@@@@@@@@@@@ DEBUG: LOGGING DISABLED @@@@@@@@@@@@@@@@@")
+        os.environ["WANDB_MODE"] = "disabled"
+        results_dir = os.path.join("debug", results_dir)
 
     # Results directory
     results_dir = os.path.join(results_dir, wandb_group, env_id, str(seed), timestamp())
@@ -153,7 +158,7 @@ def experiment(
         prepro = StandardizationPreprocessor(mdp_info=mdp.info)
 
     plotter = None
-    if debug:
+    if plotting:
         plotter = PlotDataset(mdp.info, obs_normalized=True)
 
     core = Core(
