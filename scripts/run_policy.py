@@ -8,7 +8,7 @@ import yaml
 from experiment_launcher import run_experiment
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J
+from mushroom_rl.utils.dataset import compute_J, parse_dataset
 from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
 
 from src.utils.replay_agent import replay_agent
@@ -16,8 +16,10 @@ from src.utils.seeds import fix_random_seed
 
 
 def render_policy(
-    results_dir: str = "../logs/tmp/SAC/Qube-500-v0/10/2022-07-13--09-13-26",
+    results_dir: str = "../logs/good/SAC/Qube-100-v0/9/2022-07-12--20-45-13",
     agent_epoch: str = "end",
+    render: bool = False,
+    plot: bool = True,
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
 ):
     try:
@@ -42,10 +44,28 @@ def render_policy(
     core = Core(agent, mdp, preprocessors=[prepro] if prepro is not None else None)
 
     # Evaluate
-    data = replay_agent(agent, core, 5, verbose=False, render=True)
-    J = compute_J(data, args["gamma"])
-    R = compute_J(data)
-    print(f"J: {np.mean(J)}\nR: {np.mean(R)}")
+    # data = replay_agent(agent, core, 5, verbose=False, render=render)
+    # J = compute_J(data, args["gamma"])
+    # R = compute_J(data)
+    # print(f"mean J: {np.mean(J)}\n mean R: {np.mean(R)}")
+
+    # Plot
+    if plot:
+        from matplotlib import pyplot as plt
+
+        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(10, 10))
+        MAX_STEPS = 100 + 80
+        for i in range(5):
+            data = replay_agent(agent, core, 1, verbose=False, render=render)
+            s, a, r, ss, absorb, last = parse_dataset(data)
+            axs[0].plot(r[:MAX_STEPS])
+            axs[1].plot(a[:MAX_STEPS])
+        axs[0].set_title("run policy")
+        axs[0].grid(True)
+        axs[1].grid(True)
+        axs[1].set_xlabel("steps")
+        axs[0].set_ylabel("reward")
+        axs[1].set_ylabel("action")
 
 
 if __name__ == "__main__":
