@@ -52,7 +52,7 @@ def experiment(
     wandb_group: str = "SAC",
     wandb_job_type: str = "train",
     seed: int = 0,
-    results_dir: str = "./logs/tmp/",
+    results_dir: str = "../logs/tmp/",
     debug: bool = False,
 ):
     ####################################################################################################################
@@ -66,7 +66,10 @@ def experiment(
         results_dir = os.path.join("debug", results_dir)
 
     # Results directory
-    results_dir = os.path.join(results_dir, wandb_group, env_id, str(seed), timestamp())
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    results_dir = os.path.join(
+        this_dir, results_dir, wandb_group, env_id, str(seed), timestamp()
+    )
     os.makedirs(results_dir, exist_ok=True)
 
     # Save arguments
