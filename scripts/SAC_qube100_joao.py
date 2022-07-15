@@ -235,11 +235,11 @@ def experiment(
 
         rollouts = replay_agent(agent, core, 1, verbose=False, render=False)
         state, action, reward, nstate, absorb, last = parse_dataset(rollouts)
-        MAX_STEPS = 80 + 100
+        eval_n_steps = len(reward)
         data = {
-            "steps": torch.arange(MAX_STEPS),
-            "reward": reward[:MAX_STEPS],
-            "action": action[:MAX_STEPS, 0],
+            "steps": torch.arange(eval_n_steps),
+            "reward": reward.reshape((-1,)),
+            "action": action.reshape((-1,)),
         }
         wandb.log({"evaluation": wandb.Table(dataframe=pd.DataFrame(data))})
         # visualized in custom chart taking data from run.summary evaluation table
