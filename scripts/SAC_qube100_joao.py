@@ -55,13 +55,6 @@ def experiment(
     results_dir: str = "./logs/tmp/",
     debug: bool = False,
 ):
-    # every forked process needs to register gym envs
-    import quanser_robots
-
-    # but remove the module from locals(), since it cannot be serialized
-    locals_without_quanser = locals()
-    del locals_without_quanser["quanser_robots"]
-
     ####################################################################################################################
     # SETUP
     s = time.time()
@@ -75,12 +68,13 @@ def experiment(
     # Results directory
     results_dir = os.path.join(results_dir, wandb_group, env_id, str(seed), timestamp())
     os.makedirs(results_dir, exist_ok=True)
+
     # Save arguments
-    save_args(results_dir, locals_without_quanser, git_repo_path="./")
+    save_args(results_dir, locals(), git_repo_path="./")
 
     # logger
     logger = Logger(
-        config=locals_without_quanser,
+        config=locals(),
         log_name=seed,
         results_dir=results_dir,
         project=wandb_project,
@@ -101,6 +95,9 @@ def experiment(
     print(f"Env id: {env_id}, Alg: {alg}, Seed: {seed}")
 
     # MDP
+    # every forked process needs to register gym envs
+    import quanser_robots  # # place AFTER saving locals() => module can not be serialized
+
     mdp = Gym(env_id, horizon, gamma)
 
     # Fix seed
