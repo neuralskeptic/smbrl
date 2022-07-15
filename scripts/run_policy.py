@@ -54,12 +54,15 @@ def render_policy(
         from matplotlib import pyplot as plt
 
         fig, axs = plt.subplots(2, 1, sharex=True, figsize=(10, 10))
-        MAX_STEPS = 100 + 80
-        for i in range(5):
-            data = replay_agent(agent, core, 1, verbose=False, render=render)
+
+    MAX_STEPS = 100 + 80
+    for i in range(5):
+        data = replay_agent(agent, core, 1, verbose=False, render=render)
+        if plot:
             s, a, r, ss, absorb, last = parse_dataset(data)
             axs[0].plot(r[:MAX_STEPS])
             axs[1].plot(a[:MAX_STEPS])
+    if plot:
         axs[0].set_title("run policy")
         axs[0].grid(True)
         axs[1].grid(True)
