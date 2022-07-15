@@ -18,9 +18,10 @@ mujoco-py
 gym
 scipy
 scikit-learn
-#pandas
+pandas
 #GPy
 
 # logging
 wandb
 tensorboard
+#plotly # required for interactive plot logging

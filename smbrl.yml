@@ -14,7 +14,6 @@ dependencies:
   - libstdcxx-ng=11.2.0
   - ncurses=6.3
   - openssl=1.1.1q
-  - pip=22.1.2
   - python=3.8.2
   - readline=7.0
   - setuptools=61.2.0
@@ -139,6 +138,7 @@ dependencies:
       - oauthlib==3.2.0
       - opencv-python==4.6.0.66
       - packaging==21.3
+      - pandas==1.4.3
       - pandocfilters==1.5.0
       - parso==0.8.3
       - pathspec==0.9.0
@@ -223,6 +223,7 @@ dependencies:
       - sphinxcontrib-serializinghtml==1.1.5
       - spyder==5.3.1
       - spyder-kernels==2.3.2
+      - tenacity==8.0.1
       - tensorboard==2.9.1
       - tensorboard-data-server==0.6.1
       - tensorboard-plugin-wit==1.8.1
