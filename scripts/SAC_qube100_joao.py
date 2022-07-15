@@ -228,6 +228,25 @@ def experiment(
     # Save the agent after training
     agent.save(os.path.join(results_dir, "agent_end.msh"), full_save=False)
 
+    # policy execution reward plot
+    if log_wandb:
+        import pandas as pd
+        from mushroom_rl.utils.dataset import parse_dataset
+
+        import wandb
+        from src.utils.replay_agent import replay_agent
+
+        rollouts = replay_agent(agent, core, 1, verbose=False, render=False)
+        state, action, reward, nstate, absorb, last = parse_dataset(rollouts)
+        MAX_STEPS = 80 + 100
+        data = {
+            "steps": torch.arange(MAX_STEPS),
+            "reward": reward[:MAX_STEPS],
+            "action": action[:MAX_STEPS, 0],
+        }
+        wandb.log({"evaluation": wandb.Table(dataframe=pd.DataFrame(data))})
+        # visualized in custom chart taking data from run.summary evaluation table
+
     logger.finish()
 
     print(f"Seed: {seed} - Took {time.time()-s:.2f} seconds")
