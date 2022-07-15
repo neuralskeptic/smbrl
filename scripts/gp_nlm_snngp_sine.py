@@ -1,6 +1,5 @@
 import numpy as np  # temporary
 import torch
-
 from library import utils
 from library.models.linear_bayesian_models import (
     NeuralLinearModel,

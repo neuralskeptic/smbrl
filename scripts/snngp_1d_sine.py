@@ -1,11 +1,10 @@
 import torch
-from torch.utils.data import DataLoader
-
 from library import utils
 from library.datasets import toy_datasets
 from library.models.linear_bayesian_models import (
     SpectralNormalizedNeuralGaussianProcess,
 )
+from torch.utils.data import DataLoader
 
 if __name__ == "__main__":
     SEED = 1234

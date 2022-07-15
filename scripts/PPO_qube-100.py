@@ -1,8 +1,10 @@
+import os
 import time
 
 import gym
 import numpy as np
 import torch
+from library.utils import structdict  # use dicts like classes (structs)
 from quanser_robots import GentlyTerminating
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
@@ -13,7 +15,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from wandb.integration.sb3 import WandbCallback
 
 import wandb
-from library.utils import structdict  # use dicts like classes (structs)
+
+os.environ["WANDB_MODE"] = "offline"  # TODO uncomment to try things out
 
 if __name__ == "__main__":
     ## problem, algo and hyperparams
@@ -26,7 +29,7 @@ if __name__ == "__main__":
                 "net_arch": [dict(pi=[256, 256], vf=[256, 256])],
             },
             "seed": 1234,
-            "total_timesteps": 500_000,
+            "total_timesteps": 1_000_000,
             "lr": 1e-4,
             "minibatch_size": 128,
             "n_epochs": 4,  # TODO correct?
