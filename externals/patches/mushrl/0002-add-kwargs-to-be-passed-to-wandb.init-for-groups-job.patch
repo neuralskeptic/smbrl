@@ -1,0 +1,68 @@
+From 513b441e2f5e8240babacf902e517999773b27b9 Mon Sep 17 00:00:00 2001
+From: Fabio d'Aquino Hilt <fabio.daquinohilt@stud.tu-darmstadt.de>
+Date: Mon, 11 Jul 2022 17:49:12 +0200
+Subject: [PATCH] add kwargs to be passed to wandb.init (for groups,
+ job_type,...)
+
+---
+ mushroom_rl/core/logger/logger.py       | 6 ++++--
+ mushroom_rl/core/logger/wandb_logger.py | 5 +++--
+ 2 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/mushroom_rl/core/logger/logger.py b/mushroom_rl/core/logger/logger.py
+index ae32b7a..f0c7a06 100644
+--- a/mushroom_rl/core/logger/logger.py
++++ b/mushroom_rl/core/logger/logger.py
+@@ -13,7 +13,7 @@ class Logger(DataLogger, ConsoleLogger, WandBLogger):
+     automatically a log directory, save numpy data array and the current agent.
+ 
+     """
+-    def __init__(self, config, log_name='', results_dir='./logs', project='', entity='', tags=None,
++    def __init__(self, config, log_name='', results_dir='./logs', project='', entity='', wandb_kwargs={}, tags=None,
+                  log_console=False, log_wandb=True, use_timestamp=False, append=False, seed=None, **kwargs):
+         """
+         Constructor.
+@@ -26,6 +26,7 @@ class Logger(DataLogger, ConsoleLogger, WandBLogger):
+                 If set to None, no directory is created;
+             project (string, ''): name of the project used for WandB;
+             entity (string, ''): name of the team / entity used for WandB;
++            wandb_kwargs (dict, {}): other parameters for WandB;
+             tags (list): keys of config used to tag the run for WandB;
+             log_console (bool, False): whether to log or not the console output;
+             log_wandb (bool, True): whether to log or not to WandB;
+@@ -69,7 +70,8 @@ class Logger(DataLogger, ConsoleLogger, WandBLogger):
+         ConsoleLogger.__init__(self, log_name, results_dir if log_console else None,
+                                suffix=suffix, **kwargs)
+         WandBLogger.__init__(self, config=config, project=project, entity=entity,
+-                             tags=[config[t] for t in tags if t in config], logging=log_wandb)
++                             tags=[config[t] for t in tags if t in config], logging=log_wandb, 
++                             **wandb_kwargs)
+ 
+     def log_data(self, step=None, **kwargs):
+         """
+diff --git a/mushroom_rl/core/logger/wandb_logger.py b/mushroom_rl/core/logger/wandb_logger.py
+index dac4082..ade7d5e 100644
+--- a/mushroom_rl/core/logger/wandb_logger.py
++++ b/mushroom_rl/core/logger/wandb_logger.py
+@@ -7,7 +7,7 @@ class WandBLogger(object):
+     """
+     This class implements the WandB logging functionality.
+     """
+-    def __init__(self, config, project, entity, tags=None, logging=False):
++    def __init__(self, config, project, entity, tags=None, logging=False, **kwargs):
+         self._logging = logging
+ 
+         self._run = wandb.init(
+@@ -16,7 +16,8 @@ class WandBLogger(object):
+             config=config,
+             tags=tags,
+             reinit=True,
+-            settings=wandb.Settings(start_method="fork")
++            settings=wandb.Settings(start_method="fork",
++            **kwargs)
+         ) if logging else None
+ 
+         self._data_steps = dict()
+-- 
+2.25.1
+

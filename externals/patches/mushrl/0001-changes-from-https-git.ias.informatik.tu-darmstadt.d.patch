@@ -1,0 +1,2013 @@
+From 4a4b49e30288389775d4dcb3a26620672604ad86 Mon Sep 17 00:00:00 2001
+From: Fabio d'Aquino Hilt <fabio.daquinohilt@stud.tu-darmstadt.de>
+Date: Thu, 7 Jul 2022 20:39:00 +0200
+Subject: [PATCH] changes from
+ https://git.ias.informatik.tu-darmstadt.de/mvd/mvd-rl
+
+---
+ .github/workflows/continuous_integration.yml  |   7 +-
+ README.rst                                    |  42 ++----
+ TODO.txt                                      |   7 +-
+ docs/source/mushroom_rl.utils.rst             |  10 --
+ .../tutorials/tutorials.5_environments.rst    |   6 +-
+ .../tutorials/tutorials.6_serializable.rst    |  10 +-
+ examples/habitat/habitat_nav_dqn.py           |   6 +-
+ examples/habitat/habitat_rearrange_sac.py     |   4 +-
+ examples/habitat/pointnav_apartment-0.yaml    |  20 ++-
+ .../habitat/replica_train_apartment-0.json    |   5 +-
+ .../habitat/replica_train_apartment-0.json.gz | Bin 269 -> 256 bytes
+ examples/pendulum_a2c.py                      |   2 +-
+ examples/pendulum_sac.py                      |   2 +-
+ mushroom_rl/__init__.py                       |   2 +-
+ .../policy_search/policy_gradient/enac.py     |   2 +-
+ .../policy_gradient/policy_gradient.py        |   4 +-
+ .../algorithms/value/dqn/categorical_dqn.py   |   4 +-
+ mushroom_rl/algorithms/value/dqn/noisy_dqn.py |   4 +-
+ mushroom_rl/algorithms/value/dqn/rainbow.py   |   4 +-
+ .../parametric/torch_approximator.py          |  24 +++-
+ mushroom_rl/core/environment.py               |   7 +-
+ mushroom_rl/core/logger/console_logger.py     |   2 +-
+ mushroom_rl/core/logger/data_logger.py        |  15 +-
+ mushroom_rl/core/logger/logger.py             |  61 +++++++-
+ mushroom_rl/core/logger/wandb_logger.py       |  53 +++++++
+ mushroom_rl/environments/dm_control_env.py    |  10 +-
+ mushroom_rl/environments/gym_env.py           |  29 +---
+ mushroom_rl/environments/habitat_env.py       |  59 +++-----
+ mushroom_rl/environments/mujoco.py            |   4 +-
+ .../humanoid_gait/reward_goals/trajectory.py  |   2 +-
+ .../pybullet_envs/air_hockey/__init__.py      |  10 +-
+ .../pybullet_envs/air_hockey/base.py          |  18 +--
+ .../pybullet_envs/air_hockey/defend.py        | 112 ++++-----------
+ .../pybullet_envs/air_hockey/hit.py           | 134 ++++--------------
+ .../pybullet_envs/air_hockey/single.py        |  36 ++---
+ mushroom_rl/features/basis/polynomial.py      |   2 +-
+ mushroom_rl/policy/noise_policy.py            |   8 +-
+ mushroom_rl/utils/dataset.py                  |   2 +-
+ mushroom_rl/utils/pybullet/index_map.py       |   6 +-
+ mushroom_rl/utils/replay_memory.py            |   2 +-
+ setup.py                                      |   2 +-
+ tests/algorithms/test_a2c.py                  |   8 +-
+ tests/algorithms/test_black_box.py            |  26 +---
+ tests/algorithms/test_ddpg.py                 |   9 +-
+ tests/algorithms/test_policy_gradient.py      |   2 +-
+ tests/algorithms/test_sac.py                  |   8 +-
+ tests/algorithms/test_td.py                   |  34 +++--
+ tests/algorithms/test_trust_region.py         |  11 +-
+ tests/environments/test_all_envs.py           |   3 +-
+ 49 files changed, 356 insertions(+), 484 deletions(-)
+ create mode 100644 mushroom_rl/core/logger/wandb_logger.py
+
+diff --git a/.github/workflows/continuous_integration.yml b/.github/workflows/continuous_integration.yml
+index 3862e4c..9b51195 100644
+--- a/.github/workflows/continuous_integration.yml
++++ b/.github/workflows/continuous_integration.yml
+@@ -5,10 +5,12 @@ name: Continuous Integration
+ on:
+   push:
+     branches: [ dev, master ]
++  pull_request:
++    branches: [ dev ]
+ 
+ jobs:
+   build:
+-    if: github.repository == 'MushroomRL/mushroom-rl'
++
+     runs-on: ubuntu-latest
+ 
+     steps:
+@@ -26,7 +28,8 @@ jobs:
+     - name: Install Atari ROMs
+       run: |
+         wget http://www.atarimania.com/roms/Roms.rar 
+-        unrar x  -o+  Roms.rar
++        unrar e Roms.rar 
++        unzip ROMS.zip 
+         ale-import-roms ./ROMS
+     - name: Lint with flake8
+       run: |
+diff --git a/README.rst b/README.rst
+index be19ebe..25e809f 100644
+--- a/README.rst
++++ b/README.rst
+@@ -9,11 +9,11 @@ MushroomRL
+ .. image:: https://readthedocs.org/projects/mushroomrl/badge/?version=latest
+    :target: https://mushroomrl.readthedocs.io/en/latest/?badge=latest
+    :alt: Documentation Status
+-
++    
+ .. image:: https://api.codeclimate.com/v1/badges/3b0e7167358a661ed882/maintainability
+    :target: https://codeclimate.com/github/MushroomRL/mushroom-rl/maintainability
+    :alt: Maintainability
+-
++   
+ .. image:: https://api.codeclimate.com/v1/badges/3b0e7167358a661ed882/test_coverage
+    :target: https://codeclimate.com/github/MushroomRL/mushroom-rl/test_coverage
+    :alt: Test Coverage
+@@ -45,11 +45,6 @@ You can do a minimal installation of ``MushroomRL`` with:
+ 
+ Installing everything
+ ---------------------
+-``MushroomRL`` contains also some optional components e.g., support for ``OpenAI Gym`` 
+-environments, Atari 2600 games from the ``Arcade Learning Environment``, and the support
+-for physics simulators such as ``Pybullet`` and ``MuJoCo``. 
+-Support for these classes is not enabled by default.
+-
+ To install the whole set of features, you will need additional packages installed.
+ You can install everything by running:
+ 
+@@ -66,8 +61,6 @@ For ubuntu>20.04, you may need to install pygame and gym dependencies:
+                      libsdl1.2-dev libsmpeg-dev libportmidi-dev ffmpeg libswscale-dev \
+                      libavformat-dev libavcodec-dev swig
+ 
+-Notice that you still need to install some of these dependencies for different operating systems, e.g. swig for macOS 
+-
+ To use the ``mujoco-py`` MushroomRL interface you can run the command:
+ 
+ .. code:: shell
+@@ -84,13 +77,6 @@ Below is the code that you need to run to install the Plots dependencies:
+ You might need to install external dependencies first. For more information about mujoco-py
+ installation follow the instructions on the `project page <https://github.com/openai/mujoco-py>`_
+ 
+-    WARNING! when using conda, there may be issues with QT. You can fix them by adding the following lines to the code, replacing ``<conda_base_path>`` with the path to your conda distribution and ``<env_name>`` with the name of the conda environment you are using:
+-   
+-.. code:: python
+-
+-   import os
+-   os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '<conda_base_path>/envs/<env_name>/bin/platforms'
+-
+ To use dm_control MushroomRL interface, install ``dm_control`` following the instruction that can
+ be found `here <https://github.com/deepmind/dm_control>`_
+ 
+@@ -156,27 +142,27 @@ YAML files: ``Habitat(wrapper, config_file, base_config_file)``.
+ * If you use a dataset, be sure that the path defined in the YAML file is correct,
+   especially if you use relative paths. ``habitat-lab`` YAMLs use relative paths, so
+   be careful with that. By default, the path defined in the YAML file will be
+-  relative to where you launched the python code. If your `data` folder is
+-  somewhere else, you may also create a symbolic link.
++  relative to where you launched the python code. See the navigation example below
++  for more details.
+ 
+ Rearrange Task Example
+ ^^^^^^^^^^^^^^^^^^^^^^
+-* Download the ReplicaCAD datasets (``--data-path data`` downloads them in the folder
+-  from where you are launching your code)
++* Download assets and the ReplicaCAD datasets
+ 
+ .. code:: shell
+ 
+-    python -m habitat_sim.utils.datasets_download --uids replica_cad_dataset --data-path data
++    python -m habitat_sim.utils.datasets_download --uids habitat_test_pointnav_dataset --data-path data
++    python -m habitat_sim.utils.datasets_download --uids habitat_test_scenes --data-path data
+ 
+-* For this task we use ``<HABITAT_LAB PATH>/habitat_baselines/config/rearrange/rl_pick.yaml``.
+-  This YAML defines ``BASE_TASK_CONFIG_PATH: configs/tasks/rearrange/pick.yaml``,
++* For this task we use ``<HABITAT_LAB PATH>/habitat_baselines/config/rearrange/ddppo_rearrangepick.yaml``.
++  This YAML defines ``BASE_TASK_CONFIG_PATH: configs/tasks/rearrangepick_replica_cad.yaml``,
+   and since this is a relative path we need to overwrite it by passing its absolute path
+   as ``base_config_file`` argument to ``Habitat()``.
+ 
+-* Then, ``pick.yaml`` defines the dataset to be used with respect to ``<HABITAT_LAB PATH>``.
+-  If you have not used ``--data-path`` argument with the previous download command,
+-  the ReplicaCAD datasets is now in ``<HABITAT_LAB PATH>/data`` and you need to
+-  make a link to it
++* Then, ``rearrangepick_replica_cad.yaml`` defines the dataset to be used, and
++  this is in ``<HABITAT_LAB PATH>``. However, since the path defined is relative
++  to where we launch our code, we need to make a link to the data folder. If you
++  launch ``habitat_rearrange_sac.py`` from its example folder, run
+ 
+ .. code:: shell
+ 
+@@ -247,7 +233,7 @@ For instance, to run a quick experiment with one of the provided example scripts
+ .. code:: shell
+ 
+     python3 examples/car_on_hill_fqi.py
+-
++   
+ Cite MushroomRL
+ ===============
+ If you are using MushroomRL for your scientific publications, please cite:
+diff --git a/TODO.txt b/TODO.txt
+index 81f7721..907c454 100644
+--- a/TODO.txt
++++ b/TODO.txt
+@@ -3,11 +3,9 @@ Algorithms:
+     * Policy Search:
+         - Natural gradient
+         - NES
++        - MORE
+         - PAPI
+-        
+-Policy:
+-    * Add Boltzmann from logits for traditional policy gradient methods
+-    
++
+ Approximator:
+     * support for LSTM
+     * Generalize LazyFrame to LazyState
+@@ -20,4 +18,5 @@ For Mushroom 2.0:
+     * remove custom save for plotting, use Serializable
+     * support multi-objective RL
+     * support model-based RL
++    * Register environments to build them from string with default parameters
+     * Improve replay memory, allowing to store arbitrary information into replay buffer
+diff --git a/docs/source/mushroom_rl.utils.rst b/docs/source/mushroom_rl.utils.rst
+index 059067a..962d780 100644
+--- a/docs/source/mushroom_rl.utils.rst
++++ b/docs/source/mushroom_rl.utils.rst
+@@ -88,16 +88,6 @@ Parameters
+     :inherited-members:
+     :show-inheritance:
+ 
+-Plots
+------
+-
+-.. automodule:: mushroom_rl.utils.plots
+-    :members:
+-    :private-members:
+-    :inherited-members:
+-    :show-inheritance:
+-
+-
+ Replay memory
+ -------------
+ 
+diff --git a/docs/source/tutorials/tutorials.5_environments.rst b/docs/source/tutorials/tutorials.5_environments.rst
+index ca50e0a..2fa4de2 100644
+--- a/docs/source/tutorials/tutorials.5_environments.rst
++++ b/docs/source/tutorials/tutorials.5_environments.rst
+@@ -62,18 +62,18 @@ To build environments, you may need to pass additional parameters.
+ An example of this is the ``Gym`` environment which wraps most OpenAI Gym environments, except the Atari ones, which
+ uses the ``Atari`` environment to implement proper preprocessing.
+ 
+-If you want to build the ``Pendulum-v1`` gym environment you need to pass the environment name as a parameter:
++If you want to build the ``Pendulum-v0`` gym environment you need to pass the environment name as a parameter:
+ 
+ .. code-block:: python
+ 
+-    env = Environment.make('Gym', 'Pendulum-v1')
++    env = Environment.make('Gym', 'Pendulum-v0')
+ 
+ However, for environments that are interfaces to other libraries such as ``Gym``, ``Atari`` or ``DMControl`` a notation
+ with a dot separator is supported. For example to create the pendulum you can also use:
+ 
+ .. code-block:: python
+ 
+-    env = Environment.make('Gym.Pendulum-v1')
++    env = Environment.make('Gym.Pendulum-v0')
+ 
+ Or, to create the ``hopper`` environment with ``hop`` task from DeepMind control suite you can use:
+ 
+diff --git a/docs/source/tutorials/tutorials.6_serializable.rst b/docs/source/tutorials/tutorials.6_serializable.rst
+index 60806b4..1539bb1 100644
+--- a/docs/source/tutorials/tutorials.6_serializable.rst
++++ b/docs/source/tutorials/tutorials.6_serializable.rst
+@@ -1,9 +1,9 @@
+-How to Save and Load (Serializable interface)
+-=============================================
++How to use the Serializable interface
++======================================
+ 
+-In this tutorial, we explain in detail the ``Serializable`` interface, i.e. the interface to save and load classes from
+-disk. We first explain how to use classes implementing the ``Serializable`` interface, and then we provide a small
+-example of how to implement the ``Serializable`` interface on a custom class to serialize the object properly on disk.
++In this tutorial, we explain in detail the ``Serializable`` interface. We first explain how to use classes
++implementing the ``Serializable`` interface, and then we provide a small example of how to implement the
++``Serializable`` interface on a custom class to serialize the object properly on disk.
+ 
+ The Mushroom RL save format (extension ``.msh``) is nothing else than a zip file, containing some information (stored into
+ the ``config`` file) to load the object. This information can be accessed easily and you can try to recover the information
+diff --git a/examples/habitat/habitat_nav_dqn.py b/examples/habitat/habitat_nav_dqn.py
+index cf692ec..ca2f756 100644
+--- a/examples/habitat/habitat_nav_dqn.py
++++ b/examples/habitat/habitat_nav_dqn.py
+@@ -199,7 +199,7 @@ def experiment():
+                               'the neural network.')
+     arg_alg.add_argument("--max-steps", type=int, default=5000000,
+                          help='Total number of collected samples.')
+-    arg_alg.add_argument("--final-exploration-frame", type=int, default=10000000,
++    arg_alg.add_argument("--final-exploration-frame", type=int, default=1000000,
+                          help='Number of collected samples until the exploration'
+                               'rate stops decreasing.')
+     arg_alg.add_argument("--initial-exploration-rate", type=float, default=1.,
+@@ -296,12 +296,11 @@ def experiment():
+         'pointnav_apartment-0.yaml') # Custom task for Replica scenes
+     wrapper = 'HabitatNavigationWrapper'
+     mdp = Habitat(wrapper, config_file)
+-    opt_return = mdp.env.get_optimal_policy_return()
++    logger.info('Optimal policy undiscounted return: ' + str(mdp.env.get_optimal_policy_return()))
+ 
+     if args.load_path:
+         logger = Logger(DQN.__name__, results_dir=None)
+         logger.strong_line()
+-        logger.info('Optimal Policy Undiscounted Return: ' + str(opt_return))
+         logger.info('Experiment Algorithm: ' + DQN.__name__)
+ 
+         # Agent
+@@ -405,7 +404,6 @@ def experiment():
+ 
+         logger = Logger(alg.__name__, results_dir=None)
+         logger.strong_line()
+-        logger.info('Optimal Policy Undiscounted Return: ' + str(opt_return))
+         logger.info('Experiment Algorithm: ' + alg.__name__)
+ 
+         # Algorithm
+diff --git a/examples/habitat/habitat_rearrange_sac.py b/examples/habitat/habitat_rearrange_sac.py
+index 7bdc726..8a7cdde 100644
+--- a/examples/habitat/habitat_rearrange_sac.py
++++ b/examples/habitat/habitat_rearrange_sac.py
+@@ -98,9 +98,9 @@ def experiment(alg, n_epochs, n_steps, n_episodes_test):
+     gamma = 0.99
+     habitat_root_path = Habitat.root_path()
+     config_file = os.path.join(habitat_root_path,
+-        'habitat_baselines/config/rearrange/rl_pick.yaml')
++        'habitat_baselines/config/rearrange/ddppo_rearrangepick.yaml')
+     base_config_file = os.path.join(habitat_root_path,
+-        'configs/tasks/rearrange/pick.yaml')
++        'configs/tasks/rearrangepick_replica_cad.yaml')
+     wrapper = 'HabitatRearrangeWrapper'
+     mdp = Habitat(wrapper, config_file, base_config_file, gamma=gamma)
+ 
+diff --git a/examples/habitat/pointnav_apartment-0.yaml b/examples/habitat/pointnav_apartment-0.yaml
+index 021c030..3f427f7 100644
+--- a/examples/habitat/pointnav_apartment-0.yaml
++++ b/examples/habitat/pointnav_apartment-0.yaml
+@@ -19,11 +19,7 @@ SIMULATOR:
+ 
+ TASK:
+   TYPE: Nav-v0
+-
+-  # Set both to the same value
+   SUCCESS_DISTANCE: 0.2
+-  SUCCESS:
+-    SUCCESS_DISTANCE: 0.2
+ 
+   SENSORS: ['POINTGOAL_WITH_GPS_COMPASS_SENSOR']
+   POINTGOAL_WITH_GPS_COMPASS_SENSOR:
+@@ -31,7 +27,21 @@ TASK:
+     DIMENSIONALITY: 2
+   GOAL_SENSOR_UUID: pointgoal_with_gps_compass
+ 
+-  MEASUREMENTS: ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL']
++  MEASUREMENTS: ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL', 'TOP_DOWN_MAP'] # Add top-down map to default measurements
++
++  SPL:
++    TYPE: SPL # Success weighted by Path Length
++    SUCCESS_DISTANCE: 0.2
++
++  TOP_DOWN_MAP: # Top-down map specifications, used for heatmaps
++    MAP_RESOLUTION: 590
++    DRAW_SOURCE: False
++    DRAW_SHORTEST_PATH: False
++    FOG_OF_WAR:
++      DRAW: False
++    DRAW_VIEW_POINTS: False
++    DRAW_GOAL_POSITIONS: False
++    DRAW_GOAL_AABBS: False
+ 
+ DATASET: # Replica scene
+   CONTENT_SCENES: ['*']
+diff --git a/examples/habitat/replica_train_apartment-0.json b/examples/habitat/replica_train_apartment-0.json
+index 87a1acf..5938721 100644
+--- a/examples/habitat/replica_train_apartment-0.json
++++ b/examples/habitat/replica_train_apartment-0.json
+@@ -1,9 +1,10 @@
+ {
+   "episodes": [{"episode_id": "0", 
+                "scene_id": "habitat/mesh_semantic.ply",
+-               "start_position": [-0.716670036315918, -1.374765157699585, 0.7762265205383301],
++               "start_position": [2.89, -1.54, -1.32],
+                "start_rotation": [0.0, 0.0, 0.0, 1.0],
+-               "goals": [{"position": [4.170074462890625, -1.374765157699585, 1.8612048625946045], "radius": null}],
++               "info": {"geodesic_distance": 5.897794723510742, "difficulty": "easy"},
++               "goals": [{"position": [-2.61, -1.54, 4.18], "radius": null}],
+                "shortest_paths": null,
+                "start_room": null}]
+ }
+diff --git a/examples/habitat/replica_train_apartment-0.json.gz b/examples/habitat/replica_train_apartment-0.json.gz
+index 98c3038d542fdc04a26cc6b7e11f318897d95735..0022285853dcaa5fe94ec5ea21373a3e9c70dbca 100644
+GIT binary patch
+delta 233
+zcmV<F02cp^0)PStABzYGW+eY$kq9AwO^?xTgD?z5-}e<L&ooO?7;S%LnoyRQVksnu
+zga?H9_c^Grz9jPXv3>8#V8j?KMD{4Y*Q09DQq2S_3l<IdL+JG{CY?S9h<zJj&_1Ez
+zqg!?`=_$2ih?p?=yif7ly(})0*VX=A)z8UIffl_u!9`j8Kaz{gq3;59SN4QhY!FRr
+zk!HOCQfpe>H211e*IJ6EQZ!((>(I<DE!ivRxUh}nXVC5y@7>%*@h^G0tGK-7qm#Bc
+jXWGxsZM)q*ObH?-)2Tl?Z!yAf(%Z)$0we}>Pyqk{Gq7>G
+
+delta 246
+zcmV<S015wq0*wL)ABzYG1rSAHkq9Awb&%a^#2^qx@ADMmwQI+}(d?^~CD@HLLJ~uC
+zFUqp-UIUxb(ySN4!1+GUcy9=yVTn2QA=5K?zwc8Q`#Mvgj8x{&q4^r-9T@yaEWW%=
+zArD;+lb=hx@@4#@?0>HKwRB6$vBWfQ&z*o<foK5~Dq&jT7&!^9thQ)`vDmg{#u-K`
+zW>HEs5{z<6fw;V?UsKh2)&qwvyI+FCLF_a6@wxkNHO)oUvRb2bEub{VW`a8u611yC
+ws}Z!hFhW<~$J<sq-^THA<T|9agj|2amthBAuau^ruIABv18Ac<V737O0JT1M{{R30
+
+diff --git a/examples/pendulum_a2c.py b/examples/pendulum_a2c.py
+index 58cf76f..2f67c35 100644
+--- a/examples/pendulum_a2c.py
++++ b/examples/pendulum_a2c.py
+@@ -111,7 +111,7 @@ if __name__ == '__main__':
+      ]
+ 
+     for alg, alg_name, params in algs_params:
+-        experiment(alg=alg, env_id='Pendulum-v1', horizon=200, gamma=.99,
++        experiment(alg=alg, env_id='Pendulum-v0', horizon=200, gamma=.99,
+                    n_epochs=40, n_steps=30000, n_steps_per_fit=5,
+                    n_step_test=5000, alg_params=params,
+                    policy_params=policy_params)
+diff --git a/examples/pendulum_sac.py b/examples/pendulum_sac.py
+index 2c56fe6..1b8ac5d 100644
+--- a/examples/pendulum_sac.py
++++ b/examples/pendulum_sac.py
+@@ -76,7 +76,7 @@ def experiment(alg, n_epochs, n_steps, n_steps_test):
+     # MDP
+     horizon = 200
+     gamma = 0.99
+-    mdp = Gym('Pendulum-v1', horizon, gamma)
++    mdp = Gym('Pendulum-v0', horizon, gamma)
+ 
+     # Settings
+     initial_replay_size = 64
+diff --git a/mushroom_rl/__init__.py b/mushroom_rl/__init__.py
+index 8adfee4..0e1a38d 100644
+--- a/mushroom_rl/__init__.py
++++ b/mushroom_rl/__init__.py
+@@ -1 +1 @@
+-__version__ = '1.7.2'
++__version__ = '1.7.0'
+diff --git a/mushroom_rl/algorithms/policy_search/policy_gradient/enac.py b/mushroom_rl/algorithms/policy_search/policy_gradient/enac.py
+index 24d5857..5df9090 100644
+--- a/mushroom_rl/algorithms/policy_search/policy_gradient/enac.py
++++ b/mushroom_rl/algorithms/policy_search/policy_gradient/enac.py
+@@ -45,7 +45,7 @@ class eNAC(PolicyGradient):
+         return nat_grad
+ 
+     def _step_update(self, x, u, r):
+-        self.sum_grad_log += self.df*self.policy.diff_log(x, u)
++        self.sum_grad_log += self.policy.diff_log(x, u)
+ 
+         if self.psi_ext is None:
+             if self.phi_c is None:
+diff --git a/mushroom_rl/algorithms/policy_search/policy_gradient/policy_gradient.py b/mushroom_rl/algorithms/policy_search/policy_gradient/policy_gradient.py
+index a793474..755d143 100644
+--- a/mushroom_rl/algorithms/policy_search/policy_gradient/policy_gradient.py
++++ b/mushroom_rl/algorithms/policy_search/policy_gradient/policy_gradient.py
+@@ -48,9 +48,7 @@ class PolicyGradient(Agent):
+                 self.J_episode = 0.
+                 self.df = 1.
+                 self._init_update()
+-        
+-        assert len(J) > 1, "More than one episode is needed to compute the gradient"
+-        
++
+         self._update_parameters(J)
+ 
+     def _update_parameters(self, J):
+diff --git a/mushroom_rl/algorithms/value/dqn/categorical_dqn.py b/mushroom_rl/algorithms/value/dqn/categorical_dqn.py
+index e47f832..3fde35e 100644
+--- a/mushroom_rl/algorithms/value/dqn/categorical_dqn.py
++++ b/mushroom_rl/algorithms/value/dqn/categorical_dqn.py
+@@ -132,8 +132,8 @@ class CategoricalDQN(AbstractDQN):
+                                                             self._v_max)
+ 
+             b = (bell_a - self._v_min) / self._delta
+-            l = np.floor(b).astype(int)
+-            u = np.ceil(b).astype(int)
++            l = np.floor(b).astype(np.int)
++            u = np.ceil(b).astype(np.int)
+ 
+             m = np.zeros((self._batch_size.get_value(), self._n_atoms))
+             for i in range(self._n_atoms):
+diff --git a/mushroom_rl/algorithms/value/dqn/noisy_dqn.py b/mushroom_rl/algorithms/value/dqn/noisy_dqn.py
+index 3508045..3c9ac6b 100644
+--- a/mushroom_rl/algorithms/value/dqn/noisy_dqn.py
++++ b/mushroom_rl/algorithms/value/dqn/noisy_dqn.py
+@@ -47,8 +47,8 @@ class NoisyNetwork(nn.Module):
+             if self._use_cuda:
+                 eps_output = eps_output.cuda()
+                 eps_input = eps_input.cuda()
+-            eps_dot = torch.matmul(self._noise(eps_output), self._noise(eps_input))
+-            weight = self.mu_weight + self.sigma_weight * eps_dot
++            eps_dot = torch.matmul(eps_output, eps_input)
++            weight = self.mu_weight + self.sigma_weight * self._noise(eps_dot)
+ 
+             if hasattr(self, 'mu_bias'):
+                 self.bias = self.mu_bias + self.sigma_bias * self._noise(eps_output[:, 0])
+diff --git a/mushroom_rl/algorithms/value/dqn/rainbow.py b/mushroom_rl/algorithms/value/dqn/rainbow.py
+index 039b15c..36201bd 100644
+--- a/mushroom_rl/algorithms/value/dqn/rainbow.py
++++ b/mushroom_rl/algorithms/value/dqn/rainbow.py
+@@ -139,8 +139,8 @@ class Rainbow(AbstractDQN):
+                                                             self._v_max)
+ 
+             b = (bell_a - self._v_min) / self._delta
+-            l = np.floor(b).astype(int)
+-            u = np.ceil(b).astype(int)
++            l = np.floor(b).astype(np.int)
++            u = np.ceil(b).astype(np.int)
+ 
+             m = np.zeros((self._batch_size.get_value(), self._n_atoms))
+             for i in range(self._n_atoms):
+diff --git a/mushroom_rl/approximators/parametric/torch_approximator.py b/mushroom_rl/approximators/parametric/torch_approximator.py
+index efede9f..6f446ce 100644
+--- a/mushroom_rl/approximators/parametric/torch_approximator.py
++++ b/mushroom_rl/approximators/parametric/torch_approximator.py
+@@ -162,7 +162,8 @@ class TorchApproximator(Serializable):
+             use_weights = False
+ 
+         if 0 < validation_split <= 1:
+-            train_len = np.ceil(len(args[0]) * validation_split).astype(int)
++            train_len = np.ceil(len(args[0]) * validation_split).astype(
++                np.int)
+             train_args = [a[:train_len] for a in args]
+             val_args = [a[train_len:] for a in args]
+         else:
+@@ -245,10 +246,15 @@ class TorchApproximator(Serializable):
+                 weights = weights.cuda()
+             batch = batch[:-1]
+ 
+-        if not self._use_cuda:
+-            torch_args = [torch.from_numpy(x) for x in batch]
+-        else:
+-            torch_args = [torch.from_numpy(x).cuda() for x in batch]
++        torch_args = []
++        for x in batch:
++            if isinstance(x, torch.Tensor):
++                torch_args.append(x)
++            else:
++                if not self._use_cuda:
++                    torch_args.append(torch.from_numpy(x))
++                else:
++                    torch_args.append(torch.from_numpy(x).cuda())
+ 
+         x = torch_args[:-self._n_fit_targets]
+ 
+@@ -259,8 +265,12 @@ class TorchApproximator(Serializable):
+         else:
+             output_type = y_hat.dtype
+ 
+-        y = [y_i.clone().detach().requires_grad_(False).type(output_type) for y_i
+-             in torch_args[-self._n_fit_targets:]]
++        y = []
++        for y_i in torch_args[-self._n_fit_targets:]:
++            if isinstance(y_i, torch.Tensor) and y_i.requires_grad:
++                y.append(y_i.type(output_type))
++            else:
++                y.append(y_i.clone().detach().requires_grad_(False).type(output_type))
+ 
+         if self._use_cuda:
+             y = [y_i.cuda() for y_i in y]
+diff --git a/mushroom_rl/core/environment.py b/mushroom_rl/core/environment.py
+index 9fa9ffb..f8d251a 100644
+--- a/mushroom_rl/core/environment.py
++++ b/mushroom_rl/core/environment.py
+@@ -1,4 +1,3 @@
+-import warnings
+ import numpy as np
+ 
+ from mushroom_rl.core.serialization import Serializable
+@@ -132,12 +131,10 @@ class Environment(object):
+             seed (float): the value of the seed.
+ 
+         """
+-        if hasattr(self, 'env') and hasattr(self.env, 'seed'):
++        if hasattr(self, 'env'):
+             self.env.seed(seed)
+         else:
+-            warnings.warn('This environment has no custom seed. '
+-                          'The call will have no effect. '
+-                          'You can set the seed manually by setting numpy/torch seed')
++            raise NotImplementedError
+ 
+     def reset(self, state=None):
+         """
+diff --git a/mushroom_rl/core/logger/console_logger.py b/mushroom_rl/core/logger/console_logger.py
+index f50bf9d..5cd7bfd 100644
+--- a/mushroom_rl/core/logger/console_logger.py
++++ b/mushroom_rl/core/logger/console_logger.py
+@@ -42,7 +42,7 @@ class ConsoleLogger(object):
+             file_log_level (int, logging.DEBUG): logging level for file.
+ 
+         """
+-        self._log_id = log_name + suffix
++        self._log_id = str(log_name) + str(suffix)
+ 
+         formatter = logging.Formatter(fmt='%(asctime)s [%(levelname)s] %(message)s',
+                                       datefmt='%d/%m/%Y %H:%M:%S')
+diff --git a/mushroom_rl/core/logger/data_logger.py b/mushroom_rl/core/logger/data_logger.py
+index a7a24f3..b70c147 100644
+--- a/mushroom_rl/core/logger/data_logger.py
++++ b/mushroom_rl/core/logger/data_logger.py
+@@ -47,11 +47,22 @@ class DataLogger(object):
+ 
+             self._data_dict[name].append(data)
+ 
++            # filename = name + self._suffix + '.npy'
++            # path = self._results_dir / filename
++
++            # current_data = np.array(self._data_dict[name])
++            # np.save(path, current_data)
++
++    def save_numpy(self):
++        """
++        Save the logged numpy arrays.
++
++        """
++        for name, data in self._data_dict.items():
+             filename = name + self._suffix + '.npy'
+             path = self._results_dir / filename
++            np.save(path, data)
+ 
+-            current_data = np.array(self._data_dict[name])
+-            np.save(path, current_data)
+ 
+     def log_agent(self, agent, epoch=None, full_save=False):
+         """
+diff --git a/mushroom_rl/core/logger/logger.py b/mushroom_rl/core/logger/logger.py
+index 79f87c1..ae32b7a 100644
+--- a/mushroom_rl/core/logger/logger.py
++++ b/mushroom_rl/core/logger/logger.py
+@@ -1,27 +1,34 @@
+ from datetime import datetime
+ from pathlib import Path
+ 
+-from .console_logger import ConsoleLogger
+-from .data_logger import DataLogger
++from mushroom_rl.core.logger.console_logger import ConsoleLogger
++from mushroom_rl.core.logger.data_logger import DataLogger
+ 
++from mushroom_rl.core.logger.wandb_logger import WandBLogger
+ 
+-class Logger(DataLogger, ConsoleLogger):
++
++class Logger(DataLogger, ConsoleLogger, WandBLogger):
+     """
+     This class implements the logging functionality. It can be used to create
+     automatically a log directory, save numpy data array and the current agent.
+ 
+     """
+-    def __init__(self, log_name='', results_dir='./logs', log_console=False,
+-                 use_timestamp=False, append=False, seed=None, **kwargs):
++    def __init__(self, config, log_name='', results_dir='./logs', project='', entity='', tags=None,
++                 log_console=False, log_wandb=True, use_timestamp=False, append=False, seed=None, **kwargs):
+         """
+         Constructor.
+ 
+         Args:
++            config (dict): dictionary with configurations of the run.
+             log_name (string, ''): name of the current experiment directory if not
+                 specified, the current timestamp is used.
+             results_dir (string, './logs'): name of the base logging directory.
+                 If set to None, no directory is created;
++            project (string, ''): name of the project used for WandB;
++            entity (string, ''): name of the team / entity used for WandB;
++            tags (list): keys of config used to tag the run for WandB;
+             log_console (bool, False): whether to log or not the console output;
++            log_wandb (bool, True): whether to log or not to WandB;
+             use_timestamp (bool, False): If true, adds the current timestamp to
+                 the folder name;
+             append (bool, False): If true, the logger will append the new
+@@ -32,9 +39,16 @@ class Logger(DataLogger, ConsoleLogger):
+ 
+         """
+ 
++        if tags is None:
++            tags = ['env_id', 'alg']
++
+         if log_console:
+             assert results_dir is not None
+ 
++        if log_wandb:
++            assert project is not ''
++            assert entity is not ''
++
+         timestamp = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+ 
+         if not log_name:
+@@ -43,13 +57,46 @@ class Logger(DataLogger, ConsoleLogger):
+             log_name += '_' + timestamp
+ 
+         if results_dir:
+-            results_dir = Path(results_dir) / log_name
++            # results_dir = Path(results_dir) / log_name
++            results_dir = Path(results_dir)
+ 
+             print('Logging in folder: ' + str(results_dir))
+             results_dir.mkdir(parents=True, exist_ok=True)
+ 
+         suffix = '' if seed is None else '-' + str(seed)
+ 
+-        DataLogger.__init__(self, results_dir, suffix=suffix, append=append)
++        DataLogger.__init__(self, results_dir, append=append)
+         ConsoleLogger.__init__(self, log_name, results_dir if log_console else None,
+                                suffix=suffix, **kwargs)
++        WandBLogger.__init__(self, config=config, project=project, entity=entity,
++                             tags=[config[t] for t in tags if t in config], logging=log_wandb)
++
++    def log_data(self, step=None, **kwargs):
++        """
++        Log data into numpy array and also to WandB
++
++        Returns:
++
++        """
++        self.log_numpy(**kwargs)
++        self.log_wandb(**kwargs, step=step)
++
++    def log_step(self, sample):
++        """
++
++        Args:
++            sample (tuple): A array of tuple containing the previous state, the action sampled by the agent, the reward obtained,
++             the reached state, the absorbing flag of the reached state and the last step flag.
++
++        Returns:
++
++        """
++        state, action, reward, next_state, absorbing, last = sample[0]
++        self.log_data(state=state, action=action, reward=reward, next_state=next_state, absorbing=absorbing, last=last)
++
++    def save_logs(self):
++        self.save_numpy()
++
++    def finish(self):
++        self.save_numpy()
++        self.finish_run()
+diff --git a/mushroom_rl/core/logger/wandb_logger.py b/mushroom_rl/core/logger/wandb_logger.py
+new file mode 100644
+index 0000000..dac4082
+--- /dev/null
++++ b/mushroom_rl/core/logger/wandb_logger.py
+@@ -0,0 +1,53 @@
++import numpy as np
++
++import wandb
++
++
++class WandBLogger(object):
++    """
++    This class implements the WandB logging functionality.
++    """
++    def __init__(self, config, project, entity, tags=None, logging=False):
++        self._logging = logging
++
++        self._run = wandb.init(
++            project=project,
++            entity=entity,
++            config=config,
++            tags=tags,
++            reinit=True,
++            settings=wandb.Settings(start_method="fork")
++        ) if logging else None
++
++        self._data_steps = dict()
++        self._step = 0
++
++    def log_wandb(self, step=None, reduction="dim", **kwargs):
++        if self._logging:
++            wandb_data = {}
++            for name, data in kwargs.items():
++                if name not in self._data_steps:
++                    self._data_steps[name] = 0
++                elif step:
++                    self._data_steps[name] = step
++                else:
++                    self._data_steps[name] += 1
++
++                assert self._data_steps[name] >= self._step
++
++                # convert numpy array to list
++                data = data.tolist() if isinstance(data, np.ndarray) else data
++
++                # create wandb dictionary with given reduction
++                if isinstance(data, list):
++                    wandb_data[name] = dict(zip([f"{reduction}_{x}" for x in range(len(data))], data))
++                else:
++                    wandb_data[name] = data
++
++            self._step = max(self._data_steps.values())
++
++            wandb.log(step=self._step, data=wandb_data)
++
++    def finish_run(self):
++        if self._run:
++            self._run.finish()
+diff --git a/mushroom_rl/environments/dm_control_env.py b/mushroom_rl/environments/dm_control_env.py
+index 4fc510b..1128b3d 100644
+--- a/mushroom_rl/environments/dm_control_env.py
++++ b/mushroom_rl/environments/dm_control_env.py
+@@ -102,10 +102,10 @@ class DMControl(Environment):
+         observation_shape = 0
+         for i in observation_space:
+             shape = observation_space[i].shape
+-            observation_var = 1
+-            for dim in shape:
+-                observation_var *= dim
+-            observation_shape += observation_var
++            if len(shape) > 0:
++                observation_shape += shape[0]
++            else:
++                observation_shape += 1
+ 
+         return Box(low=-np.inf, high=np.inf, shape=(observation_shape,))
+ 
+@@ -127,7 +127,7 @@ class DMControl(Environment):
+     def _convert_observation_vector(observation):
+         obs = list()
+         for i in observation:
+-            obs.append(np.atleast_1d(observation[i]).flatten())
++            obs.append(np.atleast_1d(observation[i]))
+ 
+         return np.concatenate(obs)
+ 
+diff --git a/mushroom_rl/environments/gym_env.py b/mushroom_rl/environments/gym_env.py
+index db2e9bd..9d520e6 100644
+--- a/mushroom_rl/environments/gym_env.py
++++ b/mushroom_rl/environments/gym_env.py
+@@ -1,12 +1,9 @@
+-import time
+-
+ import gym
+ from gym import spaces as gym_spaces
+ 
+-import numpy as np
+-
+ try:
+     import pybullet_envs
++    import time
+     pybullet_found = True
+ except ImportError:
+     pybullet_found = False
+@@ -53,8 +50,6 @@ class Gym(Environment):
+ 
+         self.env = gym.make(name, **env_args)
+ 
+-        self._render_dt = self.env.unwrapped.dt if hasattr(self.env.unwrapped, "dt") else 0.0
+-
+         if wrappers is not None:
+             if wrappers_args is None:
+                 wrappers_args = [dict()] * len(wrappers)
+@@ -64,7 +59,9 @@ class Gym(Environment):
+                 else:
+                     self.env = wrapper(self.env, *args, **env_args)
+ 
+-        horizon = self._set_horizon(self.env, horizon)
++        if horizon is None:
++            horizon = self.env._max_episode_steps
++        self.env._max_episode_steps = np.inf  # Hack to ignore gym time limit.
+ 
+         # MDP properties
+         assert not isinstance(self.env.observation_space,
+@@ -101,7 +98,6 @@ class Gym(Environment):
+         if self._first or self._not_pybullet:
+             self.env.render(mode=mode)
+             self._first = False
+-            time.sleep(self._render_dt)
+ 
+     def stop(self):
+         try:
+@@ -110,22 +106,6 @@ class Gym(Environment):
+         except:
+             pass
+ 
+-    @staticmethod
+-    def _set_horizon(env, horizon):
+-
+-        while not hasattr(env, '_max_episode_steps') and env.env != env.unwrapped:
+-                env = env.env
+-
+-        if horizon is None:
+-            if not hasattr(env, '_max_episode_steps'):
+-                raise RuntimeError('This gym environment has no specified time limit!')
+-            horizon = env._max_episode_steps
+-
+-        if hasattr(env, '_max_episode_steps'):
+-            env._max_episode_steps = np.inf  # Hack to ignore gym time limit.
+-
+-        return horizon
+-
+     @staticmethod
+     def _convert_gym_space(space):
+         if isinstance(space, gym_spaces.Discrete):
+@@ -134,4 +114,3 @@ class Gym(Environment):
+             return Box(low=space.low, high=space.high, shape=space.shape)
+         else:
+             raise ValueError
+-
+diff --git a/mushroom_rl/environments/habitat_env.py b/mushroom_rl/environments/habitat_env.py
+index 48b4800..cd66db7 100644
+--- a/mushroom_rl/environments/habitat_env.py
++++ b/mushroom_rl/environments/habitat_env.py
+@@ -8,7 +8,7 @@ with warnings.catch_warnings():
+         os.environ['GLOG_minloglevel'] = '2'
+         os.environ['HABITAT_SIM_LOG'] = 'quiet'
+     else:
+-        os.environ['GLOG_minloglevel'] = '0'
++        os.environ['GLOG_minloglevel']='0'
+         os.environ['MAGNUM_LOG'] = 'verbose'
+         os.environ['MAGNUM_GPU_VALIDATION'] = 'ON'
+ 
+@@ -33,18 +33,17 @@ from mushroom_rl.utils.viewer import ImageViewer
+ class HabitatNavigationWrapper(gym.Wrapper):
+     """
+     Use it for navigation tasks, where the agent has to go from point A to B.
+-    Action is discrete: stop, turn left, turn right, move forward.
+-    The amount of degrees / distance the agent turns / moves is defined in the YAML file.
+-    'STOP' ends the episode and the agent must do it to get success rewards.
+-    For example, if the agent successfully completes the task but does not do
+-    'STOP' it will not get the success reward.
++    Action is discrete: turn left, turn right, move forward. The amount of
++    degrees / distance the agent turns / moves is defined in the YAML file.
++    This wrapper also removes Habitat's default action 0, that resets the
++    environment (we reset the environment only by calling env.reset()).
+     The observation is the RGB agent's view of what it sees in front of itself.
+     We also add the agent's true (x,y) position to the 'info' dictionary.
+ 
+     """
+     def __init__(self, env):
+         gym.Wrapper.__init__(self, env)
+-        self.action_space = self.env.action_space
++        self.action_space = gym.spaces.Discrete(env.action_space.n - 1)
+         self.observation_space = self.env.observation_space['rgb']
+         self._last_full_obs = None # For rendering
+ 
+@@ -55,10 +54,10 @@ class HabitatNavigationWrapper(gym.Wrapper):
+         return self.env._env._sim.get_agent_state().position
+ 
+     def step(self, action):
+-        obs, rwd, done, info = self.env.step(**{'action': action[0]})
+-        info.update({'position': self.get_position()})
+-        obs = np.asarray(obs['rgb'])
++        obs, rwd, done, info = self.env.step(**{'action': action[0] + 1})
+         self._last_full_obs = obs
++        obs = np.asarray(obs['rgb'])
++        info.update({'position': self.get_position()})
+         return obs, rwd, done, info
+ 
+     def get_shortest_path(self):
+@@ -79,9 +78,6 @@ class HabitatNavigationWrapper(gym.Wrapper):
+                     max_episode_steps=max_steps,
+                 )
+             ][0]
+-
+-            self.reset() # get_action_shortest_path changes the agent state
+-
+             actions = [p.action for p in shortest_path]
+             obs = [self.unwrapped._env.sim.get_observations_at(p.position, p.rotation)['rgb'] for p in shortest_path]
+ 
+@@ -108,36 +104,27 @@ class HabitatNavigationWrapper(gym.Wrapper):
+             rwd_sum += rwd
+             if done:
+                 break
+-        self.reset()
+         return rwd_sum
+ 
+ 
+ class HabitatRearrangeWrapper(gym.Wrapper):
+     """
+-    Use it for the rearrange task, where the robot has to interact with objects.
+-    There are several 'rearrange' tasks, such as 'pick', 'place', 'open X',
+-    'close X', where X can be a door, the fridge, ...
+-
+-    Each task has its own actions, observations, rewards, and terminal conditions.
+-    Please check Habitat 2.0 paper for more details
+-    https://arxiv.org/pdf/2106.14405.pdf
+-
+-    This wrapper, instead, uses a common observation / action space.
+-
++    Use it for the rearrange task, where the robot is fixed at one location and
++    needs to move its arm to pick and place objects. The goal is to place all
++    target objects within 15cm of their goal positions (object orientation is
++    not considered).
+     The observation is the RGB image returned by the sensor mounted on the head
+     of the robot. We also return the end-effector position in the 'info'
+-    dictionary.
+-
+-    The action is mixed.
+-    - The first elements of the action vector are continuous values for velocity
+-    control of the arm's joint.
+-    - The last element is a scalar value for
+-    picking / placing an object: if this scalar is positive and the gripper is not
++    dictionary. The action is mixed.
++    The first elements of the action vector are continuous values for velocity
++    control of the arm's joint. The last element is a scalar value for picking /
++    placing an object: if this scalar is positive and the gripper is not
+     currently holding an object and the end-effector is within 15cm of an object,
+     then the object closest to the end-effector is grasped; if the scalar is
+     negative and the gripper is carrying an object, the object is released.
+-    - The last element is a scalar value for stopping the robot. This action ends the
+-    episode, and allows the agent to get a positive reward if the task has been completed.
++
++    For reward details and other task details we refer to
++    https://arxiv.org/pdf/2106.14405.pdf
+ 
+     """
+     def __init__(self, env):
+@@ -149,7 +136,6 @@ class HabitatRearrangeWrapper(gym.Wrapper):
+         high = np.ones((self.arm_ac_size + self.grip_ac_size))
+         self.action_space = Box(low=low, high=high, shape=(self.n_actions,))
+         self.observation_space = self.env.observation_space['robot_head_rgb']
+-        self._last_full_obs = None # For rendering
+ 
+     def reset(self):
+         return np.asarray(self.env.reset()['robot_head_rgb'])
+@@ -161,9 +147,10 @@ class HabitatRearrangeWrapper(gym.Wrapper):
+         action = {'action': 'ARM_ACTION', 'action_args':
+             {'arm_action': action[:-self.grip_ac_size], 'grip_action': action[-self.grip_ac_size:]}}
+         obs, rwd, done, info = self.env.step(**{'action': action})
+-        info.update({'ee_position': np.asarray(obs['ee_pos'])})
++        ee_pos = np.asarray(obs['ee_pos'])
+         obs = np.asarray(obs['robot_head_rgb'])
+-        self._last_full_obs = obs
++        info.update({'ee_position': self.get_ee_position()}) # TODO: check difference
++        info.update({'ee_position_x': ee_pos})
+         return obs, rwd, done, info
+ 
+ 
+diff --git a/mushroom_rl/environments/mujoco.py b/mushroom_rl/environments/mujoco.py
+index 8e37e7a..5d8cb78 100644
+--- a/mushroom_rl/environments/mujoco.py
++++ b/mushroom_rl/environments/mujoco.py
+@@ -113,8 +113,8 @@ class MuJoCo(Environment):
+                     low.append(joint_range[0])
+                     high.append(joint_range[1])
+                 else:
+-                    low.append(-np.inf)
+-                    high.append(np.inf)
++                    low.extend(-np.inf)
++                    high.extend(np.inf)
+             else:
+                 low.extend([-np.inf] * obs_count)
+                 high.extend([np.inf] * obs_count)
+diff --git a/mushroom_rl/environments/mujoco_envs/humanoid_gait/reward_goals/trajectory.py b/mushroom_rl/environments/mujoco_envs/humanoid_gait/reward_goals/trajectory.py
+index 64bcd13..e3c37ce 100644
+--- a/mushroom_rl/environments/mujoco_envs/humanoid_gait/reward_goals/trajectory.py
++++ b/mushroom_rl/environments/mujoco_envs/humanoid_gait/reward_goals/trajectory.py
+@@ -57,7 +57,7 @@ class Trajectory(object):
+             )
+ 
+             self.split_points = np.round(
+-                self.split_points * new_traj_sampling_factor).astype(int)
++                self.split_points * new_traj_sampling_factor).astype(np.int32)
+ 
+     def _interpolate_trajectory(self, traj, factor):
+         x = np.arange(traj.shape[1])
+diff --git a/mushroom_rl/environments/pybullet_envs/air_hockey/__init__.py b/mushroom_rl/environments/pybullet_envs/air_hockey/__init__.py
+index 3b4c32f..59e3cfd 100644
+--- a/mushroom_rl/environments/pybullet_envs/air_hockey/__init__.py
++++ b/mushroom_rl/environments/pybullet_envs/air_hockey/__init__.py
+@@ -1,11 +1,5 @@
+-from .hit import AirHockeyHit
+-from .defend import AirHockeyDefend
+-from .prepare import AirHockeyPrepare
+-from .repel import AirHockeyRepel
+-
++from mushroom_rl.environments.pybullet_envs.air_hockey.hit import AirHockeyHit
++from mushroom_rl.environments.pybullet_envs.air_hockey.defend import AirHockeyDefend
+ 
+ AirHockeyHit.register()
+ AirHockeyDefend.register()
+-AirHockeyPrepare.register()
+-AirHockeyRepel.register()
+-
+diff --git a/mushroom_rl/environments/pybullet_envs/air_hockey/base.py b/mushroom_rl/environments/pybullet_envs/air_hockey/base.py
+index 641e5d5..9e12260 100644
+--- a/mushroom_rl/environments/pybullet_envs/air_hockey/base.py
++++ b/mushroom_rl/environments/pybullet_envs/air_hockey/base.py
+@@ -16,7 +16,7 @@ class AirHockeyBase(PyBullet):
+     """
+     def __init__(self, gamma=0.99, horizon=500, n_agents=1, env_noise=False, obs_noise=False, obs_delay=False,
+                  torque_control=True, step_action_function=None, timestep=1 / 240., n_intermediate_steps=1,
+-                 debug_gui=False, table_boundary_terminate=False):
++                 debug_gui=False):
+         """
+         Constructor.
+ 
+@@ -29,7 +29,6 @@ class AirHockeyBase(PyBullet):
+             obs_delay(bool, False): If true, velocity is observed by the low-pass filter;
+             control(bool, True): If false, the robot in position control mode;
+             step_action_function(object, None): A callable function to warp-up the policy action to environment command.
+-            table_boundary_terminate(bool, False): Episode terminates if the mallet is outside the boundary
+         """
+ 
+         self.n_agents = n_agents
+@@ -37,7 +36,6 @@ class AirHockeyBase(PyBullet):
+         self.obs_noise = obs_noise
+         self.obs_delay = obs_delay
+         self.step_action_function = step_action_function
+-        self.table_boundary_terminate = table_boundary_terminate
+ 
+         puck_file = os.path.join(os.path.dirname(os.path.abspath(path_robots)),
+                                  "data", "air_hockey", "puck.urdf")
+@@ -145,20 +143,6 @@ class AirHockeyBase(PyBullet):
+         puck_pos = self.get_sim_state(state, "puck", PyBulletObservationType.BODY_POS)[:3]
+         if np.any(np.abs(puck_pos[:2]) > boundary) or abs(puck_pos[2] - self.env_spec['table']['height']) > 0.05:
+             return True
+-
+-        if self.table_boundary_terminate:
+-            if self.n_agents >= 1:
+-                ee_pos = self.get_sim_state(state, "planar_robot_1/link_striker_ee",
+-                                            PyBulletObservationType.LINK_POS)[:3]
+-                if abs(ee_pos[0]) > self.env_spec['table']['length'] / 2 or \
+-                        abs(ee_pos[1]) > self.env_spec['table']['width'] / 2:
+-                    return True
+-            if self.n_agents == 2:
+-                ee_pos = self.get_sim_state(state, "planar_robot_2/link_striker_ee",
+-                                            PyBulletObservationType.LINK_POS)[:3]
+-                if abs(ee_pos[0]) > self.env_spec['table']['length'] / 2 or \
+-                        abs(ee_pos[1]) > self.env_spec['table']['width'] / 2:
+-                    return True
+         return False
+ 
+     def forward_kinematics(self, joint_state):
+diff --git a/mushroom_rl/environments/pybullet_envs/air_hockey/defend.py b/mushroom_rl/environments/pybullet_envs/air_hockey/defend.py
+index bc82561..6da5f0f 100644
+--- a/mushroom_rl/environments/pybullet_envs/air_hockey/defend.py
++++ b/mushroom_rl/environments/pybullet_envs/air_hockey/defend.py
+@@ -1,3 +1,5 @@
++import time
++
+ import numpy as np
+ 
+ from mushroom_rl.environments.pybullet_envs.air_hockey.single import AirHockeySingle, \
+@@ -12,50 +14,35 @@ class AirHockeyDefend(AirHockeySingle):
+     """
+     def __init__(self, gamma=0.99, horizon=500, env_noise=False, obs_noise=False, obs_delay=False, torque_control=True,
+                  step_action_function=None, timestep=1 / 240., n_intermediate_steps=1, debug_gui=False,
+-                 random_init=False, action_penalty=1e-3, table_boundary_terminate=False, init_velocity_range=(1, 2.2)):
++                 random_init=False, action_penalty=1e-3):
+         """
+         Constructor
+ 
+         Args:
+             random_init(bool, False): If true, initialize the puck at random position .
+             action_penalty(float, 1e-3): The penalty of the action on the reward at each time step
+-            init_velocity_range((float, float), (1, 2.2)): The range in which the initial velocity is initialized
+         """
+-
+-        self.random_init = random_init
+-        self.action_penalty = action_penalty
+-        self.init_velocity_range = init_velocity_range
+-
+-        self.start_range = np.array([[0.25, 0.65], [-0.4, 0.4]])
++        self.start_range = np.array([[0.2, 0.78], [-0.4, 0.4]])
+         self.has_hit = False
+         self.has_bounce = False
+-        self.puck_pos = None
+-
++        self.random_init = random_init
++        self.action_penalty = action_penalty
+         super().__init__(gamma=gamma, horizon=horizon, timestep=timestep, n_intermediate_steps=n_intermediate_steps,
+                          debug_gui=debug_gui, env_noise=env_noise, obs_noise=obs_noise, obs_delay=obs_delay,
+-                         torque_control=torque_control, step_action_function=step_action_function,
+-                         table_boundary_terminate=table_boundary_terminate, number_flags=2)
++                         torque_control=torque_control, step_action_function=step_action_function)
++        self.init_state = np.array([-1.1, 0.8, np.pi/2])
+ 
+     def setup(self, state=None):
+-        # Set initial puck parameters
+         if self.random_init:
+             puck_pos = np.random.rand(2) * (self.start_range[:, 1] - self.start_range[:, 0]) + self.start_range[:, 0]
+             puck_pos = np.concatenate([puck_pos, [-0.189]])
+-
+-            lin_vel = np.random.uniform(self.init_velocity_range[0], self.init_velocity_range[1])
+-            angle = np.random.uniform(-0.5, 0.5)
+-
+-            puck_lin_vel = np.zeros(3)
+-            puck_lin_vel[0] = -np.cos(angle) * lin_vel
+-            puck_lin_vel[1] = np.sin(angle) * lin_vel
++            puck_lin_vel = np.random.uniform(-1, 1, 3) * 0.5
++            puck_lin_vel[0] = -1.0
+             puck_lin_vel[2] = 0.0
+             puck_ang_vel = np.random.uniform(-1, 1, 3)
+             puck_ang_vel[:2] = 0.0
+-
+-            # Used for data logging in eval, HAS to be puck_pos
+-            self.puck_pos = [puck_pos, puck_lin_vel, puck_ang_vel]
+         else:
+-            puck_pos = np.array([self.start_range[0].mean(), 0])
++            puck_pos = np.array([self.start_range[0].mean(), 0.0])
+             puck_pos = np.concatenate([puck_pos, [-0.189]])
+             puck_lin_vel = np.array([-1., 0., 0.])
+             puck_ang_vel = np.zeros(3)
+@@ -73,52 +60,29 @@ class AirHockeyDefend(AirHockeySingle):
+         r = 0
+         puck_pos = self.get_sim_state(next_state, "puck", PyBulletObservationType.BODY_POS)[:3]
+         puck_vel = self.get_sim_state(next_state, "puck", PyBulletObservationType.BODY_LIN_VEL)[:3]
+-
+-        # If absorbing the puck is out of bounds of the table.
+         if absorbing:
+-            # large penalty if agent coincides a goal
+             if puck_pos[0] + self.env_spec['table']['length'] / 2 < 0 and \
+                     np.abs(puck_pos[1]) - self.env_spec['table']['goal'] < 0:
+                 r = -50
+         else:
+-            # If the puck bounced off the head walls, there is no reward.
+             if self.has_bounce:
+-                r = -1
+-            elif self.has_hit:
+-                # Reward if the puck slows down on the defending side
+-                if -0.8 < puck_pos[0] < -0.4:
+-                    r_y = 3 * np.exp(-3 * np.abs(puck_pos[1]))
+-                    r_x = np.exp(-5 * np.abs(puck_pos[0] + 0.6))
+-                    r_vel = 5 * np.exp(-(5 * np.linalg.norm(puck_vel))**2)
+-                    r = r_x + r_y + r_vel + 1
+-
+-                # If we did not yet hit the puck, reward is controlled by the distance between end effector and puck
+-                # on the x axis
+-            else:
+-                ee_pos = self.get_sim_state(next_state, "planar_robot_1/link_striker_ee",
++                r = 0
++            elif puck_pos[0] > -0.8:
++                if self.has_hit:
++                    r = np.exp(-5 * np.abs(puck_pos[0] + 0.6)) + 5 * np.exp(-5 * np.linalg.norm(puck_vel)) + 1
++                else:
++                    ee_pos = self.get_sim_state(next_state, "planar_robot_1/link_striker_ee",
+                                                 PyBulletObservationType.LINK_POS)[:2]
++                    ee_des = np.array([-0.6, puck_pos[1]])
++                    dist_ee_puck = np.linalg.norm(ee_des - ee_pos[:2]) - 0.08
++                    r = np.exp(-3 * dist_ee_puck)
+ 
+-                # Maybe change -0.6 to -0.4 so the puck is stopped a bit higher, could improve performance because
+-                # we don't run into the constraints at the bottom
+-                ee_des = np.array([-0.6, puck_pos[1]])
+-                dist_ee_puck = np.abs(ee_des - ee_pos[:2])
+-
+-                r_x = np.exp(-3 * dist_ee_puck[0])
+-
+-                sig = 0.2
+-                r_y = 1./(np.sqrt(2.*np.pi)*sig)*np.exp(-np.power((dist_ee_puck[1] - 0.08)/sig, 2.)/2)
+-                r = 0.3 * r_x + 0.7 * (r_y/2)
+-
+-        # penalizes the amount of torque used
+         r -= self.action_penalty * np.linalg.norm(action)
+         return r
+ 
+     def is_absorbing(self, state):
+-        puck_pos_y = self.get_sim_state(state, "puck", PyBulletObservationType.BODY_POS)[0]
+         if super().is_absorbing(state):
+             return True
+-        if (self.has_hit or self.has_bounce) and puck_pos_y > -0.3:
+-            return True
+         return False
+ 
+     def _simulation_post_step(self):
+@@ -142,48 +106,24 @@ class AirHockeyDefend(AirHockeySingle):
+                                                                 self._indexer.link_map['t_up_rim_r'][0],
+                                                                 -1,
+                                                                 self._indexer.link_map['t_up_rim_r'][1]))
+-
+             collision_count += len(self.client.getContactPoints(self._model_map['puck'],
+-                                                                self._indexer.link_map['t_down_rim_l'][0],
++                                                                self._indexer.link_map['t_down_rim_r'][0],
+                                                                 -1,
+-                                                                self._indexer.link_map['t_down_rim_l'][1]))
++                                                                self._indexer.link_map['t_down_rim_r'][1]))
+             collision_count += len(self.client.getContactPoints(self._model_map['puck'],
+                                                                 self._indexer.link_map['t_down_rim_r'][0],
+                                                                 -1,
+                                                                 self._indexer.link_map['t_down_rim_r'][1]))
+-
+             if collision_count > 0:
+                 self.has_bounce = True
+ 
+-    def _create_observation(self, state):
+-        obs = super(AirHockeyDefend, self)._create_observation(state)
+-        return np.append(obs, [self.has_hit, self.has_bounce])
+-
+ 
+ if __name__ == '__main__':
+-    import time
+-
+-    env = AirHockeyDefend(debug_gui=True, obs_noise=False, obs_delay=False, n_intermediate_steps=4, random_init=True)
+-
+-    R = 0.
+-    J = 0.
+-    gamma = 1.
+-    steps = 0
++    env = AirHockeyDefend(debug_gui=True, obs_noise=False, obs_delay=False)
+     env.reset()
+     while True:
+-        action = np.zeros(3)
++        action = np.random.randn(3) * 10
+         observation, reward, done, info = env.step(action)
+-        gamma *= env.info.gamma
+-        J += gamma * reward
+-        R += reward
+-        steps += 1
+-
+-
+-        if done or steps > env.info.horizon:
+-            print("J: ", J, " R: ", R)
+-            R = 0.
+-            J = 0.
+-            gamma = 1.
+-            steps = 0
++        if done:
+             env.reset()
+-        time.sleep(1 / 60.)
++        time.sleep(0.01)
+diff --git a/mushroom_rl/environments/pybullet_envs/air_hockey/hit.py b/mushroom_rl/environments/pybullet_envs/air_hockey/hit.py
+index bda1d03..1681f47 100644
+--- a/mushroom_rl/environments/pybullet_envs/air_hockey/hit.py
++++ b/mushroom_rl/environments/pybullet_envs/air_hockey/hit.py
+@@ -1,3 +1,5 @@
++import time
++
+ import numpy as np
+ 
+ from mushroom_rl.environments.pybullet_envs.air_hockey.single import AirHockeySingle, PyBulletObservationType
+@@ -9,95 +11,50 @@ class AirHockeyHit(AirHockeySingle):
+     The agent tries to get close to the puck if the hitting does not happen.
+     And will get bonus reward if the robot scores a goal.
+     """
+-
+     def __init__(self, gamma=0.99, horizon=120, env_noise=False, obs_noise=False, obs_delay=False, torque_control=True,
+-                 step_action_function=None, timestep=1 / 240., n_intermediate_steps=1, debug_gui=False,
+-                 random_init=False, action_penalty=1e-3, table_boundary_terminate=False, init_robot_state="right"):
++                 step_action_function=None, timestep=1 / 240.,  n_intermediate_steps=1, debug_gui=False,
++                 random_init=False, action_penalty=1e-3):
+         """
+         Constructor
+ 
+         Args:
+             random_init(bool, False): If true, initialize the puck at random position.
+             action_penalty(float, 1e-3): The penalty of the action on the reward at each time step
+-            init_robot_state(string, "right"): The configuration in which the robot is initialized. "right", "left",
+-                                                "random" available
+         """
+-
+-        self.random_init = random_init
+-        self.action_penalty = action_penalty
+-        self.init_robot_state = init_robot_state
+-
+-        self.hit_range = np.array([[-0.65, -0.25], [-0.4, 0.4]])
++        self.hit_range = np.array([[-0.6, -0.2], [-0.4, 0.4]])
+         self.goal = np.array([0.98, 0])
+         self.has_hit = False
+-        self.has_bounce = False
+-        self.vec_puck_goal = None
+-        self.vec_puck_side = None
+-        self.puck_pos = None
++        self.vel_hit_x = 0.
++        self.r_hit = 0.
++        self.random_init = random_init
++        self.action_penalty = action_penalty
+         super().__init__(gamma=gamma, horizon=horizon, timestep=timestep, n_intermediate_steps=n_intermediate_steps,
+                          debug_gui=debug_gui, env_noise=env_noise, obs_noise=obs_noise, obs_delay=obs_delay,
+-                         torque_control=torque_control, step_action_function=step_action_function,
+-                         table_boundary_terminate=table_boundary_terminate, number_flags=1)
++                         torque_control=torque_control, step_action_function=step_action_function)
+ 
+     def setup(self, state):
+-        # Initial position of the puck
+         if self.random_init:
+-            self.puck_pos = np.random.rand(2) * (self.hit_range[:, 1] - self.hit_range[:, 0]) + self.hit_range[:, 0]
++            puck_pos = np.random.rand(2) * (self.hit_range[:, 1] - self.hit_range[:, 0]) + self.hit_range[:, 0]
+         else:
+-            self.puck_pos = np.mean(self.hit_range, axis=1)
+-
+-        # Initial configuration of the robot arm
+-        if self.init_robot_state == 'right':
+-            self.init_state = np.array([-0.9273, 0.9273, np.pi / 2])
+-        elif self.init_robot_state == 'left':
+-            self.init_state = -1 * np.array([-0.9273, 0.9273, np.pi / 2])
+-        elif self.init_robot_state == 'random':
+-            robot_id, joint_id = self._indexer.link_map['planar_robot_1/link_striker_ee']
+-            striker_pos_y = np.random.rand() * 0.8 - 0.4
+-            self.init_state = self.client.calculateInverseKinematics(robot_id, joint_id, [-0.81, striker_pos_y, -0.179])
+-
+-        puck_pos = np.concatenate([self.puck_pos, [-0.189]])
+-        self.client.resetBasePositionAndOrientation(self._model_map['puck'], puck_pos, [0, 0, 0, 1.0])
+-
+-        self.vec_puck_goal = (self.goal - self.puck_pos) / np.linalg.norm(self.goal - self.puck_pos)
+-
+-        # width of table minus radius of puck
+-        effective_width = 0.51 - 0.03165
+-
+-        # Calculate bounce point by assuming incomming angle = outgoing angle
+-        w = (abs(puck_pos[1]) * self.goal[0] + self.goal[1] * puck_pos[0] - effective_width * puck_pos[0] - effective_width *
+-             self.goal[0]) / (abs(puck_pos[1]) + self.goal[1] - 2 * effective_width)
++            puck_pos = np.mean(self.hit_range, axis=1)
+ 
+-        side_point = np.array([w, np.copysign(effective_width, puck_pos[1])])
+-
+-        self.vec_puck_side = (side_point - self.puck_pos) / np.linalg.norm(side_point - self.puck_pos)
++        puck_pos = np.concatenate([puck_pos, [-0.189]])
++        self.client.resetBasePositionAndOrientation(self._model_map['puck'], puck_pos, [0, 0, 0, 1.0])
+ 
+         for i, (model_id, joint_id, _) in enumerate(self._indexer.action_data):
+             self.client.resetJointState(model_id, joint_id, self.init_state[i])
+ 
+         self.has_hit = False
+-        self.has_bounce = False
++        self.vel_hit_x = 0.
++        self.r_hit = 0.
+ 
+     def reward(self, state, action, next_state, absorbing):
+         r = 0
+         puck_pos = self.get_sim_state(next_state, "puck", PyBulletObservationType.BODY_POS)[:2]
+-
+-        puck_vel = self.get_sim_state(self._state, "puck", PyBulletObservationType.BODY_LIN_VEL)[:2]
+-
+-        # If puck is out of bounds
+         if absorbing:
+-            # If puck is in the enemy goal
+             if puck_pos[0] - self.env_spec['table']['length'] / 2 > 0 and \
+                     np.abs(puck_pos[1]) - self.env_spec['table']['goal'] < 0:
+-                r = 200
+-
+-            # If mallet violates constraints, not used with safe exploration
+-            if self.table_boundary_terminate:
+-                ee_pos = self.get_sim_state(next_state, "planar_robot_1/link_striker_ee",
+-                                            PyBulletObservationType.LINK_POS)[:3]
+-                if abs(ee_pos[0]) > self.env_spec['table']['length'] / 2 or \
+-                        abs(ee_pos[1]) > self.env_spec['table']['width'] / 2:
+-                    r = -10
++                r = 150
+         else:
+             if not self.has_hit:
+                 ee_pos = self.get_sim_state(next_state, "planar_robot_1/link_striker_ee",
+@@ -105,23 +62,12 @@ class AirHockeyHit(AirHockeySingle):
+                 dist_ee_puck = np.linalg.norm(puck_pos - ee_pos)
+ 
+                 vec_ee_puck = (puck_pos - ee_pos) / dist_ee_puck
+-
+-                cos_ang_side = np.clip(self.vec_puck_side @ vec_ee_puck, 0, 1)
+-
+-                # Reward if vec_ee_puck and vec_puck_goal have the same direction
+-                cos_ang_goal = np.clip(self.vec_puck_goal @ vec_ee_puck, 0, 1)
+-                cos_ang = np.max([cos_ang_goal, cos_ang_side])
+-
+-                r = np.exp(-8 * (dist_ee_puck - 0.08)) * cos_ang ** 2
++                vec_puck_goal = (self.goal - puck_pos) / np.linalg.norm(self.goal - puck_pos)
++                cos_ang = np.clip(vec_puck_goal @ vec_ee_puck, 0, 1)
++                r = np.exp(-8 * (dist_ee_puck - 0.08)) * cos_ang
++                self.r_hit = r
+             else:
+-                r_hit = 0.25 + min([1, (0.25 * puck_vel[0] ** 4)])
+-
+-                r_goal = 0
+-                if puck_pos[0] > 0.7:
+-                    sig = 0.1
+-                    r_goal = 1. / (np.sqrt(2. * np.pi) * sig) * np.exp(-np.power((puck_pos[1] - 0) / sig, 2.) / 2)
+-
+-                r = 2 * r_hit + 10 * r_goal
++                r = 1 + self.r_hit + self.vel_hit_x * 0.1
+ 
+         r -= self.action_penalty * np.linalg.norm(action)
+         return r
+@@ -133,50 +79,26 @@ class AirHockeyHit(AirHockeySingle):
+             puck_vel = self.get_sim_state(self._state, "puck", PyBulletObservationType.BODY_LIN_VEL)[:2]
+             if np.linalg.norm(puck_vel) < 0.01:
+                 return True
+-        return self.has_bounce
++        return False
+ 
+     def _simulation_post_step(self):
+         if not self.has_hit:
+-            # Kinda bad
+             puck_vel = self.get_sim_state(self._state, "puck", PyBulletObservationType.BODY_LIN_VEL)[:2]
+             if np.linalg.norm(puck_vel) > 0.1:
+                 self.has_hit = True
+-
+-        if not self.has_bounce:
+-            # check if bounced beside the goal
+-            collision_count = 0
+-            collision_count += len(self.client.getContactPoints(self._model_map['puck'],
+-                                                                self._indexer.link_map['t_down_rim_l'][0],
+-                                                                -1,
+-                                                                self._indexer.link_map['t_down_rim_l'][1]))
+-            collision_count += len(self.client.getContactPoints(self._model_map['puck'],
+-                                                                self._indexer.link_map['t_down_rim_r'][0],
+-                                                                -1,
+-                                                                self._indexer.link_map['t_down_rim_r'][1]))
+-
+-            if collision_count > 0:
+-                self.has_bounce = True
+-
+-    def _create_observation(self, state):
+-        obs = super(AirHockeyHit, self)._create_observation(state)
+-        return np.append(obs, [self.has_hit])
++                self.vel_hit_x = puck_vel[0]
+ 
+ 
+ if __name__ == '__main__':
+-    import time
+-
+-    env = AirHockeyHit(debug_gui=True, env_noise=False, obs_noise=False, obs_delay=False, n_intermediate_steps=4,
+-                       table_boundary_terminate=True, random_init=True, init_robot_state="right")
++    env = AirHockeyHit(debug_gui=True, env_noise=False, obs_noise=False, obs_delay=False, n_intermediate_steps=4)
+ 
+-    env.reset()
+     R = 0.
+     J = 0.
+     gamma = 1.
+     steps = 0
+-
++    env.reset()
+     while True:
+-        # action = np.random.randn(3) * 5
+-        action = np.array([0] * 3)
++        action = np.random.randn(3) * 5
+         observation, reward, done, info = env.step(action)
+         gamma *= env.info.gamma
+         J += gamma * reward
+@@ -189,4 +111,4 @@ if __name__ == '__main__':
+             gamma = 1.
+             steps = 0
+             env.reset()
+-        time.sleep(1 / 60.)
++        time.sleep(1/60.)
+diff --git a/mushroom_rl/environments/pybullet_envs/air_hockey/single.py b/mushroom_rl/environments/pybullet_envs/air_hockey/single.py
+index 703244f..cefaad0 100644
+--- a/mushroom_rl/environments/pybullet_envs/air_hockey/single.py
++++ b/mushroom_rl/environments/pybullet_envs/air_hockey/single.py
+@@ -11,21 +11,12 @@ class AirHockeySingle(AirHockeyBase):
+     """
+     def __init__(self, gamma=0.99, horizon=120, env_noise=False, obs_noise=False, obs_delay=False,
+                  torque_control=True, step_action_function=None, timestep=1 / 240., n_intermediate_steps=1,
+-                 debug_gui=False, table_boundary_terminate=False, number_flags=0):
+-
+-        """
+-        Constructor.
+-
+-        Args:
+-            number_flags(int, 0): Amount of flags which are added to the observation space
+-        """
++                 debug_gui=False):
+         self.init_state = np.array([-0.9273, 0.9273, np.pi / 2])
+-        self.number_flags = number_flags
+         self.obs_prev = None
+         super().__init__(gamma=gamma, horizon=horizon, env_noise=env_noise, n_agents=1, obs_noise=obs_noise,
+                          obs_delay=obs_delay, torque_control=torque_control, step_action_function=step_action_function,
+-                         timestep=timestep, n_intermediate_steps=n_intermediate_steps, debug_gui=debug_gui,
+-                         table_boundary_terminate=table_boundary_terminate)
++                         timestep=timestep, n_intermediate_steps=n_intermediate_steps, debug_gui=debug_gui)
+ 
+         self._client.resetDebugVisualizerCamera(cameraDistance=1.5, cameraYaw=-90.0, cameraPitch=-45.0,
+                                                 cameraTargetPosition=[-0.5, 0., 0.])
+@@ -33,17 +24,11 @@ class AirHockeySingle(AirHockeyBase):
+         self._disable_collision()
+ 
+     def _modify_mdp_info(self, mdp_info):
+-        """
+-        puck position indexes: [0, 1]
+-        puck velocity indexes: [7, 8, 9]
+-        joint position indexes: [13, 14, 15]
+-        joint velocity indexes: [16, 17, 18]
+-        """
+-        obs_idx = [0, 1, 7, 8, 9, 13, 14, 15, 16, 17, 18]
+-        obs_low = np.append(mdp_info.observation_space.low[obs_idx], [0] * self.number_flags)
+-        obs_high = np.append(mdp_info.observation_space.high[obs_idx], [1] * self.number_flags)
+-        obs_low[0:2] = [-1, -0.5]
+-        obs_high[0:2] = [1, 0.5]
++        obs_idx = [0, 1, 2, 7, 8, 9, 13, 14, 15, 16, 17, 18]
++        obs_low = mdp_info.observation_space.low[obs_idx]
++        obs_high = mdp_info.observation_space.high[obs_idx]
++        obs_low[0:3] = [-1, -0.5, -np.pi]
++        obs_high[0:3] = [1, 0.5, np.pi]
+         observation_space = Box(low=obs_low, high=obs_high)
+         return MDPInfo(observation_space, mdp_info.action_space, mdp_info.gamma, mdp_info.horizon)
+ 
+@@ -74,8 +59,8 @@ class AirHockeySingle(AirHockeyBase):
+ 
+         if self.obs_delay:
+             alpha = 0.5
+-            puck_vel_2d = alpha * puck_vel_2d + (1 - alpha) * self.obs_prev[2:6]
+-            robot_vel = alpha * robot_vel + (1 - alpha) * self.obs_prev[8:11]
++            puck_vel_2d = alpha * puck_vel_2d + (1 - alpha) * self.obs_prev[3:6]
++            robot_vel = alpha * robot_vel + (1 - alpha) * self.obs_prev[9:12]
+ 
+         self.obs_prev = np.concatenate([puck_pose_2d, puck_vel_2d, robot_pos, robot_vel])
+         return self.obs_prev
+@@ -87,8 +72,9 @@ class AirHockeySingle(AirHockeyBase):
+ 
+             frame_target = transformations.inverse_matrix(robot_frame) @ puck_frame
+             puck_translate = transformations.translation_from_matrix(frame_target)
++            _, _, puck_euler_yaw = transformations.euler_from_matrix(frame_target)
+ 
+-            return puck_translate[:2]
++            return np.concatenate([puck_translate[:2], [puck_euler_yaw]])
+         if type == 'vel':
+             rot_mat = robot_frame[:3, :3]
+             vec_lin = rot_mat.T @ puck_in[:3]
+diff --git a/mushroom_rl/features/basis/polynomial.py b/mushroom_rl/features/basis/polynomial.py
+index 4027235..9800900 100644
+--- a/mushroom_rl/features/basis/polynomial.py
++++ b/mushroom_rl/features/basis/polynomial.py
+@@ -66,7 +66,7 @@ class PolynomialBasis:
+             The current exponent of the polynomial.
+ 
+         """
+-        pattern = np.zeros(n_variables, dtype=int)
++        pattern = np.zeros(n_variables, dtype=np.int32)
+         for current_sum in range(1, order + 1):
+             pattern[0] = current_sum
+             yield pattern
+diff --git a/mushroom_rl/policy/noise_policy.py b/mushroom_rl/policy/noise_policy.py
+index 1a95bfb..e652dda 100644
+--- a/mushroom_rl/policy/noise_policy.py
++++ b/mushroom_rl/policy/noise_policy.py
+@@ -115,9 +115,7 @@ class ClippedGaussianPolicy(ParametricPolicy):
+             _approximator='mushroom',
+             _predict_params='pickle',
+             _inv_sigma='numpy',
+-            _sigma='numpy',
+-            _low='numpy',
+-            _high='numpy'
++            _sigma='numpy'
+         )
+ 
+     def __call__(self, state, action):
+@@ -126,9 +124,7 @@ class ClippedGaussianPolicy(ParametricPolicy):
+     def draw_action(self, state):
+         mu = np.reshape(self._approximator.predict(np.expand_dims(state, axis=0), **self._predict_params), -1)
+ 
+-        action_raw = np.random.multivariate_normal(mu, self._sigma)
+-
+-        return np.clip(action_raw, self._low, self._high)
++        return np.random.multivariate_normal(mu, self._sigma)
+ 
+     def set_weights(self, weights):
+         self._approximator.set_weights(weights)
+diff --git a/mushroom_rl/utils/dataset.py b/mushroom_rl/utils/dataset.py
+index 40d12c3..38f0aa4 100644
+--- a/mushroom_rl/utils/dataset.py
++++ b/mushroom_rl/utils/dataset.py
+@@ -168,7 +168,7 @@ def compute_J(dataset, gamma=1.):
+     for i in range(len(dataset)):
+         j += gamma ** episode_steps * dataset[i][2]
+         episode_steps += 1
+-        if dataset[i][-1] or i == len(dataset) - 1:
++        if dataset[i][5] or i == len(dataset) - 1:
+             js.append(j)
+             j = 0.
+             episode_steps = 0
+diff --git a/mushroom_rl/utils/pybullet/index_map.py b/mushroom_rl/utils/pybullet/index_map.py
+index 8b21056..afd2153 100644
+--- a/mushroom_rl/utils/pybullet/index_map.py
++++ b/mushroom_rl/utils/pybullet/index_map.py
+@@ -84,11 +84,9 @@ class IndexMap(object):
+         for model_id, joint_id, mode in self.action_data:
+             u = action[i]
+             if mode is pybullet.POSITION_CONTROL:
+-                kwargs = dict(targetPosition=u, maxVelocity=self._client.getJointInfo(model_id, joint_id)[11],
+-                              force=self._client.getJointInfo(model_id, joint_id)[10])
++                kwargs = dict(targetPosition=u, maxVelocity=self._client.getJointInfo(model_id, joint_id)[11])
+             elif mode is pybullet.VELOCITY_CONTROL:
+-                kwargs = dict(targetVelocity=u, maxVelocity=self._client.getJointInfo(model_id, joint_id)[11],
+-                              force=self._client.getJointInfo(model_id, joint_id)[10])
++                kwargs = dict(targetVelocity=u, maxVelocity=self._client.getJointInfo(model_id, joint_id)[11])
+             elif mode is pybullet.TORQUE_CONTROL:
+                 kwargs = dict(force=u)
+             else:
+diff --git a/mushroom_rl/utils/replay_memory.py b/mushroom_rl/utils/replay_memory.py
+index 57bf1f9..48b5099 100644
+--- a/mushroom_rl/utils/replay_memory.py
++++ b/mushroom_rl/utils/replay_memory.py
+@@ -352,7 +352,7 @@ class PrioritizedReplayMemory(Serializable):
+         absorbing = [None for _ in range(n_samples)]
+         last = [None for _ in range(n_samples)]
+ 
+-        idxs = np.zeros(n_samples, dtype=int)
++        idxs = np.zeros(n_samples, dtype=np.int)
+         priorities = np.zeros(n_samples)
+ 
+         total_p = self._tree.total_p
+diff --git a/setup.py b/setup.py
+index 913c6eb..765afa6 100644
+--- a/setup.py
++++ b/setup.py
+@@ -36,7 +36,7 @@ if sys.version_info < (3, 7):
+     requires_list.append('zipfile37')
+ 
+ extras = {
+-    'gym': ['gym>=0.21'],
++    'gym': ['gym'],
+     'atari': ['ale-py', 'Pillow', 'opencv-python'],
+     'box2d': ['box2d-py~=2.3.5'],
+     'bullet': ['pybullet'],
+diff --git a/tests/algorithms/test_a2c.py b/tests/algorithms/test_a2c.py
+index 274096c..4944f64 100644
+--- a/tests/algorithms/test_a2c.py
++++ b/tests/algorithms/test_a2c.py
+@@ -9,7 +9,7 @@ from helper.utils import TestUtils as tu
+ 
+ from mushroom_rl.core import Agent
+ from mushroom_rl.core import Core
+-from mushroom_rl.environments import InvertedPendulum
++from mushroom_rl.environments import Gym
+ from mushroom_rl.algorithms.actor_critic import A2C
+ 
+ from mushroom_rl.policy import GaussianTorchPolicy
+@@ -32,7 +32,8 @@ class Network(nn.Module):
+ 
+ 
+ def learn_a2c():
+-    mdp = InvertedPendulum(horizon=50)
++    mdp = Gym(name='Pendulum-v0', horizon=200, gamma=.99)
++    mdp.seed(1)
+     np.random.seed(1)
+     torch.manual_seed(1)
+     torch.cuda.manual_seed(1)
+@@ -76,7 +77,8 @@ def test_a2c():
+     agent = learn_a2c()
+ 
+     w = agent.policy.get_weights()
+-    w_test = np.array([0.9382279 , -1.8847059 , -0.13790752, -0.00786441])
++    w_test = np.array([-1.6298926, 1.0359657, -0.34826356, 0.26997435,
++                       -0.00908627])
+ 
+     assert np.allclose(w, w_test)
+ 
+diff --git a/tests/algorithms/test_black_box.py b/tests/algorithms/test_black_box.py
+index 3b20349..4737d77 100644
+--- a/tests/algorithms/test_black_box.py
++++ b/tests/algorithms/test_black_box.py
+@@ -4,7 +4,7 @@ from datetime import datetime
+ from helper.utils import TestUtils as tu
+ 
+ from mushroom_rl.core import Agent
+-from mushroom_rl.algorithms.policy_search import PGPE, REPS, ConstrainedREPS, RWR
++from mushroom_rl.algorithms.policy_search import PGPE, REPS, RWR
+ from mushroom_rl.approximators import Regressor
+ from mushroom_rl.core import Core
+ from mushroom_rl.approximators.parametric import LinearApproximator
+@@ -87,30 +87,6 @@ def test_REPS_save(tmpdir):
+         tu.assert_eq(save_attr, load_attr)
+ 
+ 
+-def test_ConstrainedREPS():
+-    distribution = learn(ConstrainedREPS, eps=.7, kappa=0.1).distribution
+-    w = distribution.get_parameters()
+-    w_test = np.array([0.00026583, -0.00092814,  0.00068238, -0.00026865,
+-                       0.00081971, 0.00124566,  0.00107135,  0.00085804])
+-
+-    assert np.allclose(w, w_test)
+-
+-
+-def test_ConstrainedREPS_save(tmpdir):
+-    agent_path = tmpdir / 'agent_{}'.format(datetime.now().strftime("%H%M%S%f"))
+-
+-    agent_save = learn(ConstrainedREPS, eps=.7, kappa=0.1)
+-
+-    agent_save.save(agent_path)
+-    agent_load = Agent.load(agent_path)
+-
+-    for att, method in vars(agent_save).items():
+-        save_attr = getattr(agent_save, att)
+-        load_attr = getattr(agent_load, att)
+-
+-        tu.assert_eq(save_attr, load_attr)
+-
+-
+ def test_PGPE():
+     distribution = learn(PGPE, optimizer=AdaptiveOptimizer(1.5)).distribution
+     w = distribution.get_parameters()
+diff --git a/tests/algorithms/test_ddpg.py b/tests/algorithms/test_ddpg.py
+index a92813d..61babd7 100644
+--- a/tests/algorithms/test_ddpg.py
++++ b/tests/algorithms/test_ddpg.py
+@@ -10,7 +10,7 @@ from helper.utils import TestUtils as tu
+ from mushroom_rl.core import Agent
+ from mushroom_rl.algorithms.actor_critic import DDPG, TD3
+ from mushroom_rl.core import Core
+-from mushroom_rl.environments import InvertedPendulum
++from mushroom_rl.environments.gym_env import Gym
+ from mushroom_rl.policy import OrnsteinUhlenbeckPolicy
+ 
+ 
+@@ -50,7 +50,8 @@ class ActorNetwork(nn.Module):
+ 
+ 
+ def learn(alg):
+-    mdp = InvertedPendulum(horizon=50)
++    mdp = Gym('Pendulum-v0', 200, .99)
++    mdp.seed(1)
+     np.random.seed(1)
+     torch.manual_seed(1)
+     torch.cuda.manual_seed(1)
+@@ -103,7 +104,7 @@ def learn(alg):
+ def test_ddpg():
+     policy = learn(DDPG).policy
+     w = policy.get_weights()
+-    w_test = np.array([-0.00798965,  1.7483335 ,  0.10249085])
++    w_test = np.array([-0.28865, -0.7487735, -0.5533644, -0.34702766])
+ 
+     assert np.allclose(w, w_test)
+ 
+@@ -126,7 +127,7 @@ def test_ddpg_save(tmpdir):
+ def test_td3():
+     policy = learn(TD3).policy
+     w = policy.get_weights()
+-    w_test = np.array([1.8971109 , 1.3201196 , 0.19754009])
++    w_test = np.array([1.7005192, -0.73382795, 1.2999079, -0.26730126])
+ 
+     assert np.allclose(w, w_test)
+ 
+diff --git a/tests/algorithms/test_policy_gradient.py b/tests/algorithms/test_policy_gradient.py
+index 2b61664..9e413a6 100644
+--- a/tests/algorithms/test_policy_gradient.py
++++ b/tests/algorithms/test_policy_gradient.py
+@@ -97,7 +97,7 @@ def test_GPOMDP_save(tmpdir):
+ def test_eNAC():
+     params = dict(optimizer=AdaptiveOptimizer(eps=.01))
+     policy = learn(eNAC, params).policy
+-    w = np.array([-0.16169364,  2.00594995])
++    w = np.array([-0.03668018,  2.05112355])
+ 
+     assert np.allclose(w, policy.get_weights())
+ 
+diff --git a/tests/algorithms/test_sac.py b/tests/algorithms/test_sac.py
+index 158e90c..48c06d8 100644
+--- a/tests/algorithms/test_sac.py
++++ b/tests/algorithms/test_sac.py
+@@ -11,7 +11,7 @@ from helper.utils import TestUtils as tu
+ from mushroom_rl.core import Agent
+ from mushroom_rl.algorithms.actor_critic import SAC
+ from mushroom_rl.core import Core
+-from mushroom_rl.environments import InvertedPendulum
++from mushroom_rl.environments.gym_env import Gym
+ 
+ 
+ class CriticNetwork(nn.Module):
+@@ -53,7 +53,8 @@ def learn_sac():
+     # MDP
+     horizon = 200
+     gamma = 0.99
+-    mdp = InvertedPendulum(horizon=50)
++    mdp = Gym('Pendulum-v0', horizon, gamma)
++    mdp.seed(1)
+     np.random.seed(1)
+     torch.manual_seed(1)
+     torch.cuda.manual_seed(1)
+@@ -111,7 +112,8 @@ def learn_sac():
+ def test_sac():
+     policy = learn_sac().policy
+     w = policy.get_weights()
+-    w_test = np.array([1.8968109,  1.3198196,  0.19724008,  1.7562234, -0.333138, -0.3410603])
++    w_test = np.array([ 1.6998193, -0.732528, 1.2986078, -0.26860124,
++                        0.5094043, -0.5001421, -0.18989229, -0.30646914])
+ 
+     assert np.allclose(w, w_test)
+ 
+diff --git a/tests/algorithms/test_td.py b/tests/algorithms/test_td.py
+index 25328cb..8bab41a 100644
+--- a/tests/algorithms/test_td.py
++++ b/tests/algorithms/test_td.py
+@@ -11,7 +11,8 @@ from mushroom_rl.core import Agent
+ from mushroom_rl.algorithms.value import *
+ from mushroom_rl.approximators.parametric import LinearApproximator, TorchApproximator
+ from mushroom_rl.core import Core
+-from mushroom_rl.environments import GridWorld, PuddleWorld
++from mushroom_rl.environments.grid_world import GridWorld
++from mushroom_rl.environments.gym_env import Gym
+ from mushroom_rl.features import Features
+ from mushroom_rl.features.tiles import Tiles
+ from mushroom_rl.policy.td_policy import EpsGreedy
+@@ -46,7 +47,7 @@ def initialize():
+     np.random.seed(1)
+     torch.manual_seed(1)
+     return EpsGreedy(Parameter(1)), GridWorld(2, 2, start=(0, 0), goal=(1, 1)),\
+-           PuddleWorld(horizon=1000)
++           Gym(name='MountainCar-v0', horizon=np.inf, gamma=1.)
+ 
+ 
+ def test_q_learning():
+@@ -359,7 +360,7 @@ def test_sarsa_lambda_discrete_save(tmpdir):
+ 
+ def test_sarsa_lambda_continuous_linear():
+     pi, _, mdp_continuous = initialize()
+-
++    mdp_continuous.seed(1)
+     n_tilings = 1
+     tilings = Tiles.generate(n_tilings, [2, 2],
+                              mdp_continuous.info.observation_space.low,
+@@ -380,10 +381,9 @@ def test_sarsa_lambda_continuous_linear():
+     # Train
+     core.learn(n_steps=100, n_steps_per_fit=1, quiet=True)
+ 
+-    test_w = np.array([-82.31759493, 0., -82.67048958, 0., -107.74658538,
+-                        0., -105.56482617, 0., -72.24653201, 0.,
+-                        -73.05283658, 0., -116.89230496, 0., -106.48877521,
+-                        0., -99.50640198,  0., -92.73162587, 0.])
++    test_w = np.array([-16.38428419, 0., -14.31250136, 0.,
++                       -15.68571525, 0., -10.15663821, 0.,
++                       -15.0545445,  0., -8.3683605, 0.])
+ 
+     assert np.allclose(agent.Q.get_weights(), test_w)
+ 
+@@ -446,9 +446,9 @@ def test_sarsa_lambda_continuous_nn():
+     # Train
+     core.learn(n_steps=100, n_steps_per_fit=1, quiet=True)
+ 
+-    test_w = np.array([-1.8319136, -1.5731438, -2.9321826, -3.5566466, -1.282013,
+-                       -2.7563045, -0.790771, -0.2194604, -0.5647575, -0.4195656,
+-                       -4.46288, -11.742587, -5.3095326, -0.27556023, -0.05155428])
++    test_w = np.array([-0.18968964, 0.4296857, 0.52967095, 0.5674884,
++                       -0.12784956, -0.10572472, -0.14546978, -0.67001086,
++                       -0.93925357])
+ 
+     assert np.allclose(agent.Q.get_weights(), test_w)
+ 
+@@ -457,6 +457,7 @@ def test_sarsa_lambda_continuous_nn_save(tmpdir):
+     agent_path = tmpdir / 'agent_{}'.format(datetime.now().strftime("%H%M%S%f"))
+ 
+     pi, _, mdp_continuous = initialize()
++    mdp_continuous.seed(1)
+ 
+     features = Features(
+         n_outputs=mdp_continuous.info.observation_space.shape[0]
+@@ -527,7 +528,7 @@ def test_expected_sarsa_save(tmpdir):
+ 
+ def test_true_online_sarsa_lambda():
+     pi, _, mdp_continuous = initialize()
+-
++    mdp_continuous.seed(1)
+     n_tilings = 1
+     tilings = Tiles.generate(n_tilings, [2, 2],
+                              mdp_continuous.info.observation_space.low,
+@@ -548,12 +549,9 @@ def test_true_online_sarsa_lambda():
+     # Train
+     core.learn(n_steps=100, n_steps_per_fit=1, quiet=True)
+ 
+-    test_w = np.array([-75.40322828, 0., -82.05694011, 0., -102.60400109,
+-                       0., -104.14404304, 0., -67.59137525, 0.,
+-                       -72.77565331, 0., -111.60368847, 0., -108.15358127,
+-                       0., -95.09502145, 0., -93.86466772, 0.])
+-
+-    print(agent.Q.get_weights())
++    test_w = np.array([-17.27410736, 0., -15.04386343, 0.,
++                       -16.6551805, 0., -11.31383707, 0.,
++                       -16.11782002, 0., -9.6927357, 0.])
+ 
+     assert np.allclose(agent.Q.get_weights(), test_w)
+ 
+@@ -562,7 +560,7 @@ def test_true_online_sarsa_lambda_save(tmpdir):
+     agent_path = tmpdir / 'agent_{}'.format(datetime.now().strftime("%H%M%S%f"))
+ 
+     pi, _, mdp_continuous = initialize()
+-
++    mdp_continuous.seed(1)
+     n_tilings = 1
+     tilings = Tiles.generate(n_tilings, [2, 2],
+                              mdp_continuous.info.observation_space.low,
+diff --git a/tests/algorithms/test_trust_region.py b/tests/algorithms/test_trust_region.py
+index 33c080f..51273bb 100644
+--- a/tests/algorithms/test_trust_region.py
++++ b/tests/algorithms/test_trust_region.py
+@@ -11,7 +11,7 @@ from mushroom_rl.core import Agent
+ 
+ from mushroom_rl.algorithms.actor_critic import PPO, TRPO
+ from mushroom_rl.core import Core
+-from mushroom_rl.environments import InvertedPendulum
++from mushroom_rl.environments import Gym
+ from mushroom_rl.policy import GaussianTorchPolicy
+ 
+ 
+@@ -32,7 +32,8 @@ class Network(nn.Module):
+ 
+ 
+ def learn(alg, alg_params):
+-    mdp = InvertedPendulum(horizon=50)
++    mdp = Gym('Pendulum-v0', 200, .99)
++    mdp.seed(1)
+     np.random.seed(1)
+     torch.manual_seed(1)
+     torch.cuda.manual_seed(1)
+@@ -68,7 +69,8 @@ def test_PPO():
+                   n_epochs_policy=4, batch_size=64, eps_ppo=.2, lam=.95)
+     policy = learn(PPO, params).policy
+     w = policy.get_weights()
+-    w_test = np.array([0.9378777, -1.8841006 , -0.13794397, -0.00241548])
++    w_test = np.array([-1.6293062, 1.0408604, -3.5757786e-1, 2.6958251e-1,
++                       -8.7002787e-4])
+ 
+     assert np.allclose(w, w_test)
+ 
+@@ -96,7 +98,8 @@ def test_TRPO():
+                   n_epochs_cg=10, cg_damping=1e-2, cg_residual_tol=1e-10)
+     policy = learn(TRPO, params).policy
+     w = policy.get_weights()
+-    w_test = np.array([9.5286590e-01, -1.9460459e+00, -1.2838534e-01, 8.5962377e-04])
++    w_test = np.array([-1.5759772, 1.0822705, -0.37794656, 0.29728204,
++                       -0.0396419])
+ 
+     assert np.allclose(w, w_test)
+ 
+diff --git a/tests/environments/test_all_envs.py b/tests/environments/test_all_envs.py
+index 1560376..ae8dccd 100644
+--- a/tests/environments/test_all_envs.py
++++ b/tests/environments/test_all_envs.py
+@@ -116,7 +116,8 @@ def test_gym():
+     mdp.reset()
+     for i in range(10):
+         ns, r, ab, _ = mdp.step([np.random.randint(mdp.info.action_space.n)])
+-    ns_test = np.array([0.9996687, -0.02573896,  0.9839331, -0.17853762, -0.17821608, 0.5534913])
++    ns_test = np.array([0.99989477, 0.01450661, 0.97517825, -0.22142128,
++                        -0.02323116, 0.40630765])
+ 
+     assert np.allclose(ns, ns_test)
+ 
+-- 
+2.25.1
+

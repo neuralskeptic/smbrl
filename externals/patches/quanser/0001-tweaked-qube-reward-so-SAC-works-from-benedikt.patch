@@ -1,0 +1,61 @@
+From e7908c479ef211ad77caf5f85cd4610b8486fba0 Mon Sep 17 00:00:00 2001
+From: Fabio d'Aquino Hilt <fabio.daquinohilt@stud.tu-darmstadt.de>
+Date: Thu, 7 Jul 2022 20:31:50 +0200
+Subject: [PATCH] tweaked qube reward, so SAC works (from benedikt)
+
+---
+ quanser_robots/qube/base.py | 35 ++++++++++++++++++++++++++++++++---
+ 1 file changed, 32 insertions(+), 3 deletions(-)
+
+diff --git a/quanser_robots/qube/base.py b/quanser_robots/qube/base.py
+index e62b01a..aa03240 100644
+--- a/quanser_robots/qube/base.py
++++ b/quanser_robots/qube/base.py
+@@ -61,12 +61,41 @@ class QubeBase(gym.Env):
+         return x, a_cmd  # return the last applied (clipped) command
+ 
+     def _rwd(self, x, a):
++        return self._tweaked_rwd(x, a)
++        # th, al, thd, ald = x
++        # al_mod = al % (2 * np.pi) - np.pi
++        # cost = (
++        #     al_mod**2
++        #     + 5e-3 * ald**2
++        #     + 1e-1 * th**2
++        #     + 2e-2 * thd**2
++        #     + 3e-3 * a[0] ** 2
++        # )
++        # done = not self.state_space.contains(x)
++        # rwd = np.exp(-cost) * self.timing.dt_ctrl
++        # return np.float32(rwd), done
++
++    def _tweaked_rwd(self, x, a):
+         th, al, thd, ald = x
+         al_mod = al % (2 * np.pi) - np.pi
+-        cost = al_mod**2 + 5e-3*ald**2 + 1e-1*th**2 + 2e-2*thd**2 + 3e-3*a[0]**2
+         done = not self.state_space.contains(x)
+-        rwd = np.exp(-cost) * self.timing.dt_ctrl
+-        return np.float32(rwd), done
++
++        factor = [0.96, 0.039, 0.001]  # [0.9, 0.05, 0.05]
++        scales = [np.pi, 2.0, 5.0]
++
++        err_dist = th
++        err_rot = al_mod
++        err_act = a[0]
++
++        rotation_rew = (1 - np.abs(err_rot / scales[0])) ** 2
++        distance_rew = (1 - np.abs(err_dist / scales[1])) ** 2
++        action_rew = (1 - np.abs(err_act / scales[2])) ** 2
++
++        # Reward should be roughly between [0, 1]
++        rew = (
++            factor[0] * rotation_rew + factor[1] * distance_rew + factor[2] * action_rew
++        )
++        return np.float32(np.clip(rew, 0, 1)), done
+ 
+     def seed(self, seed=None):
+         self._np_random, seed = seeding.np_random(seed)
+-- 
+2.25.1
+
