@@ -33,7 +33,7 @@ def render_policy(
             args = yaml.load(f, Loader=yaml.Loader)
 
     # MDP
-    mdp = Gym(args["env_id"], gamma=args["gamma"])
+    mdp = Gym(args["env_id"], horizon=args["horizon"], gamma=args["gamma"])
 
     # Fix seed
     fix_random_seed(args["seed"], mdp=None)
@@ -58,13 +58,15 @@ def render_policy(
 
         fig, axs = plt.subplots(2, 1, sharex=True, figsize=(10, 10))
 
-    MAX_STEPS = 100 + 80
+    # MAX_STEPS = 100 + 80
     for i in range(5):
         data = replay_agent(agent, core, 1, verbose=False, render=render)
         if plot:
             s, a, r, ss, absorb, last = parse_dataset(data)
-            axs[0].plot(r[:MAX_STEPS])
-            axs[1].plot(a[:MAX_STEPS])
+            # axs[0].plot(r[:MAX_STEPS])
+            # axs[1].plot(a[:MAX_STEPS])
+            axs[0].plot(r)
+            axs[1].plot(a)
     if plot:
         axs[0].set_title("run policy")
         axs[0].grid(True)
