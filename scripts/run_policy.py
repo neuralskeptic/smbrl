@@ -3,6 +3,7 @@ import json
 import os
 
 import numpy as np
+import pandas as pd
 import quanser_robots
 import yaml
 from experiment_launcher import run_experiment
@@ -16,10 +17,12 @@ from src.utils.seeds import fix_random_seed
 
 
 def render_policy(
-    results_dir: str = "../logs/good/SAC/Qube-100-v0/9/2022-07-12--20-45-13",
+    results_dir: str = "../models/2022_07_15__14_57_42",
     agent_epoch: str = "end",
     render: bool = False,
     plot: bool = True,
+    export: bool = False,
+    n_steps_export: int = 25e3,
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
 ):
     try:
@@ -69,6 +72,21 @@ def render_policy(
         axs[1].set_xlabel("steps")
         axs[0].set_ylabel("reward")
         axs[1].set_ylabel("action")
+
+    # export data for behavioural cloning
+    if export:
+        export_data = core.evaluate(n_steps=n_steps_export, render=False, quiet=True)
+        s, a, r, ss, absorb, last = parse_dataset(export_data)
+        N = len(a)
+        df = pd.DataFrame()
+        df[["s0", "s1", "s2", "s3", "s4", "s5"]] = s.reshape(N, -1)
+        df[["a"]] = a.reshape(N, -1)
+        df[["r"]] = r.reshape(N, -1)
+        df[["ss0", "ss1", "ss2", "ss3", "ss4", "ss5"]] = ss.reshape(N, -1)
+        df[["absorb"]] = absorb.reshape(N, -1)
+        df[["last"]] = last.reshape(N, -1)
+        datafile = os.path.join(results_dir, f'SAC_on_{args["env_id"]}_{N}.pkl.gz')
+        df.to_pickle(datafile)
 
 
 if __name__ == "__main__":
