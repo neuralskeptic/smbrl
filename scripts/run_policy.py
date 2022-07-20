@@ -1,7 +1,7 @@
 import json
 import os
 
-import pandas as pd
+import torch
 import yaml
 from experiment_launcher import run_experiment
 from mushroom_rl.core import Agent, Core
@@ -9,6 +9,7 @@ from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import parse_dataset
 from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
 
+from src.utils.conversion_utils import df2torch, qube_rollout2df
 from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
 
@@ -17,9 +18,10 @@ def render_policy(
     results_dir: str = "../models/2022_07_15__14_57_42",
     agent_epoch: str = "end",
     render: bool = False,
-    plot: bool = True,
-    export: bool = False,
-    n_steps_export: int = 25e3,
+    plot: bool = False,
+    export: bool = True,
+    n_steps_export: int = None,  # only if n_episodes_export=None
+    n_episodes_export: int = 100,  # only if n_steps_export=None
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
 ):
     try:
@@ -74,18 +76,17 @@ def render_policy(
 
     # export data for behavioural cloning
     if export:
-        export_data = core.evaluate(n_steps=n_steps_export, render=False, quiet=True)
-        s, a, r, ss, absorb, last = parse_dataset(export_data)
-        N = len(a)
-        df = pd.DataFrame()
-        df[["s0", "s1", "s2", "s3", "s4", "s5"]] = s.reshape(N, -1)
-        df[["a"]] = a.reshape(N, -1)
-        df[["r"]] = r.reshape(N, -1)
-        df[["ss0", "ss1", "ss2", "ss3", "ss4", "ss5"]] = ss.reshape(N, -1)
-        df[["absorb"]] = absorb.reshape(N, -1)
-        df[["last"]] = last.reshape(N, -1)
-        datafile = os.path.join(results_dir, f'SAC_on_{args["env_id"]}_{N}.pkl.gz')
-        df.to_pickle(datafile)
+        if n_episodes_export is not None and n_steps_export is None:
+            data = core.evaluate(n_episodes=n_episodes_export, render=False, quiet=True)
+            filename = f'SAC_on_{args["env_id"]}_{n_episodes_export}trajs.pkl.gz'
+        else:  # n_steps_export (independently of episodes)
+            data = core.evaluate(n_steps=n_steps_export, render=False, quiet=True)
+            filename = f'SAC_on_{args["env_id"]}_{len(data)}steps.pkl.gz'
+        df = qube_rollout2df(data)
+        # add column for trajectory id
+        trajs = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        df["traj_id"] = trajs
+        df.to_pickle(os.path.join(results_dir, filename))
 
 
 if __name__ == "__main__":
