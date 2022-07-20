@@ -1,30 +1,15 @@
+import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 
 from src.datasets import toy_datasets
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
+from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 
 if __name__ == "__main__":
     SEED = 1234
     fix_random_seed(SEED)
-
-    import matplotlib.pyplot as plt
-
-    def plot_gp(axis, x, mu, var):
-        axis.plot(x, mu, "b-")
-        for n_std in range(1, 3):
-            std = n_std * torch.sqrt(var.squeeze())
-            mu = mu.squeeze()
-            upper, lower = mu + std, mu - std
-            axis.fill_between(
-                x.squeeze(),
-                upper.squeeze(),
-                lower.squeeze(),
-                where=upper > lower,
-                color="b",
-                alpha=0.3,
-            )
 
     train_dataset = toy_datasets.Sine1dDataset(
         data_spec=[(-0.75, -0.5, 100), (0, 0.25, 100), (0.75, 1, 100)],
