@@ -9,32 +9,35 @@ from tqdm import tqdm
 
 tqdm = partial(tqdm, position=0, leave=True)
 
-from library import utils
-from library.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
+from src.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
+from src.utils.np_torch_utils import autograd_tensor
 
 
 class LinearBayesianModel(object):
 
     features: nn.Module
 
-    def __init__(self, dim_x, dim_y, dim_features):
+    def __init__(self, dim_x, dim_y, dim_features, lr):
         self.dim_x, self.dim_y, self.d_features = dim_x, dim_y, dim_features
-        self.mu_w = utils.autograd_tensor(torch.zeros((dim_features, dim_y)))
+        self.mu_w = autograd_tensor(torch.zeros((dim_features, dim_y)))
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_w_chol = utils.autograd_tensor(torch.eye(dim_features))
+        self.sigma_w_chol = autograd_tensor(torch.eye(dim_features))
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_sqrt = utils.autograd_tensor(1e-2 * torch.ones((dim_y,)))
-        self.mu_w_prior = utils.autograd_tensor(torch.zeros((dim_features, dim_y)))
+        self.sigma_sqrt = autograd_tensor(1e-2 * torch.ones((dim_y,)))
+        self.mu_w_prior = autograd_tensor(torch.zeros((dim_features, dim_y)))
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_w_prior_chol = utils.autograd_tensor(torch.eye(dim_features))
+        self.sigma_w_prior_chol = autograd_tensor(torch.eye(dim_features))
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_prior_sqrt = utils.autograd_tensor(torch.ones((dim_y,)))
+        self.sigma_prior_sqrt = autograd_tensor(torch.ones((dim_y,)))
         assert isinstance(
             self.features, nn.Module
         ), "Features should have been specified by now."
         self.params = [self.mu_w, self.sigma_w_chol, self.sigma_sqrt] + list(
             self.features.parameters()
         )
+
+        self.lr = lr
+        self.opt = torch.optim.Adam(self.params, lr=self.lr)
 
     def sigma_w(self):
         lower_triangular = torch.tril(self.sigma_w_chol)
@@ -87,18 +90,17 @@ class LinearBayesianModel(object):
             MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()),
         )
 
-    def train(self, dataloader: DataLoader, n_epochs=1000, lr=1e-3):
-        opt = torch.optim.Adam(self.params, lr=lr)
+    def train(self, dataloader: DataLoader, n_epochs):
         trace = []
         for epoch in tqdm(range(n_epochs)):
             for i_minibatch, minibatch in enumerate(dataloader):
                 x, y = minibatch
-                opt.zero_grad()
+                self.opt.zero_grad()
                 ellh = self.ellh(x, y)
                 kl = self.kl()
                 loss = -ellh + kl
                 loss.backward()
-                opt.step()
+                self.opt.step()
                 trace.append(loss.detach().item())
         return trace
 
@@ -107,14 +109,14 @@ class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
 
     d_approx = 1024  # RFFs require ~512-1024 for accuracy
 
-    def __init__(self, dim_x, dim_y, dim_features):
+    def __init__(self, dim_x, dim_y, dim_features, lr):
         self.features = TwoLayerNormalizedResidualNetwork(
             dim_x, self.d_approx, dim_features
         )
-        super().__init__(dim_x, dim_y, self.d_approx)
+        super().__init__(dim_x, dim_y, self.d_approx, lr)
 
 
 class NeuralLinearModel(LinearBayesianModel):
-    def __init__(self, dim_x, dim_y, dim_features):
+    def __init__(self, dim_x, dim_y, dim_features, lr):
         self.features = TwoLayerNetwork(dim_x, dim_features, dim_features)
-        super().__init__(dim_x, dim_y, dim_features)
+        super().__init__(dim_x, dim_y, dim_features, lr)

@@ -1,14 +1,13 @@
 import torch
-from library import utils
-from library.datasets import toy_datasets
-from library.models.linear_bayesian_models import (
-    SpectralNormalizedNeuralGaussianProcess,
-)
 from torch.utils.data import DataLoader
+
+from src.datasets import toy_datasets
+from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
+from src.utils.seeds import fix_random_seed
 
 if __name__ == "__main__":
     SEED = 1234
-    utils.set_random_seed(SEED)
+    fix_random_seed(SEED)
 
     import matplotlib.pyplot as plt
 
@@ -45,8 +44,8 @@ if __name__ == "__main__":
     # y_train = (y_train) / y_std
     # y_test = (y_test) / y_std
 
-    model = SpectralNormalizedNeuralGaussianProcess(1, 1, 512)
-    trace = model.train(train_dataloader, n_epochs=5, lr=4e-3)
+    model = SpectralNormalizedNeuralGaussianProcess(1, 1, 512, lr=4e-3)
+    trace = model.train(train_dataloader, n_epochs=5)
 
     ### plotting
     x_train, y_train = train_dataset[:]
