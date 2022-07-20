@@ -9,14 +9,16 @@ from torch.utils.data import DataLoader
 
 from src.datasets.dataframe_datasets import DataFrameDataset
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
+from src.utils.np_torch_utils import df2torch
+from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 
 
 def experiment(
     alg: str = "snngp",
     dataset_file: str = "../models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_25000.pkl.gz",
-    n_datapoints: int = 100,
-    n_epochs: int = 5,
+    n_datapoints: int = 1000,
+    n_epochs: int = 10,
     batch_size: int = 64,
     n_features: int = 512,
     lr: float = 4e-3,
@@ -51,8 +53,7 @@ def experiment(
     df = pd.read_pickle(os.path.join(this_dir, dataset_file))
     df = df.iloc[:n_datapoints, :]
     df = df.astype("float32")
-    # x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
-    x_df = df[["s0"]]
+    x_df = df[["s0", "s1", "s2", "s3", "s4", "s5"]]
     y_df = df[["a"]]
     dim_in = x_df.shape[1]
     dim_out = y_df.shape[1]
@@ -81,33 +82,46 @@ def experiment(
     x_train, y_train = train_dataset[:]
     x_test, y_test = test_dataset[:]
 
-    # plot train and test data
+    # plot labels and predictions over time
+    MAX_TIME = 150  # tweak traj length for plotting
+    x_time = torch.tensor(range(0, 600))[:MAX_TIME]
+    s_data = df2torch(x_df.iloc[x_time])
+    a_data = df2torch(y_df.iloc[x_time])
+    mu_pred, sigma_pred, _, _ = model(s_data)
     fig, ax = plt.subplots(1, 1)
-    ax.scatter(x_train, y_train, c="grey", marker="x", s=5, label="train")
-    ax.scatter(x_test, y_test, c="k", s=5, label="test")
-    # plot prediction
-    mu_train, sigma_train, _, _ = model(x_train)
-    mu_test, sigma_test, _, _ = model(x_test)
+    plt.plot(x_time, a_data.reshape(-1), c="k", label="data")
+    plot_gp(ax, x_time, mu_pred, torch.diag(sigma_pred), label="pred")
+    ax.set_xlabel("time")
+    ax.set_ylabel("a")
+    ax.set_title("snngp action prediction")
+    ax.legend()
+
+    # # plot train and test data and prediction
+    # fig, ax = plt.subplots(1, 1)
+    # ax.scatter(x_train, y_train, c="grey", marker="x", s=5, label="train")
+    # ax.scatter(x_test, y_test, c="k", s=5, label="test")
+    # # mu_train, sigma_train, _, _ = model(x_train)
+    # # plt.errorbar(
+    # #     x_train.reshape(-1),
+    # #     mu_train.reshape(-1),
+    # #     torch.diag(sigma_train),
+    # #     fmt="none",
+    # #     color="r",
+    # #     label="pred",
+    # # )
+    # mu_test, sigma_test, _, _ = model(x_test)
     # plt.errorbar(
-    #     x_train.reshape(-1),
-    #     mu_train.reshape(-1),
-    #     torch.diag(sigma_train),
+    #     x_test.reshape(-1),
+    #     mu_test.reshape(-1),
+    #     torch.diag(sigma_test),
     #     fmt="none",
     #     color="r",
     #     label="pred",
     # )
-    plt.errorbar(
-        x_test.reshape(-1),
-        mu_test.reshape(-1),
-        torch.diag(sigma_test),
-        fmt="none",
-        color="r",
-        label="pred",
-    )
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    plt.legend()
-    ax.set_title(f"snngp (N={n_datapoints}, {n_epochs} epochs)")
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("y")
+    # ax.legend()
+    # ax.set_title(f"snngp (N={n_datapoints}, {n_epochs} epochs)")
 
     # # plot training loss
     # fig_trace, ax_trace = plt.subplots()

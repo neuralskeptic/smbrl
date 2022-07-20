@@ -5,6 +5,10 @@ def to_torch(x):
     return torch.from_numpy(x).float()
 
 
+def df2torch(df):
+    return torch.tensor(df.values)
+
+
 def vec(x):
     """
     TODO pytorch

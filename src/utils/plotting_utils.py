@@ -1,8 +1,8 @@
 import torch
 
 
-def plot_gp(axis, x, mu, var):
-    axis.plot(x, mu, "b-")
+def plot_gp(axis, x, mu, var, label=""):
+    axis.plot(x, mu, "b-", label=label)
     for n_std in range(1, 3):
         std = n_std * torch.sqrt(var.squeeze())
         mu = mu.squeeze()
