@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from src.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
-from src.utils.np_torch_utils import autograd_tensor
+from src.utils.conversion_utils import autograd_tensor
 
 
 class LinearBayesianModel(object):
@@ -101,6 +101,18 @@ class LinearBayesianModel(object):
                 loss.backward()
                 self.opt.step()
                 trace.append(loss.detach().item())
+        return trace
+
+    def train2(self, x, y, n_epochs):
+        trace = []
+        for epoch in tqdm(range(n_epochs)):
+            self.opt.zero_grad()
+            ellh = self.ellh(x, y)
+            kl = self.kl()
+            loss = -ellh + kl
+            loss.backward()
+            self.opt.step()
+            trace.append(loss.detach().item())
         return trace
 
 

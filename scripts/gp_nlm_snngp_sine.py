@@ -1,10 +1,11 @@
 import numpy as np  # temporary
 import torch
-from library import utils
-from library.models.linear_bayesian_models import (
+
+from src.models.linear_bayesian_models import (
     NeuralLinearModel,
     SpectralNormalizedNeuralGaussianProcess,
 )
+from src.utils.conversion_utils import np2torch
 
 # TODO: numpy -> pytorch?
 EPS = np.finfo(np.float64).tiny
@@ -102,25 +103,21 @@ if __name__ == "__main__":
     }
     for (name, model_class), ax in zip(models.items(), axs[1:]):
         ax.set_title(name)
-        model = model_class(1, 1, 512)
-        trace = model.train(
-            utils.to_torch(x_train),
-            utils.to_torch(y_train),
-            n_iter=100,
-            lr=1e-3,
+        model = model_class(1, 1, 512, lr=1e-3)
+        trace = model.train2(
+            np2torch(x_train),
+            np2torch(y_train),
+            n_epochs=100,
         )
-        # trace = model.train(
-        #     utils.to_torch(x_train), utils.to_torch(y_train), n_iter=100, lr=1e-3
-        # )
 
         fig_trace, ax_trace = plt.subplots()
         ax_trace.plot(trace)
         ax_trace.set_title(name)
-        mu_test, sigma_test, _, _ = model(utils.to_torch(x_test))
+        mu_test, sigma_test, _, _ = model(np2torch(x_test))
 
         plot_gp(ax, x_test, mu_test.numpy(), np.diag(sigma_test.numpy()))
 
-        f = model.features(utils.to_torch(x_test)).detach().numpy()
+        f = model.features(np2torch(x_test)).detach().numpy()
         fig_features, ax_features = plt.subplots(figsize=(12, 9))
         ax_features.plot(x_test, f[:, ::10], alpha=0.25)
         ax_features.set_title(name)

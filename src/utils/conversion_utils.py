@@ -1,7 +1,9 @@
+import pandas as pd
 import torch
+from mushroom_rl.utils.dataset import parse_dataset
 
 
-def to_torch(x):
+def np2torch(x):
     return torch.from_numpy(x).float()
 
 
@@ -25,3 +27,16 @@ def vec(x):
 def autograd_tensor(x):
     """Same as torch.Tensor(x, requires_grad=True), but does not cause warnings."""
     return x.clone().detach().requires_grad_(True)
+
+
+def qube_rollout2df(data):
+    s, a, r, ss, absorb, last = parse_dataset(data)
+    N = len(a)
+    df = pd.DataFrame()
+    df[["s0", "s1", "s2", "s3", "s4", "s5"]] = s.reshape(N, -1)
+    df[["a"]] = a.reshape(N, -1)
+    df[["r"]] = r.reshape(N, -1)
+    df[["ss0", "ss1", "ss2", "ss3", "ss4", "ss5"]] = ss.reshape(N, -1)
+    df[["absorb"]] = absorb.reshape(N, -1)
+    df[["last"]] = last.reshape(N, -1)
+    return df

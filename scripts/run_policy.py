@@ -1,15 +1,12 @@
-import argparse
 import json
 import os
 
-import numpy as np
 import pandas as pd
-import quanser_robots
 import yaml
 from experiment_launcher import run_experiment
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J, parse_dataset
+from mushroom_rl.utils.dataset import parse_dataset
 from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
 
 from src.utils.replay_agent import replay_agent
