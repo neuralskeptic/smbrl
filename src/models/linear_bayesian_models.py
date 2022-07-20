@@ -1,13 +1,10 @@
 import math
-from functools import partial
 
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal, kl_divergence
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
-tqdm = partial(tqdm, position=0, leave=True)
 
 from src.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
 from src.utils.np_torch_utils import autograd_tensor
@@ -92,8 +89,10 @@ class LinearBayesianModel(object):
 
     def train(self, dataloader: DataLoader, n_epochs):
         trace = []
-        for epoch in tqdm(range(n_epochs)):
-            for i_minibatch, minibatch in enumerate(dataloader):
+        for epoch in tqdm(range(n_epochs), position=0):
+            for i_minibatch, minibatch in enumerate(
+                tqdm(dataloader, leave=False, position=1)
+            ):
                 x, y = minibatch
                 self.opt.zero_grad()
                 ellh = self.ellh(x, y)
