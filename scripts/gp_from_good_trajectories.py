@@ -22,7 +22,7 @@ def experiment(
     n_trajectories: int = 15,  # 80% train, 20% test
     n_epochs: int = 10,
     lr: float = 1e-1,
-    use_cuda: bool = False,
+    use_cuda: bool = True,
     # verbose: bool = False,
     # model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
@@ -78,8 +78,10 @@ def experiment(
     test_df = pd.concat(test_traj_dfs)
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
     test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
-    x_train, y_train = df2torch(train_x_df), df2torch(train_y_df)
-    x_test, y_test = df2torch(test_x_df), df2torch(test_y_df)
+    x_train = df2torch(train_x_df).to(device)
+    y_train = df2torch(train_y_df).to(device)
+    x_test = df2torch(test_x_df).to(device)
+    y_test = df2torch(test_y_df).to(device)
     # reshape labels, because mean_prior implicitly flattens and it crashes
     y_train = y_train.reshape(-1)
     y_test = y_test.reshape(-1)
@@ -108,8 +110,8 @@ def experiment(
             return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
     # initialize likelihood and model
-    likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None)
-    model = ExactGPModel(x_train, y_train, likelihood)
+    likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None).to(device)
+    model = ExactGPModel(x_train, y_train, likelihood).to(device)
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
