@@ -14,18 +14,24 @@ class LinearBayesianModel(object):
 
     features: nn.Module
 
-    def __init__(self, dim_x, dim_y, dim_features, lr):
+    def __init__(self, dim_x, dim_y, dim_features, lr, device="cpu"):
         self.dim_x, self.dim_y, self.d_features = dim_x, dim_y, dim_features
-        self.mu_w = autograd_tensor(torch.zeros((dim_features, dim_y)))
+        # self.mu_w = autograd_tensor(torch.zeros((dim_features, dim_y)))
+        # self.mu_w = torch.zeros((dim_features, dim_y), device='cuda', requires_grad=True)
+        self.mu_w = autograd_tensor(torch.zeros((dim_features, dim_y), device=device))
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_w_chol = autograd_tensor(torch.eye(dim_features))
+        self.sigma_w_chol = autograd_tensor(torch.eye(dim_features, device=device))
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_sqrt = autograd_tensor(1e-2 * torch.ones((dim_y,)))
-        self.mu_w_prior = autograd_tensor(torch.zeros((dim_features, dim_y)))
+        self.sigma_sqrt = autograd_tensor(1e-2 * torch.ones((dim_y,), device=device))
+        self.mu_w_prior = autograd_tensor(
+            torch.zeros((dim_features, dim_y), device=device)
+        )
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_w_prior_chol = autograd_tensor(torch.eye(dim_features))
+        self.sigma_w_prior_chol = autograd_tensor(
+            torch.eye(dim_features, device=device)
+        )
         # parameterize in square root form to ensure positive definiteness
-        self.sigma_prior_sqrt = autograd_tensor(torch.ones((dim_y,)))
+        self.sigma_prior_sqrt = autograd_tensor(torch.ones((dim_y,), device=device))
         assert isinstance(
             self.features, nn.Module
         ), "Features should have been specified by now."
@@ -36,6 +42,8 @@ class LinearBayesianModel(object):
         self.lr = lr
         self.opt = torch.optim.Adam(self.params, lr=self.lr)
 
+        self.device = device
+
     def sigma_w(self):
         lower_triangular = torch.tril(self.sigma_w_chol)
         return lower_triangular @ lower_triangular.t()
@@ -43,7 +51,7 @@ class LinearBayesianModel(object):
     def sigma_w_prior(self):
         # TODO make regularization more principled
         return self.sigma_w_prior_chol @ self.sigma_w_prior_chol.t() + 1e-3 * torch.eye(
-            self.d_features
+            self.d_features, device=self.device
         )
 
     def sigma(self):
@@ -56,11 +64,10 @@ class LinearBayesianModel(object):
         n = x.shape[0]
         with torch.set_grad_enabled(False):
             phi = self.features(x)
-
             mu = phi @ self.mu_w
             covariance_out = self.sigma()
             covariance_feat = phi @ self.sigma_w() @ phi.t()
-            covariance_pred_in = torch.eye(n) + covariance_feat
+            covariance_pred_in = torch.eye(n, device=self.device) + covariance_feat
             covariance = torch.kron(
                 covariance_out, covariance_pred_in
             )  # only useful for 1D?
@@ -70,7 +77,7 @@ class LinearBayesianModel(object):
         with torch.set_grad_enabled(True):
             n = x.shape[0]
             phi = self.features(x)
-            const = -torch.tensor(n * math.log(2 * math.pi) / 2)
+            const = -torch.tensor(n * math.log(2 * math.pi) / 2, device=self.device)
             w_ent = -n * self.sigma().logdet() / 2
             y_pred = phi @ self.mu_w
             err = -0.5 * torch.trace(
@@ -120,14 +127,16 @@ class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
 
     d_approx = 1024  # RFFs require ~512-1024 for accuracy
 
-    def __init__(self, dim_x, dim_y, dim_features, lr):
+    def __init__(self, dim_x, dim_y, dim_features, lr, device="cpu"):
         self.features = TwoLayerNormalizedResidualNetwork(
             dim_x, self.d_approx, dim_features
         )
-        super().__init__(dim_x, dim_y, self.d_approx, lr)
+        self.features.to(device)
+        super().__init__(dim_x, dim_y, self.d_approx, lr, device=device)
 
 
 class NeuralLinearModel(LinearBayesianModel):
-    def __init__(self, dim_x, dim_y, dim_features, lr):
+    def __init__(self, dim_x, dim_y, dim_features, lr, device="cpu"):
         self.features = TwoLayerNetwork(dim_x, dim_features, dim_features)
-        super().__init__(dim_x, dim_y, dim_features, lr)
+        self.features.to(device)
+        super().__init__(dim_x, dim_y, dim_features, lr, device=device)

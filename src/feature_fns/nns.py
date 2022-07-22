@@ -14,7 +14,7 @@ class TwoLayerNormalizedResidualNetwork(nn.Module):
         self.l1 = spectral_norm(nn.Linear(d_in, d_hidden))
         self.l2 = spectral_norm(nn.Linear(d_hidden, d_hidden))
         self.act = ACTIVATIONS[activation]
-        self.W = torch.randn(d_hidden, d_out // 2)
+        self.W = nn.Parameter(torch.randn(d_hidden, d_out // 2))
 
     def forward(self, x):
         l1 = self.l1(x)

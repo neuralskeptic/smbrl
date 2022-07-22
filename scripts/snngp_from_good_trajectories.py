@@ -7,11 +7,10 @@ import torch
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 
-from src.datasets.dataframe_datasets import DataFrameDataset
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
-from src.utils.conversion_utils import df2torch
+from src.utils.conversion_utils import df2torch, map_cpu
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
@@ -20,12 +19,12 @@ from src.utils.time_utils import timestamp
 def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs.pkl.gz",
-    n_trajectories: int = 20,  # 80% train, 20% test
+    n_trajectories: int = 100,  # 80% train, 20% test
     n_epochs: int = 20,
     batch_size: int = 64,
     n_features: int = 512,
     lr: float = 4e-3,
-    # use_cuda: bool = False,
+    use_cuda: bool = True,
     # verbose: bool = False,
     # model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
@@ -60,6 +59,8 @@ def experiment(
     # Save arguments
     save_args(results_dir, locals(), git_repo_path="./")
 
+    device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
+
     ####################################################################################################################
     # EXPERIMENT
 
@@ -88,15 +89,21 @@ def experiment(
     # y_train = (y_train) / y_std
     # y_test = (y_test) / y_std
 
-    train_dataset = DataFrameDataset(train_x_df, train_y_df)
-    test_dataset = DataFrameDataset(test_x_df, test_y_df)
+    train_dataset = TensorDataset(
+        df2torch(train_x_df).to(device), df2torch(train_y_df).to(device)
+    )
+    test_dataset = TensorDataset(
+        df2torch(test_x_df).to(device), df2torch(test_y_df).to(device)
+    )
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
     dim_in = len(x_cols)
     dim_out = len(y_cols)
-    model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features, lr)
+    model = SpectralNormalizedNeuralGaussianProcess(
+        dim_in, dim_out, n_features, lr, device=device
+    )
     trace = model.train(train_dataloader, n_epochs)
 
     ####################################################################################################################
@@ -107,7 +114,7 @@ def experiment(
     x_test, y_test = test_dataset[:]
 
     ## plot statistics over trajectories
-    mu_pred, sigma_pred, _, _ = model(x_test)
+    mu_pred, sigma_pred, _, _ = map_cpu(model(x_test.to(model.device)))
     test_df["pred"] = mu_pred.reshape(-1)
     # test_df['pred_var'] = torch.diag(sigma_pred).reshape(-1)
     mean_traj = test_df.groupby(level=0).mean()

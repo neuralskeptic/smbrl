@@ -40,3 +40,7 @@ def qube_rollout2df(data):
     df[["absorb"]] = absorb.reshape(N, -1)
     df[["last"]] = last.reshape(N, -1)
     return df
+
+
+def map_cpu(iterable):
+    return map(lambda x: x.to("cpu"), iterable)
