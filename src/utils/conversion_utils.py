@@ -25,8 +25,11 @@ def vec(x):
 
 
 def autograd_tensor(x):
-    """Same as torch.Tensor(x, requires_grad=True), but does not cause warnings."""
-    return x.clone().detach().requires_grad_(True)
+    """
+    Same as torch.Tensor(x, requires_grad=True), but does not cause warnings.
+    detach first and then clonw removes the clone from the computation graph
+    """
+    return x.detach().clone().requires_grad_(True)
 
 
 def qube_rollout2df(data):
