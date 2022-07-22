@@ -32,8 +32,11 @@ test_y = true_f(test_x)
 class ExactGPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, likelihood):
         super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = gpytorch.means.ConstantMean()
-        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+        self.mean_module = gpytorch.means.ConstantMean(prior=None)
+        self.covar_module = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.RBFKernel(lengthscale_prior=None),
+            outputscale_prior=None,
+        )
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -42,10 +45,9 @@ class ExactGPModel(gpytorch.models.ExactGP):
 
 
 # initialize likelihood and model
-likelihood = gpytorch.likelihoods.GaussianLikelihood()
+likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None)
 model = ExactGPModel(train_x, train_y, likelihood)
 
-# Find optimal model hyperparameters
 model.train()
 likelihood.train()
 
@@ -55,8 +57,10 @@ optimizer = torch.optim.Adam(
 )  # Includes GaussianLikelihood parameters
 
 # "Loss" for GPs - the marginal log likelihood
-mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+# only works for GaussianLikelihood and ExactGP
+mll_loss = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
+# Find optimal model hyperparameters
 n_iter = 50
 for i in range(n_iter):
     model.train()
@@ -66,25 +70,22 @@ for i in range(n_iter):
     # Output from model
     output = model(train_x)
     # Calc loss and backprop gradients
-    loss = -mll(output, train_y)
+    loss = -mll_loss(output, train_y)
     loss.backward()
     optimizer.step()
     if i % 2 == 0:
         with torch.no_grad():
             model.eval()
             likelihood.eval()
+            cur_ls = model.covar_module.base_kernel.lengthscale.item()
+            cur_noise = model.likelihood.noise.item()
+            cur_train_logprob = likelihood(model(train_x)).log_prob(train_y)
+            cur_test_logprob = likelihood(model(test_x)).log_prob(test_y)
             print(
-                f"Iter %d/%d\t Loss: %.3f\t lengthscale: %.3f\t noise: %.3f"
-                "\t train logprob: %.2f\t test logprob: %.2f"
-                % (
-                    i + 1,
-                    n_iter,
-                    loss.item(),
-                    model.covar_module.base_kernel.lengthscale.item(),
-                    model.likelihood.noise.item(),
-                    likelihood(model(train_x)).log_prob(train_y),
-                    likelihood(model(test_x)).log_prob(test_y),
-                )
+                f"Iter {i+1}/{n_iter}\t Loss: {loss.item():.3f}\t "
+                f"lengthscale: {cur_ls:.3f}\t noise: {cur_noise:.3f}\t "
+                f"train logprob: {cur_train_logprob:.2f}\t "
+                f"test logprob: {cur_test_logprob:.2f}"
             )
 
 
