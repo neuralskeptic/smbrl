@@ -19,11 +19,12 @@ from src.utils.time_utils import timestamp
 def experiment(
     alg: str = "gp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs.pkl.gz",
-    n_trajectories: int = 15,  # 80% train, 20% test
-    n_epochs: int = 10,
+    n_trajectories: int = 100,  # 80% train, 20% test
+    n_epochs: int = 1,  # almost no changes beyond 1 epoch oO
     lr: float = 1e-1,
     use_cuda: bool = True,
     # verbose: bool = False,
+    plotting: bool = False,
     # model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
@@ -32,7 +33,7 @@ def experiment(
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
-    debug: bool = True,
+    debug: bool = False,
 ):
     ####################################################################################################################
     # SETUP
@@ -104,7 +105,6 @@ def experiment(
             )
 
         def forward(self, x):
-            # breakpoint()
             mean_x = self.mean_module(x)
             covar_x = self.covar_module(x)
             return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
@@ -134,29 +134,34 @@ def experiment(
             model.eval()  # needed for logprob predictions
             likelihood.eval()
             with torch.no_grad():
-                trace.append(loss.detach().item())
-                cur_ls = model.covar_module.base_kernel.lengthscale.item()
-                cur_noise = model.likelihood.noise.item()
+                trace.append(loss.detach().to("cpu").item())
+                cur_ls = model.covar_module.base_kernel.lengthscale.detach().item()
+                cur_noise = model.likelihood.noise.detach().item()
                 # logprob fails with more than ~5 trajs (cholesky: cov not PSD)
                 # cur_train_logprob = likelihood(model(x_train)).log_prob(y_train)
                 # cur_test_logprob = likelihood(model(x_test)).log_prob(y_test)
                 print(
-                    f"Iter {i+1}/{n_epochs}, Loss: {loss.item():.3f}, "
+                    f"Iter {i+1}/{n_epochs}, Loss: {loss.detach().item():.3f}, "
                     f"ls: {cur_ls:.3f}, noise: {cur_noise:.3f}, "
                     # f"train logp: {cur_train_logprob:.2f}, "
                     # f"test logp: {cur_test_logprob:.2f}, "
                 )
+    # clear gpu memory
+    del pred, loss, opt, cur_ls, cur_noise
+    torch.cuda.empty_cache()
 
+    # print(f'GPU ALLOCATED: {torch.cuda.memory_allocated():,} B'.replace(',','_'))
     ####################################################################################################################
-    # EVALUATION
+    # EVALUATION (on GPU, model prediction too slow otherwise)
+    print("#### Evaluation & Plotting ####")
     model.eval()
     likelihood.eval()
 
     with torch.no_grad():
         ## plot statistics over trajectories
-        pred_post = likelihood(model(x_test.to(device)))
-        test_df["pred"] = pred_post.mean.to("cpu").reshape(-1)
-        # test_df['pred_var'] = pred_post.variance.to('cpu').reshape(-1)
+        post_pred = likelihood(model(x_test))  # FIXME: leaks memory in GPU
+        test_df["pred"] = post_pred.mean.detach().to("cpu").reshape(-1)
+        # test_df['pred_var'] = post_pred.variance.detach().to('cpu').reshape(-1)
         mean_traj = test_df.groupby(level=0).mean()
         std_traj = test_df.groupby(level=0).std()
         fig, ax = plt.subplots(1, 1, figsize=(10, 7))
@@ -196,6 +201,9 @@ def experiment(
             os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"),
             dpi=150,
         )
+        # clear gpu memory
+        del post_pred
+        torch.cuda.empty_cache()
 
     with torch.no_grad():
         ## print train and test MAE, MSE, RMSE
@@ -210,16 +218,20 @@ def experiment(
             )
 
         with open(os.path.join(results_dir, "metrics.txt"), "w") as f:
-            post_pred = model(x_train)
-            MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_train)
-            logstring = f"Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-            print(logstring)
-            f.write(logstring + "\n")
-            post_pred = model(x_test)
-            MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_test)
-            logstring = f"Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-            print(logstring)
-            f.write(logstring + "\n")
+            with gpytorch.settings.fast_pred_var():
+                post_pred = model(x_train)  # FIXME: leaks memory in GPU
+                MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_train)
+                logstring = f"Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+                print(logstring)
+                f.write(logstring + "\n")
+                post_pred = model(x_test)
+                MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_test)
+                logstring = f"Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+                print(logstring)
+                f.write(logstring + "\n")
+        # clear gpu memory
+        del post_pred, MAE, MSE, RMSE
+        torch.cuda.empty_cache()
 
     # # plot train and test data and prediction
     # fig, ax = plt.subplots(1, 1)
@@ -250,12 +262,13 @@ def experiment(
 
     # plot training loss
     with torch.no_grad():
-        fig_trace, ax_trace = plt.subplots()
-        ax_trace.plot(trace, c="k")
-        # ax_trace.plot(trace, '.', c='k') # dots for every data point
-        ax_trace.set_xlabel("epochs")
-        ax_trace.set_title("loss")
-        plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
+        if len(trace) > 1:
+            fig_trace, ax_trace = plt.subplots()
+            ax_trace.plot(trace, c="k")
+            # ax_trace.plot(trace, '.', c='k') # dots for every data point
+            ax_trace.set_xlabel("epochs")
+            ax_trace.set_title("loss")
+            plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     # # plot features on test dataset (sorted for plotting)
     # x_test_sorted, _ = x_test.sort(dim=0)
@@ -264,12 +277,16 @@ def experiment(
     # ax_features.plot(x_test_sorted, f[:, ::10], alpha=0.25)
     # ax_features.set_title("features on test dataset")
 
-    plt.show()
+    if plotting:
+        plt.show()
 
     print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
     print(f"Logs in {results_dir}")
+
+    model.train()  # resets cache and frees memory
 
 
 if __name__ == "__main__":
     # Leave unchanged
     run_experiment(experiment)
+    print(f"GPU MEMORY LEAKS: {torch.cuda.memory_allocated():,} B".replace(",", "_"))
