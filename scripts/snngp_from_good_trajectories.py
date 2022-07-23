@@ -26,6 +26,7 @@ def experiment(
     lr: float = 4e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
+    plotting: bool = False,
     # model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
@@ -225,7 +226,8 @@ def experiment(
     # ax_features.plot(x_test_sorted, f[:, ::10], alpha=0.25)
     # ax_features.set_title("features on test dataset")
 
-    plt.show()
+    if plotting:
+        plt.show()
 
     print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
     print(f"Logs in {results_dir}")
