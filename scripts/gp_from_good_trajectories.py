@@ -194,7 +194,7 @@ def experiment(
         ax.set_xlabel("time")
         ax.set_ylabel("a")
         ax.set_title(
-            f"nlm ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+            f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
         )
         ax.legend()
         plt.savefig(
