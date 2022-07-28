@@ -1,6 +1,7 @@
 import json
 import os
 
+import quanser_robots
 import torch
 import yaml
 from experiment_launcher import run_experiment
