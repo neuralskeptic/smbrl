@@ -19,8 +19,8 @@ def render_policy(
     results_dir: str = "../models/2022_07_15__14_57_42",
     agent_epoch: str = "end",
     render: bool = False,
-    plot: bool = False,
-    export: bool = True,
+    plot: bool = True,
+    export: bool = False,
     n_steps_export: int = None,  # only if n_episodes_export=None
     n_episodes_export: int = 100,  # only if n_steps_export=None
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
@@ -68,7 +68,7 @@ def render_policy(
             axs[0].plot(r)
             axs[1].plot(a)
     if plot:
-        axs[0].set_title("run policy")
+        axs[0].set_title("run policy: sac")
         axs[0].grid(True)
         axs[1].grid(True)
         axs[1].set_xlabel("steps")
