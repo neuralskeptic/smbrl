@@ -10,6 +10,7 @@ from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from sklearn.model_selection import train_test_split
 
+from src.models.gp_models import ExactGPModel
 from src.utils.conversion_utils import df2torch, map_cpu
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
@@ -25,7 +26,7 @@ def experiment(
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
-    # model_save_frequency: bool = 5,  # every x epochs
+    model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
@@ -95,20 +96,6 @@ def experiment(
     # y_train = (y_train) / y_std
     # y_test = (y_test) / y_std
 
-    class ExactGPModel(gpytorch.models.ExactGP):
-        def __init__(self, train_x, train_y, likelihood):
-            super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
-            self.mean_module = gpytorch.means.ConstantMean(prior=None)
-            self.covar_module = gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.RBFKernel(lengthscale_prior=None),
-                outputscale_prior=None,
-            )
-
-        def forward(self, x):
-            mean_x = self.mean_module(x)
-            covar_x = self.covar_module(x)
-            return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-
     # initialize likelihood and model
     likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None).to(device)
     model = ExactGPModel(x_train, y_train, likelihood).to(device)
@@ -119,7 +106,7 @@ def experiment(
     margll_loss = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
     trace = []
-    for i in range(n_epochs):
+    for i in range(n_epochs + 1):
         # only full batches (for GP training)
         model.train()
         likelihood.train()
@@ -141,11 +128,20 @@ def experiment(
                 # cur_train_logprob = likelihood(model(x_train)).log_prob(y_train)
                 # cur_test_logprob = likelihood(model(x_test)).log_prob(y_test)
                 print(
-                    f"Iter {i+1}/{n_epochs}, Loss: {loss.detach().item():.3f}, "
+                    f"Iter {i}/{n_epochs}, Loss: {loss.detach().item():.3f}, "
                     f"ls: {cur_ls:.3f}, noise: {cur_noise:.3f}, "
                     # f"train logp: {cur_train_logprob:.2f}, "
                     # f"test logp: {cur_test_logprob:.2f}, "
                 )
+
+        if i % model_save_frequency == 0:
+            # Save the agent
+            breakpoint()
+            torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{i}.pth"))
+
+    # Save the agent after training
+    torch.save(model.state_dict(), os.path.join(results_dir, f"agent_end.pth"))
+
     # clear gpu memory
     del pred, loss, opt, cur_ls, cur_noise
     torch.cuda.empty_cache()
