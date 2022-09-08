@@ -164,7 +164,8 @@ def render_policy(
             if render:
                 mdp.render()
             episode_steps += 1
-            # print(episode_steps) # for gp, because it is soooo slow
+            if alg == "gp":
+                print(episode_steps)  # because the gp is soooo slow
             # steps_progress_bar.update(1)
             if episode_steps >= mdp.info.horizon or absorbing:
                 last = True
