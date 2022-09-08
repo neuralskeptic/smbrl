@@ -12,16 +12,19 @@ from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import parse_dataset
 from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
 from sklearn.model_selection import train_test_split
+from torch.distributions import MultivariateNormal
 from tqdm import tqdm
 
 from src.models.gp_models import ExactGPModel
+from src.models.linear_bayesian_models import NeuralLinearModel
 from src.utils.conversion_utils import df2torch, np2torch, qube_rollout2df
 from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
 
 
 def render_policy(
-    results_dir: str = "../debug/logs/tmp/gp_clone_SAC/0/2022_09_07__19_18_19",
+    # results_dir: str = "../logs/tmp/gp_clone_SAC/0/2022_09_08__15_40_37",
+    results_dir: str = "../logs/tmp/nlm_clone_SAC/0/2022_09_08__16_02_57",
     agent_epoch: str = "end",
     use_cuda: bool = True,  # gp too slow on cpu
     stoch_preds: bool = False,  # sample from pred post; else use mean
@@ -42,7 +45,7 @@ def render_policy(
     alg = args["alg"]
     repo_dir = args["repo_dir"]
     dataset_file = args["dataset_file"]
-    # lr = args["lr"]
+    lr = args["lr"]
     # model_save_frequency = args["model_save_frequency"]
     # n_epochs = args["n_epochs"]
     n_trajectories = args["n_trajectories"]
@@ -63,42 +66,74 @@ def render_policy(
     # Fix seed
     fix_random_seed(args["seed"], mdp=None)
 
-    # Agent
-    agent_path = os.path.join(results_dir, f"agent_{agent_epoch}.msh")
-    if alg == "gp":
-        # load data, because gp constructor needs it
-        device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
-        # df: [s0-s5, a, r, ss0-ss5, absorb, last]
-        df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
-        df = df[df["traj_id"] < n_trajectories]  # take only n_trajectories
-        df = df.astype("float32")  # otherwise spectral_norm complains
-        traj_dfs = [
-            traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
-        ]
-        train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
-        x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
-        y_cols = ["a"]
-        train_df = pd.concat(train_traj_dfs)
-        test_df = pd.concat(test_traj_dfs)
-        train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
-        test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
-        x_train = df2torch(train_x_df).to(device)
-        y_train = df2torch(train_y_df).to(device)
-        x_test = df2torch(test_x_df).to(device)
-        # y_test = df2torch(test_y_df).to(device)
-        # reshape labels, because mean_prior implicitly flattens and it crashes
-        y_train = y_train.reshape(-1)
-        # y_test = y_test.reshape(-1)
+    device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
+    # load data (trajectories of the cloned policy)
+    # (gp constructor needs the full data; nlm needs data sizes)
+    # df: [s0-s5, a, r, ss0-ss5, absorb, last]
+    df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
+    df = df[df["traj_id"] < n_trajectories]  # take only n_trajectories
+    df = df.astype("float32")  # otherwise spectral_norm complains
+    traj_dfs = [
+        traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
+    ]
+    train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
+    x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
+    y_cols = ["a"]
+    train_df = pd.concat(train_traj_dfs)
+    test_df = pd.concat(test_traj_dfs)
+    train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
+    test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
+    x_train = df2torch(train_x_df).to(device)
+    y_train = df2torch(train_y_df).to(device)
+    x_test = df2torch(test_x_df).to(device)
+    # y_test = df2torch(test_y_df).to(device)
+    # reshape labels, because mean_prior implicitly flattens and it crashes
+    y_train = y_train.reshape(-1)
+    # y_test = y_test.reshape(-1)
+
+    # Agent
+    agent_path = os.path.join(results_dir, f"agent_{agent_epoch}.pth")
+    if alg == "gp":
         likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None).to(
             device
         )
         agent = ExactGPModel(x_train, y_train, likelihood).to(device)
-        state_dict = torch.load(os.path.join(results_dir, f"agent_end.pth"))
+        state_dict = torch.load(agent_path)
         agent.load_state_dict(state_dict)
+
+        def pred_fn(state):
+            post_pred = likelihood(agent(state))
+            if stoch_preds:  # sample 1
+                action = post_pred.sample()
+            else:  # use mean
+                action = post_pred.mean
+            # clear gpu memory
+            del post_pred
+            torch.cuda.empty_cache()
+            return action
+
         # no training
         agent.eval()
         likelihood.eval()
+    elif alg == "nlm":
+        dim_in = len(x_cols)
+        dim_out = len(y_cols)
+        agent = NeuralLinearModel(
+            dim_in, dim_out, args["n_features"], lr, device=device
+        )
+        state_dict = torch.load(agent_path)
+        agent.load_state_dict(state_dict)
+
+        def pred_fn(state):
+            mu, covariance, covariance_feat, covariance_out = agent(state)
+            if stoch_preds:  # sample 1
+                mvn = MultivariateNormal(loc=mu, covariance_matrix=covariance)
+                action = mvn.rsample()
+            else:  # use mean
+                action = mu
+            return action
+
     else:
         pass
 
@@ -122,21 +157,13 @@ def render_policy(
         last = False
         while not last:
             state_torch = np2torch(state).reshape([-1, len(x_cols)]).to(device)
-            post_pred = likelihood(agent(state_torch))
-            if stoch_preds:  # sample 1
-                action = post_pred.sample().detach().to("cpu").reshape(-1).numpy()
-            else:  # use mean
-                action = post_pred.mean.detach().to("cpu").reshape(-1).numpy()
-
-            # clear gpu memory
-            del post_pred
-            torch.cuda.empty_cache()
-
+            action_torch = pred_fn(state_torch)
+            action = action_torch.detach().to("cpu").reshape(-1).numpy()
             next_state, reward, absorbing, _ = mdp.step(action)
             if render:
                 mdp.render()
             episode_steps += 1
-            print(episode_steps)
+            # print(episode_steps) # for gp, because it is soooo slow
             # steps_progress_bar.update(1)
             if episode_steps >= mdp.info.horizon or absorbing:
                 last = True
@@ -166,8 +193,6 @@ def render_policy(
         axs[1].set_xlabel("steps")
         axs[0].set_ylabel("reward")
         axs[1].set_ylabel("action")
-
-    agent.train()  # resets cache and frees memory (gp memory leaks)
 
 
 if __name__ == "__main__":
