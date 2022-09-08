@@ -23,8 +23,8 @@ from src.utils.seeds import fix_random_seed
 
 
 def render_policy(
-    # results_dir: str = "../logs/tmp/gp_clone_SAC/0/2022_09_08__15_40_37",
-    results_dir: str = "../logs/tmp/nlm_clone_SAC/0/2022_09_08__16_02_57",
+    results_dir: str = "logs/tmp/gp_clone_SAC/0/2022_09_08__15_40_37",
+    # results_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_09_08__16_02_57",
     agent_epoch: str = "end",
     use_cuda: bool = True,  # gp too slow on cpu
     stoch_preds: bool = False,  # sample from pred post; else use mean
@@ -35,15 +35,16 @@ def render_policy(
     plot: bool = True,
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
 ):
+    repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
     try:
-        with open(os.path.join(results_dir, "args.json")) as f:
+        with open(os.path.join(repo_dir, results_dir, "args.json")) as f:
             args = json.load(f)
     except:
-        with open(os.path.join(results_dir, "args.yaml")) as f:
+        with open(os.path.join(repo_dir, results_dir, "args.yaml")) as f:
             args = yaml.load(f, Loader=yaml.Loader)
 
     alg = args["alg"]
-    repo_dir = args["repo_dir"]
+    assert repo_dir == args["repo_dir"]
     dataset_file = args["dataset_file"]
     lr = args["lr"]
     # model_save_frequency = args["model_save_frequency"]
@@ -93,7 +94,7 @@ def render_policy(
     # y_test = y_test.reshape(-1)
 
     # Agent
-    agent_path = os.path.join(results_dir, f"agent_{agent_epoch}.pth")
+    agent_path = os.path.join(repo_dir, results_dir, f"agent_{agent_epoch}.pth")
     if alg == "gp":
         likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None).to(
             device
