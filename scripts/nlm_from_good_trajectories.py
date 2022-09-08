@@ -8,6 +8,7 @@ from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 from src.models.linear_bayesian_models import NeuralLinearModel
 from src.utils.conversion_utils import df2torch, map_cpu
@@ -27,7 +28,7 @@ def experiment(
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
-    # model_save_frequency: bool = 5,  # every x epochs
+    model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
@@ -103,11 +104,31 @@ def experiment(
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     model = NeuralLinearModel(dim_in, dim_out, n_features, lr, device=device)
-    trace = model.train(train_dataloader, n_epochs)
+
+    # train
+    trace = []
+    for n in tqdm(range(n_epochs + 1), position=0):
+        for i_minibatch, minibatch in enumerate(
+            tqdm(train_dataloader, leave=False, position=1)
+        ):
+            x, y = minibatch
+            model.opt.zero_grad()
+            ellh = model.ellh(x, y)
+            kl = model.kl()
+            loss = -ellh + kl
+            loss.backward()
+            model.opt.step()
+            trace.append(loss.detach().item())
+
+        if n % model_save_frequency == 0:
+            # Save the agent
+            torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
+
+    # Save the agent after training
+    torch.save(model.state_dict(), os.path.join(results_dir, f"agent_end.pth"))
 
     ####################################################################################################################
     # EVALUATION
-
     # data for plotting
     x_train, y_train = train_dataset[:]
     x_test, y_test = test_dataset[:]

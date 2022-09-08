@@ -44,6 +44,21 @@ class LinearBayesianModel(object):
 
         self.device = device
 
+    def state_dict(self):
+        state_dict = {
+            "mu_w": self.mu_w,
+            "sigma_w_chol": self.sigma_w_chol,
+            "sigma_sqrt": self.sigma_sqrt,
+        }
+        state_dict.update(self.features.state_dict())
+        return state_dict
+
+    def load_state_dict(self, state_dict):
+        self.mu_w = state_dict.pop("mu_w")
+        self.sigma_w_chol = state_dict.pop("sigma_w_chol")
+        self.sigma_sqrt = state_dict.pop("sigma_sqrt")
+        self.features.load_state_dict(state_dict)
+
     def sigma_w(self):
         lower_triangular = torch.tril(self.sigma_w_chol)
         return lower_triangular @ lower_triangular.t()
