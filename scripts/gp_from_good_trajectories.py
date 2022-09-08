@@ -136,7 +136,6 @@ def experiment(
 
         if i % model_save_frequency == 0:
             # Save the agent
-            breakpoint()
             torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{i}.pth"))
 
     # Save the agent after training
