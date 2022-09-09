@@ -60,8 +60,6 @@ class LinearBayesianModel(object):
         self.features.load_state_dict(state_dict)
 
     def sigma_w(self):
-        # if not (self.sigma_w_chol.diag()>0).all():
-        #     breakpoint()
         lower_triangular = self.sigma_w_tril()
         return lower_triangular @ lower_triangular.t()
 
@@ -116,10 +114,6 @@ class LinearBayesianModel(object):
 
     def kl(self):
         # TODO replace with matrix normal KL
-        ######## XXX check if pos def
-        # L, info = torch.linalg.cholesky_ex(self.sigma_w())
-        # if info.item() > 0:
-        #     breakpoint()
         return kl_divergence(
             MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
             MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()),
