@@ -28,7 +28,7 @@ def experiment(
     lr: float = 4e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
-    plotting: bool = True,
+    plotting: bool = False,
     model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
@@ -225,7 +225,6 @@ def experiment(
     ax.set_title(
         f"snngp ss{yid} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
     )
-    plt.show()
     plt.savefig(
         os.path.join(
             results_dir,
