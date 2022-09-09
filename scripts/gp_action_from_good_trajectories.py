@@ -34,7 +34,7 @@ def experiment(
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
-    debug: bool = False,
+    debug: bool = True,
 ):
     ####################################################################################################################
     # SETUP

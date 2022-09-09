@@ -18,7 +18,7 @@ from src.utils.seeds import fix_random_seed
 def render_policy(
     results_dir: str = "../models/2022_07_15__14_57_42",
     agent_epoch: str = "end",
-    render: bool = False,
+    render: bool = True,
     plot: bool = True,
     export: bool = False,
     n_steps_export: int = None,  # only if n_episodes_export=None

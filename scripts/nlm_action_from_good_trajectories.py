@@ -36,7 +36,7 @@ def experiment(
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
-    debug: bool = False,
+    debug: bool = True,
 ):
     ####################################################################################################################
     # SETUP
@@ -111,6 +111,7 @@ def experiment(
         for i_minibatch, minibatch in enumerate(
             tqdm(train_dataloader, leave=False, position=1)
         ):
+            # copied from linearbayesianmodels.py for logging and model saving convenience
             x, y = minibatch
             model.opt.zero_grad()
             ellh = model.ellh(x, y)

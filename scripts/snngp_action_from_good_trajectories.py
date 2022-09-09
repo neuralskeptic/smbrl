@@ -8,6 +8,7 @@ from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
 from src.utils.conversion_utils import df2torch, map_cpu
@@ -35,7 +36,7 @@ def experiment(
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
-    debug: bool = False,
+    debug: bool = True,
 ):
     ####################################################################################################################
     # SETUP
