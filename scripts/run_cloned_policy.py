@@ -16,15 +16,19 @@ from torch.distributions import MultivariateNormal
 from tqdm import tqdm
 
 from src.models.gp_models import ExactGPModel
-from src.models.linear_bayesian_models import NeuralLinearModel
+from src.models.linear_bayesian_models import (
+    NeuralLinearModel,
+    SpectralNormalizedNeuralGaussianProcess,
+)
 from src.utils.conversion_utils import df2torch, np2torch, qube_rollout2df
 from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
 
 
 def render_policy(
-    results_dir: str = "logs/tmp/gp_clone_SAC/0/2022_09_08__15_40_37",
+    # results_dir: str = "logs/tmp/gp_clone_SAC/0/2022_09_08__15_40_37",
     # results_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_09_08__16_02_57",
+    results_dir: str = "logs/tmp/snngp_clone_SAC/2/2022_09_09__14_15_09",
     agent_epoch: str = "end",
     use_cuda: bool = True,  # gp too slow on cpu
     stoch_preds: bool = False,  # sample from pred post; else use mean
@@ -93,7 +97,7 @@ def render_policy(
     y_train = y_train.reshape(-1)
     # y_test = y_test.reshape(-1)
 
-    # Agent
+    # Agent (3 agents and 3 pred_fn's for gp, nlm, snngp)
     agent_path = os.path.join(repo_dir, results_dir, f"agent_{agent_epoch}.pth")
     if alg == "gp":
         likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_prior=None).to(
@@ -117,12 +121,15 @@ def render_policy(
         # no training
         agent.eval()
         likelihood.eval()
-    elif alg == "nlm":
+    elif alg == "nlm" or alg == "snngp":  # shared code, except model
         dim_in = len(x_cols)
         dim_out = len(y_cols)
-        agent = NeuralLinearModel(
-            dim_in, dim_out, args["n_features"], lr, device=device
-        )
+        if alg == "nlm":
+            model = NeuralLinearModel
+        else:  # snngp
+            model = SpectralNormalizedNeuralGaussianProcess
+
+        agent = model(dim_in, dim_out, args["n_features"], lr, device=device)
         state_dict = torch.load(agent_path)
         agent.load_state_dict(state_dict)
 
@@ -136,7 +143,7 @@ def render_policy(
             return action
 
     else:
-        pass
+        raise Exception(f"Agent algorithm -{alg}- unknown. Aborting")
 
     # Plot
     if plot:
