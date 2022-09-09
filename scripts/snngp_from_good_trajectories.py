@@ -27,7 +27,7 @@ def experiment(
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
-    # model_save_frequency: bool = 5,  # every x epochs
+    model_save_frequency: bool = 5,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
@@ -105,7 +105,29 @@ def experiment(
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
-    trace = model.train(train_dataloader, n_epochs)
+
+    # train
+    trace = []
+    for n in tqdm(range(n_epochs + 1), position=0):
+        for i_minibatch, minibatch in enumerate(
+            tqdm(train_dataloader, leave=False, position=1)
+        ):
+            # copied from linearbayesianmodels.py for logging and model saving convenience
+            x, y = minibatch
+            model.opt.zero_grad()
+            ellh = model.ellh(x, y)
+            kl = model.kl()
+            loss = -ellh + kl
+            loss.backward()
+            model.opt.step()
+            trace.append(loss.detach().item())
+
+        if n % model_save_frequency == 0:
+            # Save the agent
+            torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
+
+    # Save the agent after training
+    torch.save(model.state_dict(), os.path.join(results_dir, f"agent_end.pth"))
 
     ####################################################################################################################
     # EVALUATION
