@@ -60,8 +60,20 @@ class LinearBayesianModel(object):
         self.features.load_state_dict(state_dict)
 
     def sigma_w(self):
-        lower_triangular = torch.tril(self.sigma_w_chol)
+        # if not (self.sigma_w_chol.diag()>0).all():
+        #     breakpoint()
+        lower_triangular = self.sigma_w_tril()
         return lower_triangular @ lower_triangular.t()
+
+    def sigma_w_tril(self):
+        # make diagonal of sigma_w_chol positive (softplus)
+        # (this makes sure L@L.T is positive definite)
+        diagonal = torch.diag_embed(
+            torch.nn.functional.softplus(self.sigma_w_chol.diag())
+        )
+        lower_triangular_wo_diag = torch.tril(self.sigma_w_chol, diagonal=-1)
+        lower_triangular = lower_triangular_wo_diag + diagonal
+        return lower_triangular
 
     def sigma_w_prior(self):
         # TODO make regularization more principled
@@ -104,8 +116,12 @@ class LinearBayesianModel(object):
 
     def kl(self):
         # TODO replace with matrix normal KL
+        ######## XXX check if pos def
+        # L, info = torch.linalg.cholesky_ex(self.sigma_w())
+        # if info.item() > 0:
+        #     breakpoint()
         return kl_divergence(
-            MultivariateNormal(self.mu_w.t(), self.sigma_w()),
+            MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
             MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()),
         )
 
