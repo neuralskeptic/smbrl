@@ -22,7 +22,7 @@ def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs.pkl.gz",
     n_trajectories: int = 100,  # 80% train, 20% test
-    n_epochs: int = -1,
+    n_epochs: int = 20,
     batch_size: int = 64,
     n_features: int = 512,
     lr: float = 4e-3,
@@ -56,7 +56,7 @@ def experiment(
     # Results directory
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
     results_dir = os.path.join(
-        repo_dir, results_dir, wandb_group, str(seed), timestamp()
+        repo_dir, results_dir, wandb_group, f"ss{yid}", str(seed), timestamp()
     )
     os.makedirs(results_dir, exist_ok=True)
 
