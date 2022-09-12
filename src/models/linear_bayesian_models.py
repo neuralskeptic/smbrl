@@ -154,7 +154,7 @@ class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
 
     def __init__(self, dim_x, dim_y, dim_features, lr, device="cpu"):
         self.features = TwoLayerNormalizedResidualNetwork(
-            dim_x, self.d_approx, dim_features
+            dim_x, self.d_approx, dim_features, device=device
         )
         self.features.to(device)
         super().__init__(dim_x, dim_y, self.d_approx, lr, device=device)

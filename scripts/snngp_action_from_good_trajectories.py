@@ -32,7 +32,7 @@ def experiment(
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
-    wandb_group: str = "snngp_clone_SAC",
+    wandb_group: str = "snngp_clone_SAC_Wrnd",
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
