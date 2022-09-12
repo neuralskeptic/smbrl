@@ -28,7 +28,7 @@ from src.utils.seeds import fix_random_seed
 def render_policy(
     # results_dir: str = "logs/tmp/gp_clone_SAC/0/2022_09_08__15_40_37",
     # results_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_09_08__16_02_57",
-    results_dir: str = "logs/tmp/snngp_clone_SAC/2/2022_09_09__14_15_09",
+    results_dir: str = "logs/tmp/snngp_clone_SAC/1_good_0.69/2022_09_12__16_31_48",
     agent_epoch: str = "end",
     use_cuda: bool = True,  # gp too slow on cpu
     stoch_preds: bool = False,  # sample from pred post; else use mean
@@ -37,6 +37,7 @@ def render_policy(
     render: bool = False,
     # plot: bool = False,
     plot: bool = True,
+    show_plots: bool = False,
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
 ):
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
@@ -202,6 +203,15 @@ def render_policy(
         axs[1].set_xlabel("steps")
         axs[0].set_ylabel("reward")
         axs[1].set_ylabel("action")
+        plt.savefig(
+            os.path.join(
+                repo_dir, results_dir, f"run_policy_{alg}_stoch={stoch_preds}.png"
+            ),
+            dpi=150,
+        )
+
+    if show_plots:
+        plt.show()
 
 
 if __name__ == "__main__":
