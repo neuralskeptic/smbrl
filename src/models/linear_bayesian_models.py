@@ -28,7 +28,9 @@ class LinearBayesianModel(object):
         )
         # parameterize in square root form to ensure positive definiteness
         self.sigma_w_prior_chol = autograd_tensor(
-            torch.eye(dim_features, device=device)
+            # TODO make regularization more principled
+            (1 + 1e-3)
+            * torch.eye(dim_features, device=device)
         )
         # parameterize in square root form to ensure positive definiteness
         self.sigma_prior_sqrt = autograd_tensor(torch.ones((dim_y,), device=device))
@@ -73,12 +75,6 @@ class LinearBayesianModel(object):
         lower_triangular = lower_triangular_wo_diag + diagonal
         return lower_triangular
 
-    def sigma_w_prior(self):
-        # TODO make regularization more principled
-        return self.sigma_w_prior_chol @ self.sigma_w_prior_chol.t() + 1e-3 * torch.eye(
-            self.d_features, device=self.device
-        )
-
     def sigma(self):
         return torch.diag(torch.pow(self.sigma_sqrt, 2))
 
@@ -116,7 +112,7 @@ class LinearBayesianModel(object):
         # TODO replace with matrix normal KL
         return kl_divergence(
             MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
-            MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior()),
+            MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior_chol),
         )
 
     def train(self, dataloader: DataLoader, n_epochs):
