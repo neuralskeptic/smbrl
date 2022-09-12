@@ -114,9 +114,9 @@ def render_policy(
                 action = post_pred.sample()
             else:  # use mean
                 action = post_pred.mean
-            # clear gpu memory
-            del post_pred
-            torch.cuda.empty_cache()
+            # # clear gpu memory (necessary when nograd?)
+            # del post_pred
+            # torch.cuda.empty_cache()
             return action
 
         # no training
@@ -165,9 +165,10 @@ def render_policy(
 
         last = False
         while not last:
-            state_torch = np2torch(state).reshape([-1, len(x_cols)]).to(device)
-            action_torch = pred_fn(state_torch)
-            action = action_torch.detach().to("cpu").reshape(-1).numpy()
+            with torch.no_grad():
+                state_torch = np2torch(state).reshape([-1, len(x_cols)]).to(device)
+                action_torch = pred_fn(state_torch)
+                action = action_torch.to("cpu").reshape(-1).numpy()
             next_state, reward, absorbing, _ = mdp.step(action)
             if render:
                 mdp.render()
@@ -197,7 +198,7 @@ def render_policy(
             axs[0].plot(r)
             axs[1].plot(a)
     if plot:
-        axs[0].set_title(f"run policy: {alg}")
+        axs[0].set_title(f"run policy: {alg} (stoch={stoch_preds})")
         axs[0].grid(True)
         axs[1].grid(True)
         axs[1].set_xlabel("steps")
