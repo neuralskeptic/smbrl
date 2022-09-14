@@ -112,7 +112,7 @@ class LinearBayesianModel(object):
         # TODO replace with matrix normal KL
         return kl_divergence(
             MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
-            MultivariateNormal(self.mu_w_prior.t(), self.sigma_w_prior_chol),
+            MultivariateNormal(self.mu_w_prior.t(), scale_tril=self.sigma_w_prior_chol),
         )
 
     def train(self, dataloader: DataLoader, n_epochs):
