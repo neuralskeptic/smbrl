@@ -95,6 +95,7 @@ class LinearBayesianModel(object):
         return mu, covariance, covariance_feat, covariance_out
 
     def ellh(self, x, y):
+        "expected log likelihood of params given data"
         with torch.set_grad_enabled(True):
             n = x.shape[0]
             phi = self.features(x)
@@ -109,6 +110,7 @@ class LinearBayesianModel(object):
             return const + w_ent + err + prec
 
     def kl(self):
+        "kl between param posterior (approx) and param prior"
         # TODO replace with matrix normal KL
         return kl_divergence(
             MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
@@ -125,6 +127,7 @@ class LinearBayesianModel(object):
                 self.opt.zero_grad()
                 ellh = self.ellh(x, y)
                 kl = self.kl()
+                # loss = -ELBO in 3rd form (see https://en.wikipedia.org/wiki/Evidence_lower_bound#Main_forms)
                 loss = -ellh + kl
                 loss.backward()
                 self.opt.step()
