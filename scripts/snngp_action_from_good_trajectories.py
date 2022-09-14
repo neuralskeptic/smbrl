@@ -150,7 +150,8 @@ def experiment(
             trace.append(loss.detach().item())
 
         # log metrics every epoch
-        log_metrics(n)
+        with torch.no_grad():
+            log_metrics(n)
 
         if n % model_save_frequency == 0:
             # Save the agent

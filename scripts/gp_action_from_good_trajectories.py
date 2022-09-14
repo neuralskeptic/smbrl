@@ -105,8 +105,33 @@ def experiment(
     # margll only works for GaussianLikelihood and ExactGP
     margll_loss = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
+    def log_metrics(epoch=-1):
+        ## print train and test MAE, MSE, RMSE
+        def compute_MAE_MSE_RMSE(pred, test, prefix=""):
+            MAE = torch.abs(pred - test).mean()
+            MSE = torch.pow(pred - test, 2).mean()
+            RMSE = torch.sqrt(MSE)
+            return (
+                MAE,
+                MSE,
+                RMSE,
+            )
+
+        with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+            with gpytorch.settings.fast_pred_var():
+                post_pred = model(x_train)  # FIXME: leaks memory in GPU
+                MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_train)
+                logstring = f"Epoch {epoch} Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+                print(logstring)
+                f.write(logstring + "\t")
+                post_pred = model(x_test)
+                MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_test)
+                logstring = f"Epoch {epoch} Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+                print(logstring)
+                f.write(logstring + "\n")
+
     trace = []
-    for i in range(n_epochs + 1):
+    for n in range(n_epochs + 1):
         # only full batches (for GP training)
         model.train()
         likelihood.train()
@@ -116,27 +141,31 @@ def experiment(
         loss.backward()
         opt.step()
 
-        # logging
-        if i % 1 == 0:
-            model.eval()  # needed for logprob predictions
-            likelihood.eval()
-            with torch.no_grad():
-                trace.append(loss.detach().to("cpu").item())
-                cur_ls = model.covar_module.base_kernel.lengthscale.detach().item()
-                cur_noise = model.likelihood.noise.detach().item()
-                # logprob fails with more than ~5 trajs (cholesky: cov not PSD)
-                # cur_train_logprob = likelihood(model(x_train)).log_prob(y_train)
-                # cur_test_logprob = likelihood(model(x_test)).log_prob(y_test)
-                print(
-                    f"Iter {i}/{n_epochs}, Loss: {loss.detach().item():.3f}, "
-                    f"ls: {cur_ls:.3f}, noise: {cur_noise:.3f}, "
-                    # f"train logp: {cur_train_logprob:.2f}, "
-                    # f"test logp: {cur_test_logprob:.2f}, "
-                )
+        # log metrics every epoch
+        with torch.no_grad():
+            model.eval()
+            log_metrics(n)
 
-        if i % model_save_frequency == 0:
+        # hyperparams logging (lenghtscale, noise)
+        model.eval()
+        likelihood.eval()
+        with torch.no_grad():
+            trace.append(loss.detach().to("cpu").item())
+            cur_ls = model.covar_module.base_kernel.lengthscale.detach().item()
+            cur_noise = model.likelihood.noise.detach().item()
+            # logprob fails with more than ~5 trajs (cholesky: cov not PSD)
+            # cur_train_logprob = likelihood(model(x_train)).log_prob(y_train)
+            # cur_test_logprob = likelihood(model(x_test)).log_prob(y_test)
+            print(
+                f"Iter {n}/{n_epochs}, Loss: {loss.detach().item():.3f}, "
+                f"ls: {cur_ls:.3f}, noise: {cur_noise:.3f}, "
+                # f"train logp: {cur_train_logprob:.2f}, "
+                # f"test logp: {cur_test_logprob:.2f}, "
+            )
+
+        if n % model_save_frequency == 0:
             # Save the agent
-            torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{i}.pth"))
+            torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
 
     # Save the agent after training
     torch.save(model.state_dict(), os.path.join(results_dir, f"agent_end.pth"))
@@ -198,34 +227,6 @@ def experiment(
         )
         # clear gpu memory
         del post_pred
-        torch.cuda.empty_cache()
-
-    with torch.no_grad():
-        ## print train and test MAE, MSE, RMSE
-        def compute_MAE_MSE_RMSE(pred, test, prefix=""):
-            MAE = torch.abs(pred - test).mean()
-            MSE = torch.pow(pred - test, 2).mean()
-            RMSE = torch.sqrt(MSE)
-            return (
-                MAE,
-                MSE,
-                RMSE,
-            )
-
-        with open(os.path.join(results_dir, "metrics.txt"), "w") as f:
-            with gpytorch.settings.fast_pred_var():
-                post_pred = model(x_train)  # FIXME: leaks memory in GPU
-                MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_train)
-                logstring = f"Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-                print(logstring)
-                f.write(logstring + "\n")
-                post_pred = model(x_test)
-                MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_test)
-                logstring = f"Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-                print(logstring)
-                f.write(logstring + "\n")
-        # clear gpu memory
-        del post_pred, MAE, MSE, RMSE
         torch.cuda.empty_cache()
 
     # # plot train and test data and prediction

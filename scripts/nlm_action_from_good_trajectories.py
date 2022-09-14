@@ -105,6 +105,32 @@ def experiment(
     dim_out = len(y_cols)
     model = NeuralLinearModel(dim_in, dim_out, n_features, lr, device=device)
 
+    def log_metrics(epoch=-1):
+        ## print train and test MAE, MSE, RMSE
+        def compute_MAE_MSE_RMSE(pred, test, prefix=""):
+            MAE = torch.abs(pred - test).mean()
+            MSE = torch.pow(pred - test, 2).mean()
+            RMSE = torch.sqrt(MSE)
+            return (
+                MAE,
+                MSE,
+                RMSE,
+            )
+
+        with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+            x_train, y_train = train_dataset[:]
+            x_test, y_test = test_dataset[:]
+            mu_pred_train, sigma_pred_train, _, _ = model(x_train)
+            MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred_train, y_train)
+            logstring = f"Epoch {epoch} Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+            print(logstring)
+            f.write(logstring + "\t")
+            mu_pred, sigma_pred, _, _ = model(x_test)
+            MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred, y_test)
+            logstring = f"Epoch {epoch} Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+            print(logstring)
+            f.write(logstring + "\n")
+
     # train
     trace = []
     for n in tqdm(range(n_epochs + 1), position=0):
@@ -120,6 +146,10 @@ def experiment(
             loss.backward()
             model.opt.step()
             trace.append(loss.detach().item())
+
+        # log metrics every epoch
+        with torch.no_grad():
+            log_metrics(n)
 
         if n % model_save_frequency == 0:
             # Save the agent
@@ -176,33 +206,6 @@ def experiment(
     plt.savefig(
         os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
     )
-
-    ## print train and test MAE, MSE, RMSE
-    def compute_MAE_MSE_RMSE(pred, test, prefix=""):
-        MAE = torch.abs(pred - test).mean()
-        MSE = torch.pow(pred - test, 2).mean()
-        RMSE = torch.sqrt(MSE)
-        return (
-            MAE,
-            MSE,
-            RMSE,
-        )
-
-    with open(os.path.join(results_dir, "metrics.txt"), "w") as f:
-        mu_pred_train, sigma_pred_train, _, _ = model(x_train)
-        MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred_train, y_train)
-        logstring = (
-            f"Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-        )
-        print(logstring)
-        f.write(logstring + "\n")
-        mu_pred, sigma_pred, _, _ = model(x_test)
-        MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred, y_test)
-        logstring = (
-            f"Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-        )
-        print(logstring)
-        f.write(logstring + "\n")
 
     # # plot train and test data and prediction
     # fig, ax = plt.subplots(1, 1)
