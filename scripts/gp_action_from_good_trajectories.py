@@ -182,52 +182,53 @@ def experiment(
     likelihood.eval()
 
     with torch.no_grad():
-        ## plot statistics over trajectories
-        post_pred = likelihood(model(x_test))  # FIXME: leaks memory in GPU
-        test_df["pred"] = post_pred.mean.detach().to("cpu").reshape(-1)
-        # test_df['pred_var'] = post_pred.variance.detach().to('cpu').reshape(-1)
-        mean_traj = test_df.groupby(level=0).mean()
-        std_traj = test_df.groupby(level=0).std()
-        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-        MAX_TIME = 100
-        x_time = torch.tensor(range(0, len(mean_traj)))[:MAX_TIME]
-        y_data_mean = df2torch(mean_traj["a"])[:MAX_TIME]
-        y_data_std = df2torch(std_traj["a"])[:MAX_TIME]
-        y_pred_mu_mean = df2torch(mean_traj["pred"])[:MAX_TIME]
-        y_pred_mu_std = df2torch(std_traj["pred"])[:MAX_TIME]
-        # y_pred_var_mean = df2torch(mean_traj['pred_var'])[:MAX_TIME]
-        # y_pred_var_sqrtmean = torch.sqrt(y_pred_var_mean)
-        plot_gp(
-            ax,
-            x_time,
-            y_data_mean,
-            y_data_std,
-            color="b",
-            label="test data mean & std trajs",
-        )
-        # plot_gp(ax, x_time, y_pred_mu_mean, y_pred_var_sqrtmean, color='c', label="pred mean(mu) & sqrt(mean(sigma))")
-        plot_gp(
-            ax,
-            x_time,
-            y_pred_mu_mean,
-            y_pred_mu_std,
-            color="r",
-            alpha=0.2,
-            label="test pred mean(mu) & std(mu)",
-        )
-        ax.set_xlabel("time")
-        ax.set_ylabel("a")
-        ax.set_title(
-            f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
-        )
-        ax.legend()
-        plt.savefig(
-            os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"),
-            dpi=150,
-        )
-        # clear gpu memory
-        del post_pred
-        torch.cuda.empty_cache()
+        with gpytorch.settings.fast_pred_var():
+            ## plot statistics over trajectories
+            post_pred = likelihood(model(x_test))  # FIXME: leaks memory in GPU
+            test_df["pred"] = post_pred.mean.detach().to("cpu").reshape(-1)
+            # test_df['pred_var'] = post_pred.variance.detach().to('cpu').reshape(-1)
+            mean_traj = test_df.groupby(level=0).mean()
+            std_traj = test_df.groupby(level=0).std()
+            fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+            MAX_TIME = 100
+            x_time = torch.tensor(range(0, len(mean_traj)))[:MAX_TIME]
+            y_data_mean = df2torch(mean_traj["a"])[:MAX_TIME]
+            y_data_std = df2torch(std_traj["a"])[:MAX_TIME]
+            y_pred_mu_mean = df2torch(mean_traj["pred"])[:MAX_TIME]
+            y_pred_mu_std = df2torch(std_traj["pred"])[:MAX_TIME]
+            # y_pred_var_mean = df2torch(mean_traj['pred_var'])[:MAX_TIME]
+            # y_pred_var_sqrtmean = torch.sqrt(y_pred_var_mean)
+            plot_gp(
+                ax,
+                x_time,
+                y_data_mean,
+                y_data_std,
+                color="b",
+                label="test data mean & std trajs",
+            )
+            # plot_gp(ax, x_time, y_pred_mu_mean, y_pred_var_sqrtmean, color='c', label="pred mean(mu) & sqrt(mean(sigma))")
+            plot_gp(
+                ax,
+                x_time,
+                y_pred_mu_mean,
+                y_pred_mu_std,
+                color="r",
+                alpha=0.2,
+                label="test pred mean(mu) & std(mu)",
+            )
+            ax.set_xlabel("time")
+            ax.set_ylabel("a")
+            ax.set_title(
+                f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+            )
+            ax.legend()
+            plt.savefig(
+                os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"),
+                dpi=150,
+            )
+            # clear gpu memory
+            del post_pred
+            torch.cuda.empty_cache()
 
     # # plot train and test data and prediction
     # fig, ax = plt.subplots(1, 1)

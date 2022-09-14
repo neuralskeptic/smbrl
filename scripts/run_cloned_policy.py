@@ -32,6 +32,7 @@ def render_policy(
     agent_epoch: str = "end",
     use_cuda: bool = True,  # gp too slow on cpu
     stoch_preds: bool = False,  # sample from pred post; else use mean
+    fast_gp: bool = True,  # with gpytorch.settings.fast_pred_var()
     n_runs: int = 5,
     # render: bool = True,
     render: bool = False,
@@ -109,15 +110,22 @@ def render_policy(
         agent.load_state_dict(state_dict)
 
         def pred_fn(state):
-            post_pred = likelihood(agent(state))
-            if stoch_preds:  # sample 1
-                action = post_pred.sample()
-            else:  # use mean
-                action = post_pred.mean
-            # # clear gpu memory (necessary when nograd?)
-            # del post_pred
-            # torch.cuda.empty_cache()
-            return action
+            def _pred():
+                post_pred = likelihood(agent(state))
+                if stoch_preds:  # sample 1
+                    action = post_pred.sample()
+                else:  # use mean
+                    action = post_pred.mean
+                # # clear gpu memory (necessary when nograd?)
+                # del post_pred
+                # torch.cuda.empty_cache()
+                return action
+
+            if fast_gp:
+                with gpytorch.settings.fast_pred_var():
+                    return _pred()
+            else:
+                return _pred()
 
         # no training
         agent.eval()
@@ -198,7 +206,12 @@ def render_policy(
             axs[0].plot(r)
             axs[1].plot(a)
     if plot:
-        axs[0].set_title(f"run policy: {alg} (stoch={stoch_preds})")
+        if alg == "gp":
+            axs[0].set_title(
+                f"run policy: {alg} (fastgp={fast_gp}, stoch={stoch_preds})"
+            )
+        else:
+            axs[0].set_title(f"run policy: {alg} (stoch={stoch_preds})")
         axs[0].grid(True)
         axs[1].grid(True)
         axs[1].set_xlabel("steps")
