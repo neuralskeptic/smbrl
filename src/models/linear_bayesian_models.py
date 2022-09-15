@@ -2,6 +2,7 @@ import math
 
 import torch
 import torch.nn as nn
+from check_shape import check_shape
 from torch.distributions import MultivariateNormal, kl_divergence
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -82,6 +83,11 @@ class LinearBayesianModel(object):
         raise NotImplementedError
 
     def __call__(self, x):
+        """
+        Predicts on x
+
+        Parameter and return shapes see below.
+        """
         n = x.shape[0]
         with torch.set_grad_enabled(False):
             phi = self.features(x)
@@ -92,10 +98,20 @@ class LinearBayesianModel(object):
             covariance = torch.kron(
                 covariance_out, covariance_pred_in
             )  # only useful for 1D?
+
+        check_shape([x], [(n, self.dim_x)])
+        check_shape([mu], [(n, self.dim_y)])
+        check_shape([covariance], [(n, n)])  # TODO dy1 update
+        check_shape([covariance_feat], [(n, n)])
+        check_shape([covariance_out], [(self.dim_y, self.dim_y)])
         return mu, covariance, covariance_feat, covariance_out
 
     def ellh(self, x, y):
-        "expected log likelihood of params given data"
+        """
+        Computes expected log likelihood of params given data x and y
+
+        Parameter and return shapes see below.
+        """
         with torch.set_grad_enabled(True):
             n = x.shape[0]
             phi = self.features(x)
@@ -107,15 +123,29 @@ class LinearBayesianModel(object):
                 * (y.t() @ y - 2 * y.t() @ y_pred + y_pred.t() @ y_pred)
             )
             prec = -0.5 * torch.trace(self.sigma_w() @ phi.t() @ phi)
-            return const + w_ent + err + prec
+            llh = const + w_ent + err + prec
+
+            check_shape([x], [(n, self.dim_x)])
+            check_shape([y], [(n, self.dim_y)])
+            check_shape([llh], [()])
+            return llh
 
     def kl(self):
-        "kl between param posterior (approx) and param prior"
+        """
+        Computes kl divergence between parameter posterior (approx) and
+        parameter prior.
+
+        Parameter and return shapes see below.
+        """
         # TODO replace with matrix normal KL
-        return kl_divergence(
+        # use tril, because more efficient and numerically more stable
+        sigma_w_tril = self.sigma_w_tril()
+        div = kl_divergence(
             MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
             MultivariateNormal(self.mu_w_prior.t(), scale_tril=self.sigma_w_prior_chol),
         )
+        check_shape([div], [(1,)])
+        return div
 
     def train(self, dataloader: DataLoader, n_epochs):
         trace = []
