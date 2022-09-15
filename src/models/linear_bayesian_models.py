@@ -115,14 +115,16 @@ class LinearBayesianModel(object):
         with torch.set_grad_enabled(True):
             n = x.shape[0]
             phi = self.features(x)
-            const = -torch.tensor(n * math.log(2 * math.pi) / 2, device=self.device)
+            const = -torch.tensor(
+                n * self.dim_y * math.log(2 * math.pi) / 2, device=self.device
+            )
             w_ent = -n * self.sigma().logdet() / 2
             y_pred = phi @ self.mu_w
             err = -0.5 * torch.trace(
                 self.sigma().inverse()
-                * (y.t() @ y - 2 * y.t() @ y_pred + y_pred.t() @ y_pred)
+                * (y @ y.T - 2 * y @ y_pred.T + y_pred @ y_pred.T)
             )
-            prec = -0.5 * torch.trace(self.sigma_w() @ phi.t() @ phi)
+            prec = -0.5 * torch.trace(phi @ self.sigma_w() @ phi.T)
             llh = const + w_ent + err + prec
 
             check_shape([x], [(n, self.dim_x)])
