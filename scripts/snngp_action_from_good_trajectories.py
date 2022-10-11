@@ -83,20 +83,13 @@ def experiment(
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
     test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
 
-    # # whiten data here for simplicity
-    # x_mean, x_std = x_train.mean(), x_train.std()
-    # y_mean, y_std = y_train.mean(), y_train.std()
-    # x_train = (x_train - x_mean) / x_std
-    # x_test = (x_test - x_mean) / x_std
-    # y_train = (y_train) / y_std
-    # y_test = (y_test) / y_std
+    train_x = df2torch(train_x_df).to(device)
+    train_y = df2torch(train_y_df).to(device)
+    test_x = df2torch(test_x_df).to(device)
+    test_y = df2torch(test_y_df).to(device)
 
-    train_dataset = TensorDataset(
-        df2torch(train_x_df).to(device), df2torch(train_y_df).to(device)
-    )
-    test_dataset = TensorDataset(
-        df2torch(test_x_df).to(device), df2torch(test_y_df).to(device)
-    )
+    train_dataset = TensorDataset(train_x, train_y)
+    test_dataset = TensorDataset(test_x, test_y)
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
@@ -106,6 +99,7 @@ def experiment(
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
+    model.with_whitening(train_x, train_y, method="PCA")
 
     def log_metrics(epoch=-1):
         ## print train and test MAE, MSE, RMSE

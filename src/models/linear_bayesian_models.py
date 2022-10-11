@@ -47,11 +47,41 @@ class LinearBayesianModel(object):
 
         self.device = device
 
+        self.whitening = False
+
+    def with_whitening(self, X, Y, method="PCA"):  # or ZCA
+        # X, Y = X.to(self.device), Y.to(self.device)
+        self.whitening = True
+        # PCA/ZCA for X
+        self.x_mean = X.mean(dim=0)  # along N
+        L, Q = torch.linalg.eigh(X.T.cov())  # eig of Cov = Q diag(L) Q'
+        self.w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)
+        self.w_ZCA = Q @ self.w_PCA
+        # z-score for Y
+        self.y_mean = Y.mean(dim=0)  # along N
+        self.y_std = Y.std(dim=0)  # along N
+
+    def whitenX(self, x):
+        return (x - self.x_mean) @ self.w_PCA
+        # return (x - self.x_mean) @ self.w_ZCA
+
+    def whitenY(self, y):
+        return (y - self.y_mean) / self.y_std
+
+    def dewhitenY(self, y):
+        return y * self.y_std + self.y_mean
+
     def state_dict(self):
         state_dict = {
             "mu_w": self.mu_w,
             "sigma_w_chol": self.sigma_w_chol,
             "sigma_sqrt": self.sigma_sqrt,
+            "whitening": self.whitening,
+            "x_mean": self.x_mean,
+            "w_PCA": self.w_PCA,
+            "w_ZCA": self.w_ZCA,
+            "y_mean": self.y_mean,
+            "y_std": self.y_std,
         }
         state_dict.update(self.features.state_dict())
         return state_dict
@@ -60,6 +90,12 @@ class LinearBayesianModel(object):
         self.mu_w = state_dict.pop("mu_w")
         self.sigma_w_chol = state_dict.pop("sigma_w_chol")
         self.sigma_sqrt = state_dict.pop("sigma_sqrt")
+        self.whitening = state_dict.pop("whitening")
+        self.x_mean = state_dict.pop("x_mean")
+        self.w_PCA = state_dict.pop("w_PCA")
+        self.w_ZCA = state_dict.pop("w_ZCA")
+        self.y_mean = state_dict.pop("y_mean")
+        self.y_std = state_dict.pop("y_std")
         self.features.load_state_dict(state_dict)
 
     def sigma_w(self):
@@ -88,6 +124,9 @@ class LinearBayesianModel(object):
 
         Parameter and return shapes see below.
         """
+        if self.whitening:
+            x = self.whitenX(x)
+
         n = x.shape[0]
         with torch.set_grad_enabled(False):
             phi = self.features(x)
@@ -98,6 +137,10 @@ class LinearBayesianModel(object):
             covariance = torch.kron(
                 covariance_out, covariance_pred_in
             )  # only useful for 1D?
+
+        if self.whitening:
+            mu = self.dewhitenY(mu)
+            # dewhiten covariance output?
 
         check_shape([x], [(n, self.dim_x)])
         check_shape([mu], [(n, self.dim_y)])
@@ -112,6 +155,10 @@ class LinearBayesianModel(object):
 
         Parameter and return shapes see below.
         """
+        if self.whitening:
+            x = self.whitenX(x)
+            y = self.whitenY(y)
+
         with torch.set_grad_enabled(True):
             n = x.shape[0]
             phi = self.features(x)
