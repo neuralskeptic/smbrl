@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
+from matplotlib.ticker import MaxNLocator
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -238,8 +239,17 @@ def experiment(
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
     ax_trace.semilogy(trace, c="k")
-    # ax_trace.plot(trace, '.', c='k') # dots for every data point
     ax_trace.set_xlabel("minibatches")
+    twiny = ax_trace.twiny()
+    twiny.set_xlabel("epochs")
+    twiny.xaxis.set_ticks_position("bottom")
+    twiny.xaxis.set_label_position("bottom")
+    twiny.spines.bottom.set_position(("axes", -0.2))
+    twiny.set_xlim(
+        ax_trace.get_xlim()[0] * batch_size / n_trajectories / 200,
+        ax_trace.get_xlim()[1] * batch_size / n_trajectories / 200,
+    )
+    twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax_trace.set_title("snngp loss")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
