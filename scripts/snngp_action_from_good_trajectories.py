@@ -250,7 +250,7 @@ def experiment(
         ax_trace.get_xlim()[1] * batch_size / n_trajectories / 200,
     )
     twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax_trace.set_title("snngp loss")
+    ax_trace.set_title(f"snngp loss (n_trajs={n_trajectories}, lr={lr:.0e})")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     # # plot features on test dataset (sorted for plotting)
