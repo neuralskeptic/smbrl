@@ -28,7 +28,7 @@ def experiment(
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
-    model_save_frequency: bool = 5,  # every x epochs
+    model_save_frequency: bool = -1,  # every x epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
