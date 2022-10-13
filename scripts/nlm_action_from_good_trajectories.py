@@ -146,7 +146,14 @@ def experiment(
 
         # log metrics every epoch
         with torch.no_grad():
-            log_metrics(n)
+            # use latest minibatch
+            loss_ = loss.detach().item()
+            y_pred, _, _, _ = model(x)
+            rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
+            logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+            print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
+            with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+                f.write(logstring)
 
         if n % model_save_frequency == 0:
             # Save the agent
