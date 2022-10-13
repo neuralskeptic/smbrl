@@ -276,6 +276,8 @@ def experiment(
     print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
     print(f"Logs in {results_dir}")
 
+    torch.cuda.empty_cache()
+
 
 if __name__ == "__main__":
     # Leave unchanged
