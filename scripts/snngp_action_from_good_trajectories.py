@@ -77,11 +77,7 @@ def experiment(
     traj_dfs = [
         traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
     ]
-    ##### DEBUG ######
-    # train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
-    train_traj_dfs = traj_dfs
-    test_traj_dfs = traj_dfs
-    ##################
+    train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
     y_cols = ["a"]
     train_df = pd.concat(train_traj_dfs)
@@ -163,12 +159,15 @@ def experiment(
     ####################################################################################################################
     # EVALUATION
 
-    # data for plotting
-    x_train, y_train = train_dataset[:]
-    x_test, y_test = test_dataset[:]
-
     ## plot statistics over trajectories
-    mu_pred, sigma_pred, _, _ = map_cpu(model(x_test.to(model.device)))
+    mus = []
+    for i_minibatch, minibatch in enumerate(test_dataloader):
+        x, y = minibatch
+        mu_pred, sigma_pred, _, _ = map_cpu(model(x.to(model.device)))
+        mus.append(mu_pred)
+
+    mus_pred = torch.cat(mus, dim=0)  # dim=0
+    # mu_pred, sigma_pred, _, _ = map_cpu(model(test_x.to(model.device)))
     test_df["pred"] = mu_pred.reshape(-1)
     # test_df['pred_var'] = torch.diag(sigma_pred).reshape(-1)
     mean_traj = test_df.groupby(level=0).mean()
