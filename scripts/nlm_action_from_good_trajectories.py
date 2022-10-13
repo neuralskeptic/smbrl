@@ -19,11 +19,11 @@ from src.utils.time_utils import timestamp
 
 def experiment(
     alg: str = "nlm",
-    dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs.pkl.gz",
-    n_trajectories: int = 100,  # 80% train, 20% test
-    n_epochs: int = 20,
-    batch_size: int = 64,
-    n_features: int = 512,
+    dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_1000trajs_det.pkl.gz",
+    n_trajectories: int = 1,  # 80% train, 20% test
+    n_epochs: int = 1000,
+    batch_size: int = 200,  # max 200 (steps per episode)
+    n_features: int = 64,
     lr: float = 4e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
@@ -75,7 +75,11 @@ def experiment(
     traj_dfs = [
         traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
     ]
-    train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
+    ##### DEBUG ######
+    # train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
+    train_traj_dfs = traj_dfs
+    test_traj_dfs = traj_dfs
+    ##################
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
     y_cols = ["a"]
     train_df = pd.concat(train_traj_dfs)
