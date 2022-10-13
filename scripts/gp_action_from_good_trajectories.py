@@ -261,7 +261,7 @@ def experiment(
     with torch.no_grad():
         if len(trace) > 1:
             fig_trace, ax_trace = plt.subplots()
-            ax_trace.semilogx(trace, c="k")
+            ax_trace.semilogy(trace, c="k")
             # ax_trace.plot(trace, '.', c='k') # dots for every data point
             ax_trace.set_xlabel("epochs")
             ax_trace.set_title("gp loss")
