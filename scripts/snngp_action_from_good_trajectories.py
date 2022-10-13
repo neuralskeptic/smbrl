@@ -68,6 +68,7 @@ def experiment(
     # EXPERIMENT
 
     print(f"Alg: {alg}, Seed: {seed}, Dataset: {dataset_file}")
+    print(f"Logs in {results_dir}")
 
     # df: [s0-s5, a, r, ss0-ss5, absorb, last]
     df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
