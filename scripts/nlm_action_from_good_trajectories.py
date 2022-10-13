@@ -172,7 +172,7 @@ def experiment(
     mean_traj = test_df.groupby(level=0).mean()
     std_traj = test_df.groupby(level=0).std()
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    MAX_TIME = 100
+    MAX_TIME = 200
     x_time = torch.tensor(range(0, len(mean_traj)))[:MAX_TIME]
     y_data_mean = df2torch(mean_traj["a"])[:MAX_TIME]
     y_data_std = df2torch(std_traj["a"])[:MAX_TIME]
