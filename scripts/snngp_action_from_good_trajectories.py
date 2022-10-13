@@ -131,9 +131,12 @@ def experiment(
 
     # train
     trace = []
+    one_minib = False
+    if batch_size == n_trajectories * 200 or n_trajectories < 150:
+        one_minib = True
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
-            tqdm(train_dataloader, leave=False, position=1)
+            tqdm(train_dataloader, leave=False, position=1, disable=one_minib)
         ):
             # copied from linearbayesianmodels.py for logging and model saving convenience
             x, y = minibatch
