@@ -122,12 +122,12 @@ def experiment(
                 post_pred = model(x_train)  # FIXME: leaks memory in GPU
                 MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_train)
                 logstring = f"Epoch {epoch} Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-                print(logstring)
+                print("\r" + logstring, end=" ")
                 f.write(logstring + "\t")
                 post_pred = model(x_test)
                 MAE, MSE, RMSE = compute_MAE_MSE_RMSE(post_pred.mean, y_test)
                 logstring = f"Epoch {epoch} Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-                print(logstring)
+                print("\r" + logstring, end=" ")
                 f.write(logstring + "\n")
 
     trace = []
@@ -261,10 +261,10 @@ def experiment(
     with torch.no_grad():
         if len(trace) > 1:
             fig_trace, ax_trace = plt.subplots()
-            ax_trace.plot(trace, c="k")
+            ax_trace.semilogx(trace, c="k")
             # ax_trace.plot(trace, '.', c='k') # dots for every data point
             ax_trace.set_xlabel("epochs")
-            ax_trace.set_title("loss")
+            ax_trace.set_title("gp loss")
             plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     # # plot features on test dataset (sorted for plotting)

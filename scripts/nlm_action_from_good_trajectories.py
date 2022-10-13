@@ -117,12 +117,12 @@ def experiment(
             mu_pred_train, sigma_pred_train, _, _ = model(x_train)
             MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred_train, y_train)
             logstring = f"Epoch {epoch} Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-            print(logstring)
+            print("\r" + logstring, end=" ")
             f.write(logstring + "\t")
             mu_pred, sigma_pred, _, _ = model(x_test)
             MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred, y_test)
             logstring = f"Epoch {epoch} Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-            print(logstring)
+            print("\r" + logstring, end=" ")
             f.write(logstring + "\n")
 
     # train
@@ -230,10 +230,10 @@ def experiment(
 
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
-    ax_trace.plot(trace, c="k")
+    ax_trace.semilogx(trace, c="k")
     # ax_trace.plot(trace, '.', c='k') # dots for every data point
     ax_trace.set_xlabel("minibatches")
-    ax_trace.set_title("loss")
+    ax_trace.set_title("nlm loss")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     # # plot features on test dataset (sorted for plotting)
