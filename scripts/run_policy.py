@@ -18,11 +18,11 @@ from src.utils.seeds import fix_random_seed
 def render_policy(
     results_dir: str = "../models/2022_07_15__14_57_42",
     agent_epoch: str = "end",
-    render: bool = True,
-    plot: bool = True,
-    export: bool = False,
+    render: bool = False,
+    plot: bool = False,
+    export: bool = True,
     n_steps_export: int = None,  # only if n_episodes_export=None
-    n_episodes_export: int = 100,  # only if n_steps_export=None
+    n_episodes_export: int = 1000,  # only if n_steps_export=None
     seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
 ):
     try:
@@ -79,7 +79,7 @@ def render_policy(
     if export:
         if n_episodes_export is not None and n_steps_export is None:
             data = core.evaluate(n_episodes=n_episodes_export, render=False, quiet=True)
-            filename = f'SAC_on_{args["env_id"]}_{n_episodes_export}trajs.pkl.gz'
+            filename = f'SAC_on_{args["env_id"]}_{n_episodes_export}trajs_det.pkl.gz'
         else:  # n_steps_export (independently of episodes)
             data = core.evaluate(n_steps=n_steps_export, render=False, quiet=True)
             filename = f'SAC_on_{args["env_id"]}_{len(data)}steps.pkl.gz'
