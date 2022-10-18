@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
+from matplotlib.ticker import MaxNLocator
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -21,15 +22,16 @@ from src.utils.time_utils import timestamp
 def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs.pkl.gz",
-    n_trajectories: int = 100,  # 80% train, 20% test
-    n_epochs: int = 20,
-    batch_size: int = 64,
-    n_features: int = 512,
-    lr: float = 4e-3,
+    n_trajectories: int = 5,  # 80% train, 20% test
+    n_epochs: int = 10000,
+    batch_size: int = 200 * 100,  # as large as possible
+    n_features: int = 64,
+    lr: float = 5e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
-    model_save_frequency: bool = 5,  # every x epochs
+    log_frequency: float = 0.01,  # every p% epochs of n_epochs
+    model_save_frequency: float = 0.1,  # every n-th of n_epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
@@ -90,35 +92,32 @@ def experiment(
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
     test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
 
-    # # whiten data here for simplicity
-    # x_mean, x_std = x_train.mean(), x_train.std()
-    # y_mean, y_std = y_train.mean(), y_train.std()
-    # x_train = (x_train - x_mean) / x_std
-    # x_test = (x_test - x_mean) / x_std
-    # y_train = (y_train) / y_std
-    # y_test = (y_test) / y_std
+    train_x = df2torch(train_x_df).to(device)
+    train_y = df2torch(train_y_df).to(device)
+    test_x = df2torch(test_x_df).to(device)
+    test_y = df2torch(test_y_df).to(device)
 
-    train_dataset = TensorDataset(
-        df2torch(train_x_df).to(device), df2torch(train_y_df).to(device)
-    )
-    test_dataset = TensorDataset(
-        df2torch(test_x_df).to(device), df2torch(test_y_df).to(device)
-    )
+    train_dataset = TensorDataset(train_x, train_y)
+    test_dataset = TensorDataset(test_x, test_y)
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
+    model.with_whitening(train_x, train_y, method="PCA")
 
     # train
     trace = []
+    one_minib = False
+    if batch_size == n_trajectories * 200 or n_trajectories < 150:
+        one_minib = True
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
-            tqdm(train_dataloader, leave=False, position=1)
+            tqdm(train_dataloader, leave=False, position=1, disable=one_minib)
         ):
             # copied from linearbayesianmodels.py for logging and model saving convenience
             x, y = minibatch
@@ -130,7 +129,20 @@ def experiment(
             model.opt.step()
             trace.append(loss.detach().item())
 
-        if n % model_save_frequency == 0:
+        # log metrics every epoch
+        if n % (n_epochs * log_frequency) == 0:
+            # log
+            with torch.no_grad():
+                # use latest minibatch
+                loss_ = loss.detach().item()
+                y_pred, _, _, _ = model(x)
+                rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
+                logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+                print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
+                with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+                    f.write(logstring + "\n")
+
+        if n % (n_epochs * model_save_frequency) == 0:
             # Save the agent
             torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
 
@@ -154,88 +166,97 @@ def experiment(
             RMSE,
         )
 
-    # data for plotting
-    x_train, y_train = train_dataset[:]
-    x_test, y_test = test_dataset[:]
+    # ## plot statistics over trajectories
+    # mus = []
+    # for i_minibatch, minibatch in enumerate(test_dataloader):
+    #     x, y = minibatch
+    #     mu_pred, sigma_pred, _, _ = map_cpu(model(x.to(model.device)))
+    #     mus.append(mu_pred)
 
-    # s-a plot error of next state prediction
-    mu_pred, sigma_pred, _, _ = map_cpu(model(x_test.to(model.device)))
-    test_df[f"ds{yid}pred"] = mu_pred.reshape(-1)
-    test_df[f"ss{yid}pred"] = test_df[f"s{yid}"] + test_df[f"ds{yid}pred"]
-    MAE, MSE, RMSE = compute_MAE_MSE_RMSE(
-        df2torch(test_df[f"ss{yid}pred"]), df2torch(test_df[f"ss{yid}"]), average=False
-    )
-    test_df["std"] = sigma_pred.diag()
-    test_df["std"].describe()
-    fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    MAX_TIME = 15000
-    cmap = mpl.cm.cividis_r
-    vmin = RMSE.min()
-    vmax = RMSE.max()
-    ax.scatter(
-        test_df[f"s{yid}"].iloc[:MAX_TIME],
-        test_df["a"].iloc[:MAX_TIME],
-        s=2e2 * sigma_pred.diag()[:MAX_TIME],
-        # s=0.8,
-        c=RMSE[:MAX_TIME],
-        cmap="cividis_r",
-        vmin=vmin,
-        vmax=vmax,
-        # edgecolors='k',
-        alpha=0.7,
-    )
-    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-    fig.colorbar(
-        mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
-        ax=ax,
-        orientation="vertical",
-        label=f"RMSE of ss{yid} prediction",
-    )
+    # mus_pred = torch.cat(mus, dim=0)  # dim=0
+    # # s-a plot error of next state prediction
+    # test_df[f"ds{yid}pred"] = mus_pred.reshape(-1)
+    # test_df[f"ss{yid}pred"] = test_df[f"s{yid}"] + test_df[f"ds{yid}pred"]
+    # MAE, MSE, RMSE = compute_MAE_MSE_RMSE(
+    #     df2torch(test_df[f"ss{yid}pred"]), df2torch(test_df[f"ss{yid}"]), average=False
+    # )
+    # test_df["std"] = sigma_pred.diag()
+    # test_df["std"].describe()
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+    # MAX_TIME = 15000
+    # cmap = mpl.cm.cividis_r
+    # vmin = RMSE.min()
+    # vmax = RMSE.max()
+    # ax.scatter(
+    #     test_df[f"s{yid}"].iloc[:MAX_TIME],
+    #     test_df["a"].iloc[:MAX_TIME],
+    #     s=2e2 * sigma_pred.diag()[:MAX_TIME],
+    #     # s=0.8,
+    #     c=RMSE[:MAX_TIME],
+    #     cmap="cividis_r",
+    #     vmin=vmin,
+    #     vmax=vmax,
+    #     # edgecolors='k',
+    #     alpha=0.7,
+    # )
+    # norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+    # fig.colorbar(
+    #     mpl.cm.ScalarMappable(norm=norm, cmap=cmap),
+    #     ax=ax,
+    #     orientation="vertical",
+    #     label=f"RMSE of ss{yid} prediction",
+    # )
 
-    # get legend size points (https://stackoverflow.com/a/43191354)
-    # here we step over the sorted data into 4 or 5 strides and select the
-    # last 3 steps as a representative sample, this only works if your
-    # data is fairly uniformly distributed
-    all_sizes = 2e2 * sigma_pred.diag()[:MAX_TIME]
-    _, all_indices = all_sizes.sort()
-    indices = all_indices[:: len(all_sizes) // 4][-3:]
-    # legend_sizes = [::len(all_sizes)//4][-3:]
-    # get the indices for each of the legend sizes
-    # indices = [torch.where(all_sizes==v)[0][0].item() for v in legend_sizes]
-    # plot each point again, and its value as a label
-    for i in indices:
-        i = i.item()
-        ax.scatter(
-            test_df[f"s{yid}"].iloc[i],
-            test_df["a"].iloc[i],
-            s=2e2 * sigma_pred.diag()[i],
-            c=RMSE[i],
-            cmap="cividis_r",
-            # vmin=vmin,
-            # vmax=vmax,
-            # edgecolors='k',
-            alpha=0.7,
-            label=f"var = {sigma_pred.diag()[i]:.2f}",
-        )
-    # add the legend
-    ax.legend(scatterpoints=1)
+    # # get legend size points (https://stackoverflow.com/a/43191354)
+    # # here we step over the sorted data into 4 or 5 strides and select the
+    # # last 3 steps as a representative sample, this only works if your
+    # # data is fairly uniformly distributed
+    # all_sizes = 2e2 * sigma_pred.diag()[:MAX_TIME]
+    # _, all_indices = all_sizes.sort()
+    # indices = all_indices[:: len(all_sizes) // 4][-3:]
+    # # legend_sizes = [::len(all_sizes)//4][-3:]
+    # # get the indices for each of the legend sizes
+    # # indices = [torch.where(all_sizes==v)[0][0].item() for v in legend_sizes]
+    # # plot each point again, and its value as a label
+    # for i in indices:
+    #     i = i.item()
+    #     ax.scatter(
+    #         test_df[f"s{yid}"].iloc[i],
+    #         test_df["a"].iloc[i],
+    #         s=2e2 * sigma_pred.diag()[i],
+    #         c=RMSE[i],
+    #         cmap="cividis_r",
+    #         # vmin=vmin,
+    #         # vmax=vmax,
+    #         # edgecolors='k',
+    #         alpha=0.7,
+    #         label=f"var = {sigma_pred.diag()[i]:.2f}",
+    #     )
+    # # add the legend
+    # ax.legend(scatterpoints=1)
 
-    ax.set_xlabel(f"s{yid}")
-    ax.set_ylabel("a")
-    ax.set_title(
-        f"snngp ss{yid} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
-    )
-    plt.savefig(
-        os.path.join(
-            results_dir,
-            f"ss{yid}__state-action-nextstate_scatter_plot__test_data_pred_error_and_pred_unc.png",
-        ),
-        dpi=150,
-    )
+    # ax.set_xlabel(f"s{yid}")
+    # ax.set_ylabel("a")
+    # ax.set_title(
+    #     f"snngp ss{yid} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+    # )
+    # plt.savefig(
+    #     os.path.join(
+    #         results_dir,
+    #         f"ss{yid}__state-action-nextstate_scatter_plot__test_data_pred_error_and_pred_unc.png",
+    #     ),
+    #     dpi=150,
+    # )
 
     ## plot statistics over trajectories
-    mu_pred, sigma_pred, _, _ = map_cpu(model(x_test.to(model.device)))
-    test_df[f"ds{yid}pred"] = mu_pred.reshape(-1)
+    mus = []
+    for i_minibatch, minibatch in enumerate(test_dataloader):
+        x, y = minibatch
+        mu_pred, sigma_pred, _, _ = map_cpu(model(x.to(model.device)))
+        mus.append(mu_pred)
+
+    mus_pred = torch.cat(mus, dim=0)  # dim=0
+    test_df[f"ds{yid}pred"] = mus_pred.reshape(-1)
     # test_df['pred_var'] = torch.diag(sigma_pred).reshape(-1)
     mean_traj = test_df.groupby(level=0).mean()
     std_traj = test_df.groupby(level=0).std()
@@ -276,22 +297,22 @@ def experiment(
         os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
     )
 
-    ## print train and test MAE, MSE, RMSE
-    with open(os.path.join(results_dir, "metrics.txt"), "w") as f:
-        mu_pred_train, sigma_pred_train, _, _ = model(x_train)
-        MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred_train, y_train)
-        logstring = (
-            f"Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-        )
-        print(logstring)
-        f.write(logstring + "\n")
-        mu_pred, sigma_pred, _, _ = model(x_test)
-        MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred, y_test)
-        logstring = (
-            f"Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
-        )
-        print(logstring)
-        f.write(logstring + "\n")
+    # ## print train and test MAE, MSE, RMSE
+    # with open(os.path.join(results_dir, "metrics.txt"), "w") as f:
+    #     mu_pred_train, sigma_pred_train, _, _ = model(x_train)
+    #     MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred_train, y_train)
+    #     logstring = (
+    #         f"Train: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+    #     )
+    #     print(logstring)
+    #     f.write(logstring + "\n")
+    #     mu_pred, sigma_pred, _, _ = model(x_test)
+    #     MAE, MSE, RMSE = compute_MAE_MSE_RMSE(mu_pred, y_test)
+    #     logstring = (
+    #         f"Test: MAE={MAE.item():.2f}, MSE={MSE.item():.2f}, RMSE={RMSE.item():.2f}"
+    #     )
+    #     print(logstring)
+    #     f.write(logstring + "\n")
 
     # # plot train and test data and prediction
     # fig, ax = plt.subplots(1, 1)
@@ -323,9 +344,20 @@ def experiment(
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
     ax_trace.plot(trace, c="k")
-    # ax_trace.plot(trace, '.', c='k') # dots for every data point
+    ax_trace.set_yscale("symlog")
     ax_trace.set_xlabel("minibatches")
-    ax_trace.set_title("loss")
+    twiny = ax_trace.twiny()
+    twiny.set_xlabel("epochs")
+    twiny.xaxis.set_ticks_position("bottom")
+    twiny.xaxis.set_label_position("bottom")
+    twiny.spines.bottom.set_position(("axes", -0.2))
+    effective_batch_size = min(batch_size, 200 * n_trajectories)
+    twiny.set_xlim(
+        ax_trace.get_xlim()[0] * effective_batch_size / n_trajectories / 200,
+        ax_trace.get_xlim()[1] * effective_batch_size / n_trajectories / 200,
+    )
+    twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax_trace.set_title(f"nlm loss (n_trajs={n_trajectories}, lr={lr:.0e})")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     # # plot features on test dataset (sorted for plotting)
@@ -340,6 +372,8 @@ def experiment(
 
     print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
     print(f"Logs in {results_dir}")
+
+    torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
