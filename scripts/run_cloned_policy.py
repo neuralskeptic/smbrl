@@ -211,7 +211,7 @@ def render_policy(
                 f"run policy: {alg} (fastgp={fast_gp}, stoch={stoch_preds})"
             )
         else:
-            axs[0].set_title(f"run policy: {alg} (stoch={stoch_preds})")
+            axs[0].set_title(f"run policy: {alg} (epoch {agent_epoch})")
         axs[0].grid(True)
         axs[1].grid(True)
         axs[1].set_xlabel("steps")
@@ -219,7 +219,7 @@ def render_policy(
         axs[1].set_ylabel("action")
         plt.savefig(
             os.path.join(
-                repo_dir, results_dir, f"run_policy_{alg}_stoch={stoch_preds}.png"
+                repo_dir, results_dir, f"run_policy_{alg}_ep{agent_epoch}.png"
             ),
             dpi=150,
         )

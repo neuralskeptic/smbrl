@@ -29,7 +29,8 @@ def experiment(
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
-    model_save_frequency: bool = -1,  # every x epochs
+    log_frequency: float = 0.01,  # every p% epochs of n_epochs
+    model_save_frequency: float = 0.1,  # every n-th of n_epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
@@ -148,17 +149,19 @@ def experiment(
             trace.append(loss.detach().item())
 
         # log metrics every epoch
-        with torch.no_grad():
-            # use latest minibatch
-            loss_ = loss.detach().item()
-            y_pred, _, _, _ = model(x)
-            rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
-            logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
-            print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
-            with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
-                f.write(logstring)
+        if n % (n_epochs * log_frequency) == 0:
+            # log
+            with torch.no_grad():
+                # use latest minibatch
+                loss_ = loss.detach().item()
+                y_pred, _, _, _ = model(x)
+                rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
+                logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+                print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
+                with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+                    f.write(logstring + "\n")
 
-        if n % model_save_frequency == 0:
+        if n % (n_epochs * model_save_frequency) == 0:
             # Save the agent
             torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
 
