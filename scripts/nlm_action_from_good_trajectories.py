@@ -250,7 +250,8 @@ def experiment(
 
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
-    ax_trace.semilogy(trace, c="k")
+    ax_trace.plot(trace, c="k")
+    ax_trace.set_yscale("symlog")
     ax_trace.set_xlabel("minibatches")
     twiny = ax_trace.twiny()
     twiny.set_xlabel("epochs")
