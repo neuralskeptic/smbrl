@@ -129,7 +129,7 @@ def experiment(
 
     #### nlm agent ####
     model = NeuralLinearModel(dim_in, dim_out, n_features, lr, device=device)
-    model.with_whitening(train_buffer.state, train_buffer.action, method="PCA")
+    model.with_whitening(train_buffer.states, train_buffer.actions, method="PCA")
 
     ####################################################################################################################
     # TRAINING

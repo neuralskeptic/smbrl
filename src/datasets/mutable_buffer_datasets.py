@@ -56,9 +56,17 @@ class ReplayBuffer(object):
         self._pos = (self._pos + n) % self.max_size
         self.size = min(self.size + n, self.max_size)
 
+    @property
+    def states(self):
+        return self._state[0 : self.size]
+
+    @property
+    def actions(self):
+        return self._action[0 : self.size]
+
     def __iter__(self):
         self.itr = 0
-        self._perm[0 : self.size] = torch.rand_perm(self.size)  # shuffle data
+        self._perm[0 : self.size] = torch.randperm(self.size)  # shuffle data
         return self
 
     def __next__(self):
