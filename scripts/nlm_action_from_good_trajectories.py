@@ -23,7 +23,7 @@ def experiment(
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_1000trajs_det.pkl.gz",
     n_trajectories: int = 1,  # 80% train, 20% test
     n_epochs: int = 1000,
-    batch_size: int = 200,  # max 200 (steps per episode)
+    batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
     n_features: int = 64,
     lr: float = 4e-3,
     use_cuda: bool = True,
@@ -179,7 +179,6 @@ def experiment(
         mus.append(mu_pred)
 
     mus_pred = torch.cat(mus, dim=0)  # dim=0
-    # mu_pred, sigma_pred, _, _ = map_cpu(model(test_x.to(model.device)))
     test_df["pred"] = mus_pred.reshape(-1)
     # test_df['pred_var'] = torch.diag(sigma_pred).reshape(-1)
     mean_traj = test_df.groupby(level=0).mean()
@@ -258,9 +257,10 @@ def experiment(
     twiny.xaxis.set_ticks_position("bottom")
     twiny.xaxis.set_label_position("bottom")
     twiny.spines.bottom.set_position(("axes", -0.2))
+    effective_batch_size = min(batch_size, 200 * n_trajectories)
     twiny.set_xlim(
-        ax_trace.get_xlim()[0] * batch_size / n_trajectories / 200,
-        ax_trace.get_xlim()[1] * batch_size / n_trajectories / 200,
+        ax_trace.get_xlim()[0] * effective_batch_size / n_trajectories / 200,
+        ax_trace.get_xlim()[1] * effective_batch_size / n_trajectories / 200,
     )
     twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax_trace.set_title(f"nlm loss (n_trajs={n_trajectories}, lr={lr:.0e})")
