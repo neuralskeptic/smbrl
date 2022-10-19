@@ -60,25 +60,34 @@ class LinearBayesianModel(object):
         self.whitening = True
         # PCA/ZCA for X
         self.x_mean = X.mean(dim=0)  # along N
-        L, Q = torch.linalg.eigh(X.T.cov())  # eig of Cov = Q diag(L) Q'
-        self.w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)
-        self.w_ZCA = Q @ self.w_PCA
+        # L, Q = torch.linalg.eigh(X.T.cov())  # eig of Cov = Q diag(L) Q'
+        # self.w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)
+        # self.w_ZCA = Q @ self.w_PCA
+
+        x_centered = X - self.x_mean
+        sigma = x_centered.t() @ x_centered / X.shape[0]
+        U, S, _ = torch.svd(sigma)
+        self.w_ZCA = U @ torch.diag(torch.sqrt(S + 1e-6) ** -1) @ U.t()
+
+        self.x_mean = self.x_mean.to(self.device)
+        self.w_ZCA = self.w_ZCA.to(self.device)
+
         # z-score for Y
-        self.y_mean = Y.mean(dim=0)  # along N
-        self.y_std = Y.std(dim=0)  # along N
+        self.y_mean = Y.mean(dim=0).to(self.device)  # along N
+        self.y_std = Y.std(dim=0).to(self.device)  # along N
 
     def whitenX(self, x):
         # return x  # uncomment to disable whitening
-        return (x - self.x_mean) @ self.w_PCA
-        # return (x - self.x_mean) @ self.w_ZCA
+        # return (x - self.x_mean.detach()) @ self.w_PCA.detach()
+        return (x - self.x_mean.detach()) @ self.w_ZCA.detach()
 
     def whitenY(self, y):
-        # return y  # uncomment to disable whitening
-        return (y - self.y_mean) / self.y_std
+        return y  # uncomment to disable whitening
+        # return (y - self.y_mean.detach()) / self.y_std.detach()
 
     def dewhitenY(self, y):
-        # return y  # uncomment to disable whitening
-        return y * self.y_std + self.y_mean
+        return y  # uncomment to disable whitening
+        # return y * self.y_std.detach() + self.y_mean.detach()
 
     def state_dict(self):
         state_dict = {

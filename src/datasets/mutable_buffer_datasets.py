@@ -15,7 +15,7 @@ class ReplayBuffer(object):
         dim_action,
         batchsize=None,
         shuffling=True,
-        max_size=int(1e6),
+        max_size=int(1e4),  # lowered from 1e6 (GPU mem leaks)
         device="cpu",
     ):
         self.dim_state = dim_state

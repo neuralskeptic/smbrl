@@ -185,10 +185,11 @@ def experiment(
 
         # log metrics every epoch
         if n % (n_epochs * log_frequency) == 0:
+            # print(f"GPU MEM LEAK: {torch.cuda.memory_allocated():,} B".replace(",", "_"))
             # log
             with torch.no_grad():
                 # use latest minibatch
-                loss_ = loss.detach().item()
+                loss_ = loss_trace[-1]
                 y_pred, _, _, _ = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
                 logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
