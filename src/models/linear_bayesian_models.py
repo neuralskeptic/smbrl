@@ -47,7 +47,13 @@ class LinearBayesianModel(object):
 
         self.device = device
 
+        # whitening params (unused if no whitening)
         self.whitening = False
+        self.x_mean = None
+        self.w_PCA = None
+        self.w_ZCA = None
+        self.y_mean = None
+        self.y_std = None
 
     def with_whitening(self, X, Y, method="PCA"):  # or ZCA
         # X, Y = X.to(self.device), Y.to(self.device)
@@ -62,13 +68,16 @@ class LinearBayesianModel(object):
         self.y_std = Y.std(dim=0)  # along N
 
     def whitenX(self, x):
+        # return x  # uncomment to disable whitening
         return (x - self.x_mean) @ self.w_PCA
         # return (x - self.x_mean) @ self.w_ZCA
 
     def whitenY(self, y):
+        # return y  # uncomment to disable whitening
         return (y - self.y_mean) / self.y_std
 
     def dewhitenY(self, y):
+        # return y  # uncomment to disable whitening
         return y * self.y_std + self.y_mean
 
     def state_dict(self):
@@ -118,7 +127,7 @@ class LinearBayesianModel(object):
     def sample_function(self):
         raise NotImplementedError
 
-    def __call__(self, x):
+    def __call__(self, x, grad=False):
         """
         Predicts on x
 
@@ -128,7 +137,7 @@ class LinearBayesianModel(object):
             x = self.whitenX(x)
 
         n = x.shape[0]
-        with torch.set_grad_enabled(False):
+        with torch.set_grad_enabled(grad):
             phi = self.features(x)
             mu = phi @ self.mu_w
             covariance_out = self.sigma()
@@ -188,7 +197,6 @@ class LinearBayesianModel(object):
         """
         # TODO replace with matrix normal KL
         # use tril, because more efficient and numerically more stable
-        sigma_w_tril = self.sigma_w_tril()
         div = kl_divergence(
             MultivariateNormal(self.mu_w.t(), scale_tril=self.sigma_w_tril()),
             MultivariateNormal(self.mu_w_prior.t(), scale_tril=self.sigma_w_prior_chol),

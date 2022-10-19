@@ -99,16 +99,47 @@ def experiment(
 
     train_dataset = TensorDataset(train_x, train_y)
     test_dataset = TensorDataset(test_x, test_y)
-
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    ## whiten data
+    # PCA for X
+    x_mean = train_x.mean(dim=0)  # along N
+    L, Q = torch.linalg.eigh(train_x.T.cov())  # eig of Cov = Q diag(L) Q'
+    w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)
+    # z-score for Y
+    y_mean = train_y.mean(dim=0)  # along N
+    y_std = train_y.std(dim=0)  # along N
+
+    def whitenX(x):
+        return (x - x_mean) @ w_PCA
+
+    def whitenY(y):
+        return (y - y_mean) / y_std
+
+    def dewhitenY(y):
+        return y * y_std + y_mean
+
+    train_x_white = whitenX(train_x)
+    train_y_white = whitenY(train_y)
+    test_x_white = whitenX(test_x)
+    test_y_white = whitenY(test_y)
+
+    train_dataset_white = TensorDataset(train_x_white, train_y_white)
+    test_dataset_white = TensorDataset(test_x_white, test_y_white)
+    train_dataloader_white = DataLoader(
+        train_dataset_white, batch_size=batch_size, shuffle=True
+    )
+    test_dataloader_white = DataLoader(
+        test_dataset_white, batch_size=batch_size, shuffle=False
+    )
 
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
-    model.with_whitening(train_x, train_y, method="PCA")
+    # model.with_whitening(train_x, train_y, method="PCA")
 
     # train
     trace = []
@@ -117,14 +148,21 @@ def experiment(
         one_minib = True
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
-            tqdm(train_dataloader, leave=False, position=1, disable=one_minib)
+            tqdm(train_dataloader_white, leave=False, position=1, disable=one_minib)
+            # tqdm(train_dataloader, leave=False, position=1, disable=one_minib)
         ):
             # copied from linearbayesianmodels.py for logging and model saving convenience
             x, y = minibatch
             model.opt.zero_grad()
-            ellh = model.ellh(x, y)
-            kl = model.kl()
-            loss = -ellh + kl
+            # ellh = model.ellh(x, y)
+            # kl = model.kl()
+            # loss = -ellh + kl
+
+            # y_pred, _, _, _ = model(x, grad=True)
+
+            loss = ((y - y_pred) ** 2).mean()  # loss in whitened space
+            # loss = ((dewhitenY(y) - dewhitenY(y_pred))**2).mean()  # loss in true space
+
             loss.backward()
             model.opt.step()
             trace.append(loss.detach().item())
@@ -249,31 +287,40 @@ def experiment(
     # )
 
     ## plot statistics over trajectories
-    mus = []
-    for i_minibatch, minibatch in enumerate(test_dataloader):
-        x, y = minibatch
-        mu_pred, sigma_pred, _, _ = map_cpu(model(x.to(model.device)))
-        mus.append(mu_pred)
+    y_pred_list = []
+    # for i_minibatch, minibatch in enumerate(test_dataloader):
+    for i_minibatch, minibatch in enumerate(test_dataloader_white):
+        x, _ = minibatch
+        y_pred, _, _, _ = model(x.to(model.device))
+        y_pred = dewhitenY(y_pred)
+        y_pred_list.append(y_pred.cpu())
 
-    mus_pred = torch.cat(mus, dim=0)  # dim=0
-    test_df[f"ds{yid}pred"] = mus_pred.reshape(-1)
-    # test_df['pred_var'] = torch.diag(sigma_pred).reshape(-1)
-    mean_traj = test_df.groupby(level=0).mean()
-    std_traj = test_df.groupby(level=0).std()
+    y_pred = torch.cat(y_pred_list, dim=0)  # dim=0
+
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    MAX_TIME = 100
-    x_time = torch.tensor(range(0, len(mean_traj)))[:MAX_TIME]
-    y_data_mean = df2torch(mean_traj[f"ds{yid}"])[:MAX_TIME]
-    y_data_std = df2torch(std_traj[f"ds{yid}"])[:MAX_TIME]
-    y_pred_mu_mean = df2torch(mean_traj[f"ds{yid}pred"])[:MAX_TIME]
-    y_pred_mu_std = df2torch(std_traj[f"ds{yid}pred"])[:MAX_TIME]
+    x_time = torch.tensor(range(0, 200))
+
+    # test_df[f"ds{yid}pred"] = mus_pred.reshape(-1)
+    # # test_df['pred_var'] = torch.diag(sigma_pred).reshape(-1)
+    # mean_traj = test_df.groupby(level=0).mean()
+    # std_traj = test_df.groupby(level=0).std()
+    # y_data_mean = df2torch(mean_traj[f"ds{yid}"])
+    # y_data_std = df2torch(std_traj[f"ds{yid}"])
+    # y_pred_mu_mean = df2torch(mean_traj[f"ds{yid}pred"])
+    # y_pred_mu_std = df2torch(std_traj[f"ds{yid}pred"])
+
+    y_data_mean = test_y.reshape(-1, 200).mean(dim=0)
+    y_data_std = test_y.reshape(-1, 200).std(dim=0)
+    y_pred_mu_mean = y_pred.reshape(-1, 200).mean(dim=0)
+    y_pred_mu_std = y_pred.reshape(-1, 200).std(dim=0)
+
     # y_pred_var_mean = df2torch(mean_traj['pred_var'])[:MAX_TIME]
     # y_pred_var_sqrtmean = torch.sqrt(y_pred_var_mean)
     plot_gp(
         ax,
         x_time,
-        y_data_mean,
-        y_data_std,
+        y_data_mean.cpu(),
+        y_data_std.cpu(),
         color="b",
         label="test data mean & std trajs",
     )
@@ -281,8 +328,8 @@ def experiment(
     plot_gp(
         ax,
         x_time,
-        y_pred_mu_mean,
-        y_pred_mu_std,
+        y_pred_mu_mean.cpu(),
+        y_pred_mu_std.cpu(),
         color="r",
         alpha=0.2,
         label="test pred mean(mu) & std(mu)",
