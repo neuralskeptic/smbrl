@@ -28,9 +28,9 @@ def experiment(
     alg: str = "nlm",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_1000trajs_det.pkl.gz",
     n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 2000,
+    n_epochs: int = 4000,
     batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
-    n_features: int = 64,
+    n_features: int = 128,
     lr: float = 5e-4,
     epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
     use_cuda: bool = True,
@@ -177,10 +177,10 @@ def experiment(
                 for i in range(len(dataset)):
                     visited_state = dataset[i][0]
                     sac_action = core.agent.draw_action(visited_state)
-                    new_state = np2torch(visited_state).reshape(-1, dim_in).to(device)
-                    new_action = np2torch(sac_action).reshape(-1, dim_out).to(device)
-                    new_states[i, :] = new_state
-                    new_actions[i, :] = new_action
+                    new_state = np2torch(visited_state).reshape(-1, dim_in)
+                    new_action = np2torch(sac_action).reshape(-1, dim_out)
+                    new_states[i, :] = new_state.cpu()
+                    new_actions[i, :] = new_action.cpu()
                 train_buffer.add(new_states, new_actions)
 
         # log metrics every epoch
