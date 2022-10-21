@@ -136,7 +136,7 @@ class LinearBayesianModel(object):
     def sample_function(self):
         raise NotImplementedError
 
-    def __call__(self, x, grad=False):
+    def __call__(self, x, grad=False, covs=True):
         """
         Predicts on x
 
@@ -149,23 +149,27 @@ class LinearBayesianModel(object):
         with torch.set_grad_enabled(grad):
             phi = self.features(x)
             mu = phi @ self.mu_w
-            covariance_out = self.sigma()
-            covariance_feat = phi @ self.sigma_w() @ phi.t()
-            covariance_pred_in = torch.eye(n, device=self.device) + covariance_feat
-            covariance = torch.kron(
-                covariance_out, covariance_pred_in
-            )  # only useful for 1D?
+            if covs:
+                covariance_out = self.sigma()
+                covariance_feat = phi @ self.sigma_w() @ phi.t()
+                covariance_pred_in = torch.eye(n, device=self.device) + covariance_feat
+                covariance = torch.kron(
+                    covariance_out, covariance_pred_in
+                )  # only useful for 1D?
 
         if self.whitening:
             mu = self.dewhitenY(mu)
             # dewhiten covariance output?
 
-        check_shape([x], [(n, self.dim_x)])
-        check_shape([mu], [(n, self.dim_y)])
-        check_shape([covariance], [(n, n)])  # TODO dy1 update
-        check_shape([covariance_feat], [(n, n)])
-        check_shape([covariance_out], [(self.dim_y, self.dim_y)])
-        return mu, covariance, covariance_feat, covariance_out
+        # check_shape([x], [(n, self.dim_x)])
+        # check_shape([mu], [(n, self.dim_y)])
+        # check_shape([covariance], [(n, n)])  # TODO dy1 update
+        # check_shape([covariance_feat], [(n, n)])
+        # check_shape([covariance_out], [(self.dim_y, self.dim_y)])
+        if covs:
+            return mu, covariance, covariance_feat, covariance_out
+        else:
+            return mu
 
     def ellh(self, x, y):
         """
