@@ -48,7 +48,7 @@ def experiment(
     debug: bool = True,
 ):
     ####################################################################################################################
-    # SETUP (saved to yaml)
+    #### SETUP (saved to yaml)
     time_begin = time.time()
 
     if debug:
@@ -77,12 +77,12 @@ def experiment(
     save_args(results_dir, locals(), git_repo_path="./")
 
     ####################################################################################################################
-    # EXPERIMENT SETUP
+    #### EXPERIMENT SETUP
 
     print(f"Alg: {alg}, Seed: {seed}, Dataset: {dataset_file}")
     print(f"Logs in {results_dir}")
 
-    #### INITIAL DATASET ####
+    ### INITIAL DATASET ###
     # df: [s0-s5, a, r, ss0-ss5, absorb, last]
     df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
     df = df[df["traj_id"] < n_trajectories]  # take only n_trajectories
@@ -113,7 +113,7 @@ def experiment(
     train_buffer = ReplayBuffer(dim_in, dim_out, batchsize=batch_size, device=device)
     train_buffer.add(df2torch(train_x_df), df2torch(train_y_df))
 
-    #### mdp ####
+    ### mdp ###
     try:
         with open(os.path.join(sac_results_dir, "args.json")) as f:
             sac_args = json.load(f)
@@ -122,17 +122,17 @@ def experiment(
             sac_args = yaml.load(f, Loader=yaml.Loader)
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
 
-    #### sac agent ####
+    ### sac agent ###
     sac_agent = Agent.load(sac_agent_path)
     prepro = None
     core = Core(sac_agent, mdp)
 
-    #### nlm agent ####
+    ### nlm agent ###
     model = NeuralLinearModel(dim_in, dim_out, n_features, lr, device=device)
     model.with_whitening(train_buffer.states, train_buffer.actions, method="PCA")
 
     ####################################################################################################################
-    # TRAINING
+    #### TRAINING
 
     loss_trace = []
     one_minib = False
@@ -210,7 +210,7 @@ def experiment(
     torch.save(model.state_dict(), os.path.join(results_dir, "agent_end.pth"))
 
     ####################################################################################################################
-    # EVALUATION
+    #### EVALUATION
 
     ## plot statistics over trajectories
     y_pred_list = []
