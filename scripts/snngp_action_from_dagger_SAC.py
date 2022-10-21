@@ -164,33 +164,29 @@ def experiment(
                 state = mdp.reset(None).copy()  # random initial state
                 while not last:
                     state_torch = np2torch(state).reshape(1, -1).to(device)
-                    action_torch, _, _, _ = model(state_torch)
+                    action_torch = model(state_torch, covs=False)
                     action = action_torch.reshape(-1).cpu().numpy()
                     next_state, reward, absorbing, _ = mdp.step(action)
                     episode_steps += 1
                     if episode_steps >= mdp.info.horizon or absorbing:
                         last = True
-                    next_state = next_state.copy()  # why this?
                     sample = (state, action, reward, next_state, absorbing, last)
                     dataset.append(sample)
-                    state = next_state
-
-                discounted_reward = compute_J(dataset, mdp.info.gamma)[0]
-                total_reward = compute_J(dataset, 1.0)[0]
+                    state = next_state.copy()
+                J = compute_J(dataset, mdp.info.gamma)[0]
+                R = compute_J(dataset, 1.0)[0]
 
                 # run sac on collected states & aggregate data
                 new_states = torch.empty((len(dataset), dim_in))
                 new_actions = torch.empty((len(dataset), dim_out))
                 for i in range(len(dataset)):
                     visited_state = dataset[i][0]
-                    # Note: compute_action_and_log_prob_t was hacked to be deterministic
-                    sac_action = core.agent.policy.compute_action_and_log_prob_t(
-                        visited_state, compute_log_prob=False, deterministic=det_sac
-                    )
                     new_state = np2torch(visited_state).reshape(-1, dim_in)
-                    new_action = sac_action.reshape(-1, dim_out)
-                    new_states[i, :] = new_state.cpu()
-                    new_actions[i, :] = new_action.cpu()
+                    new_states[i, :] = new_state
+                # Note: compute_action_and_log_prob_t was hacked to be deterministic
+                new_actions = core.agent.policy.compute_action_and_log_prob_t(
+                    new_states, compute_log_prob=False, deterministic=det_sac
+                )
                 train_buffer.add(new_states, new_actions)
 
         # log metrics every epoch
@@ -203,7 +199,7 @@ def experiment(
                 y_pred, _, _, _ = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
                 logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
-                logstring += f", J={discounted_reward:.2f}, R={total_reward:.2f}"
+                logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
                     f.write(logstring + "\n")
