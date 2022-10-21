@@ -27,14 +27,15 @@ from src.utils.seeds import fix_random_seed
 
 def render_policy(
     # results_dir: str = "logs/good/gp_action/3/2022_09_14__14_38_25",
-    # results_dir: str = "logs/good/nlm_action/7/2022_09_14__14_24_08",
-    # results_dir: str = "logs/good/snngp_action/3/2022_09_12__15_54_11",
+    # results_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_10_19__22_44_56",  # good 5e-4
+    results_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_10_20__21_09_00",  # good 1e-4
+    # results_dir: str = "logs/tmp/snngp_clone_SAC/0/2022_10_20__18_18_11",  # good 1e-4
+    # results_dir: str = "logs/tmp/snngp_clone_SAC/0/2022_10_20__20_38_07",  # good 5e-4
     agent_epoch: str = "end",
-    results_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_10_19__22_44_56",  # good
     use_cuda: bool = True,  # gp too slow on cpu
     stoch_preds: bool = False,  # sample from pred post; else use mean
     fast_gp: bool = True,  # with gpytorch.settings.fast_pred_var()
-    n_runs: int = 5,
+    n_runs: int = 10,
     # render: bool = True,
     render: bool = False,
     # plot: bool = False,

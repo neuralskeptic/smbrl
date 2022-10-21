@@ -28,7 +28,7 @@ def experiment(
     alg: str = "nlm",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_1000trajs_det.pkl.gz",
     n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 4000,
+    n_epochs: int = 3000,
     batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
     n_features: int = 128,
     lr: float = 5e-4,
@@ -176,9 +176,12 @@ def experiment(
                 new_actions = torch.empty((len(dataset), dim_out))
                 for i in range(len(dataset)):
                     visited_state = dataset[i][0]
-                    sac_action = core.agent.draw_action(visited_state)
+                    # Note: compute_action_and_log_prob_t was hacked to be deterministic
+                    sac_action = core.agent.policy.compute_action_and_log_prob_t(
+                        visited_state, compute_log_prob=False, deterministic=True
+                    )
                     new_state = np2torch(visited_state).reshape(-1, dim_in)
-                    new_action = np2torch(sac_action).reshape(-1, dim_out)
+                    new_action = sac_action.reshape(-1, dim_out)
                     new_states[i, :] = new_state.cpu()
                     new_actions[i, :] = new_action.cpu()
                 train_buffer.add(new_states, new_actions)

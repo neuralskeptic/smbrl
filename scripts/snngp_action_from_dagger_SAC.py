@@ -178,9 +178,12 @@ def experiment(
                 new_actions = torch.empty((len(dataset), dim_out))
                 for i in range(len(dataset)):
                     visited_state = dataset[i][0]
-                    sac_action = core.agent.draw_action(visited_state)
+                    # Note: compute_action_and_log_prob_t was hacked to be deterministic
+                    sac_action = core.agent.policy.compute_action_and_log_prob_t(
+                        visited_state, compute_log_prob=False, deterministic=False
+                    )
                     new_state = np2torch(visited_state).reshape(-1, dim_in)
-                    new_action = np2torch(sac_action).reshape(-1, dim_out)
+                    new_action = sac_action.reshape(-1, dim_out)
                     new_states[i, :] = new_state.cpu()
                     new_actions[i, :] = new_action.cpu()
                 train_buffer.add(new_states, new_actions)
