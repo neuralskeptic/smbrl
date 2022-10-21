@@ -33,6 +33,7 @@ def experiment(
     n_features: int = 128,
     lr: float = 5e-4,
     epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
+    det_sac: bool = True,  # if sac used to collect data with dagger is determ.
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
@@ -180,7 +181,7 @@ def experiment(
                     visited_state = dataset[i][0]
                     # Note: compute_action_and_log_prob_t was hacked to be deterministic
                     sac_action = core.agent.policy.compute_action_and_log_prob_t(
-                        visited_state, compute_log_prob=False, deterministic=False
+                        visited_state, compute_log_prob=False, deterministic=det_sac
                     )
                     new_state = np2torch(visited_state).reshape(-1, dim_in)
                     new_action = sac_action.reshape(-1, dim_out)

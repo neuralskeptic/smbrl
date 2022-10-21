@@ -26,13 +26,14 @@ from src.utils.time_utils import timestamp
 
 def experiment(
     alg: str = "nlm",
-    dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_1000trajs_det.pkl.gz",
+    dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
     n_trajectories: int = 5,  # 80% train, 20% test
     n_epochs: int = 3000,
     batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
     n_features: int = 128,
     lr: float = 5e-4,
     epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
+    det_sac: bool = True,  # if sac used to collect data with dagger is determ.
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
@@ -146,7 +147,7 @@ def experiment(
             model.opt.zero_grad()
             ellh = model.ellh(x, y)
             kl = model.kl()
-            loss = -ellh + kl
+            loss = (-ellh + kl) / x.shape[0]
             loss.backward()
             model.opt.step()
             loss_trace.append(loss.detach().item())
@@ -178,7 +179,7 @@ def experiment(
                     visited_state = dataset[i][0]
                     # Note: compute_action_and_log_prob_t was hacked to be deterministic
                     sac_action = core.agent.policy.compute_action_and_log_prob_t(
-                        visited_state, compute_log_prob=False, deterministic=True
+                        visited_state, compute_log_prob=False, deterministic=det_sac
                     )
                     new_state = np2torch(visited_state).reshape(-1, dim_in)
                     new_action = sac_action.reshape(-1, dim_out)
