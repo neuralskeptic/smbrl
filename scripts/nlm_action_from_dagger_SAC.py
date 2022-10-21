@@ -12,6 +12,7 @@ from experiment_launcher.utils import save_args
 from matplotlib.ticker import MaxNLocator
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
+from mushroom_rl.utils.dataset import compute_J
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -172,6 +173,9 @@ def experiment(
                     dataset.append(sample)
                     state = next_state
 
+                discounted_reward = compute_J(dataset, mdp.info.gamma)[0]
+                total_reward = compute_J(dataset, 1.0)[0]
+
                 # run sac on collected states & aggregate data
                 new_states = torch.empty((len(dataset), dim_in))
                 new_actions = torch.empty((len(dataset), dim_out))
@@ -197,6 +201,7 @@ def experiment(
                 y_pred, _, _, _ = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
                 logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+                logstring += f", J={discounted_reward:.2f}, R={total_reward:.2f}"
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
                     f.write(logstring + "\n")
