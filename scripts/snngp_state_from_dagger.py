@@ -65,7 +65,7 @@ def experiment(
     # Results directory
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
     results_dir = os.path.join(
-        repo_dir, results_dir, wandb_group, str(seed), timestamp()
+        repo_dir, results_dir, wandb_group, str(seed), f"s{yid}", timestamp()
     )
     os.makedirs(results_dir, exist_ok=True)
 
