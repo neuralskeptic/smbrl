@@ -158,7 +158,6 @@ def experiment(
 
     ### exploration agent ###
     sac_agent = Agent.load(sac_agent_path)
-    prepro = None
     core = Core(sac_agent, mdp)
 
     ### snngp agent ###
