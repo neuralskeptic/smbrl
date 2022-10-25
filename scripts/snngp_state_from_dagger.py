@@ -3,6 +3,7 @@ import os
 import time
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import quanser_robots
 import torch
@@ -89,9 +90,37 @@ def experiment(
     df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
     df = df[df["traj_id"] < n_trajectories]  # take only n_trajectories
     df = df.astype("float32")  # otherwise spectral_norm complains
+    ##### qube.step(a) ##### (self._state = th, al, thd, ald)
+    # rwd, done = self._rwd(self._state, a)
+    # self._state, act = self._ctrl_step(a)
+    # obs = np.float32([np.cos(self._state[0]), np.sin(self._state[0]),
+    #                   np.cos(self._state[1]), np.sin(self._state[1]),
+    #                   self._state[2], self._state[3]])
+    # return obs, rwd, done, {'s': self._state, 'a': act}
+    ########################
+    # transform state space: sin/cos to angles (atan2 approx averages errors)
+    df["_s0"] = np.arctan2(df["s1"], df["s0"])
+    df["_s1"] = np.arctan2(df["s3"], df["s2"])
+    df["_s2"] = df["s4"]
+    df["_s3"] = df["s5"]
+    df["_ss0"] = np.arctan2(df["ss1"], df["ss0"])
+    df["_ss1"] = np.arctan2(df["ss3"], df["ss2"])
+    df["_ss2"] = df["ss4"]
+    df["_ss3"] = df["ss5"]
+
+    def state4to6(state4):
+        state6 = np.empty(6)
+        state6[0] = np.cos(state4[0])
+        state6[1] = np.sin(state4[0])
+        state6[2] = np.cos(state4[1])
+        state6[3] = np.sin(state4[1])
+        state6[4] = state[2]
+        state6[5] = state[3]
+        return state6
+
     # add state deltas
-    for i in range(6):
-        df[f"ds{i}"] = df[f"ss{i}"] - df[f"s{i}"]
+    for i in range(4):
+        df[f"_ds{i}"] = df[f"_ss{i}"] - df[f"_s{i}"]
     traj_dfs = [
         traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
     ]
@@ -99,8 +128,8 @@ def experiment(
     train_df = pd.concat(train_traj_dfs)
     test_df = pd.concat(test_traj_dfs)
 
-    x_cols = ["a", "s0", "s1", "s2", "s3", "s4", "s5"]
-    y_cols = [f"ds{yid}"]  # WIP: later train on all outputs
+    x_cols = ["_s0", "_s1", "_s2", "_s3", "a"]
+    y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
@@ -164,21 +193,25 @@ def experiment(
                 dataset = list()
                 episode_steps = 0
                 last = False
-                state = mdp.reset(None).copy()  # random initial state
+                mdp.reset(None)  # random initial state
+                _, _, _, ssa_dict = mdp.step(np.zeros(1))  # step once to get state4
+                state = ssa_dict["s"].copy()
+
                 while not last:
-                    # state_torch = np2torch(state).reshape(1, -1).to(device)
                     # choose exploratory action
+                    state6 = state4to6(state)  # because sac trained on 6dim state
                     if torch.randn(1) > 0.5:  # SAC det
                         action_torch = core.agent.policy.compute_action_and_log_prob_t(
-                            state, compute_log_prob=False, deterministic=True
+                            state6, compute_log_prob=False, deterministic=True
                         )
                     else:  # SAC stoch
                         action_torch = core.agent.policy.compute_action_and_log_prob_t(
-                            state, compute_log_prob=False, deterministic=False
+                            state6, compute_log_prob=False, deterministic=False
                         )
                     action = action_torch.reshape(-1).numpy()
                     # run action in env
-                    next_state, reward, absorbing, _ = mdp.step(action)
+                    next_state_6, reward, absorbing, ssa_dict = mdp.step(action)
+                    next_state = ssa_dict["s"]  # angle, not cos/sin
                     episode_steps += 1
                     if episode_steps >= mdp.info.horizon or absorbing:
                         last = True
