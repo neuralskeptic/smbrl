@@ -21,6 +21,7 @@ from tqdm import tqdm
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
 from src.utils.conversion_utils import df2torch, np2torch
+from src.utils.environment_tools import state4to6, state6to4
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
@@ -32,7 +33,7 @@ def experiment(
     n_trajectories: int = 5,  # 80% train, 20% test
     n_epochs: int = 1000,
     batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
-    n_features: int = 128,
+    n_features: int = 512,
     lr: float = 1e-4,
     epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
     use_cuda: bool = True,
@@ -108,19 +109,11 @@ def experiment(
     df["_ss2"] = df["ss4"]
     df["_ss3"] = df["ss5"]
 
-    def state4to6(state4):
-        state6 = np.empty(6)
-        state6[0] = np.cos(state4[0])
-        state6[1] = np.sin(state4[0])
-        state6[2] = np.cos(state4[1])
-        state6[3] = np.sin(state4[1])
-        state6[4] = state4[2]
-        state6[5] = state4[3]
-        return state6
-
     # add state deltas
-    for i in range(4):
-        df[f"_ds{i}"] = df[f"_ss{i}"] - df[f"_s{i}"]
+    # for i in range(4):
+    #     df[f"_ds{i}"] = df[f"_ss{i}"] - df[f"_s{i}"]
+    for i in range(6):
+        df[f"ds{i}"] = df[f"ss{i}"] - df[f"s{i}"]
     traj_dfs = [
         traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
     ]
@@ -128,8 +121,10 @@ def experiment(
     train_df = pd.concat(train_traj_dfs)
     test_df = pd.concat(test_traj_dfs)
 
-    x_cols = ["_s0", "_s1", "_s2", "_s3", "a"]
-    y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
+    # x_cols = ["_s0", "_s1", "_s2", "_s3", "a"]
+    # y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
+    x_cols = ["s0", "s1", "s2", "s3", "s4", "s5", "a"]
+    y_cols = [f"ds{yid}"]  # WIP: later train on all outputs
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
@@ -193,45 +188,47 @@ def experiment(
                 dataset = list()
                 episode_steps = 0
                 last = False
-                mdp.reset(None)  # random initial state
-                _, _, _, ssa_dict = mdp.step(np.zeros(1))  # step once to get state4
-                state = ssa_dict["s"].copy()
+                state6 = mdp.reset(None).copy()  # random initial state
+                state4 = state4to6(state6)
 
                 while not last:
                     # choose exploratory action
-                    state6 = state4to6(state)  # because sac trained on 6dim state
-                    if torch.randn(1) > 0.5:  # SAC det
-                        action_torch = core.agent.policy.compute_action_and_log_prob_t(
-                            state6, compute_log_prob=False, deterministic=True
-                        )
-                    else:  # SAC stoch
+                    state6 = state4to6(state4)  # because sac trained on 6dim state
+                    p = 0.5
+                    if torch.randn(1) > p:
+                        # # SAC det
+                        # action_torch = core.agent.policy.compute_action_and_log_prob_t(
+                        #     state6, compute_log_prob=False, deterministic=True
+                        # )
+                        # gaussian policy (zero mean, 1.5 std)
+                        action_torch = torch.normal(torch.zeros(1), 1.5 * torch.ones(1))
+                    else:
+                        # SAC stoch
                         action_torch = core.agent.policy.compute_action_and_log_prob_t(
                             state6, compute_log_prob=False, deterministic=False
                         )
                     action = action_torch.reshape(-1).numpy()
                     # run action in env
-                    next_state_6, reward, absorbing, ssa_dict = mdp.step(action)
-                    next_state = ssa_dict["s"]  # angle, not cos/sin
+                    next_state6, reward, absorbing, ssa_dict = mdp.step(action)
+                    next_state4 = ssa_dict["s"]  # angle, not cos/sin
                     episode_steps += 1
                     if episode_steps >= mdp.info.horizon or absorbing:
                         last = True
-                    sample = (state, action, reward, next_state, absorbing, last)
+                    # sample = (state4, action, reward, next_state4, absorbing, last)
+                    sample = (state6, action, reward, next_state6, absorbing, last)
                     dataset.append(sample)
-                    state = next_state.copy()
+                    state4 = next_state4.copy()
                 # J = compute_J(dataset, mdp.info.gamma)[0]
                 # R = compute_J(dataset, 1.0)[0]
 
                 # aggregate data
-                new_xs = torch.empty((len(dataset), dim_in))
-                new_ys = torch.empty((len(dataset), dim_out))
-                for i in range(len(dataset)):
-                    new_state = np2torch(dataset[i][0])
-                    new_action = np2torch(dataset[i][1])
-                    new_next_state = np2torch(dataset[i][3])
-                    new_delta_state = new_next_state - new_state
-                    new_xs[i, :] = torch.cat((new_action, new_state)).reshape(-1)
-                    new_ys[i, :] = new_delta_state[yid].reshape(-1)
-                train_buffer.add(new_xs, new_ys)
+                from mushroom_rl.utils.dataset import parse_dataset
+
+                s, a, r, ss, absorb, last = parse_dataset(dataset)
+                new_xs = np.hstack([s, a])
+                new_ys = (ss - s)[:, yid].reshape(-1, 1)
+                # breakpoint()
+                train_buffer.add(np2torch(new_xs), np2torch(new_ys))
 
         # log metrics every epoch
         if n % (n_epochs * log_frequency) == 0:
@@ -243,6 +240,7 @@ def experiment(
                 y_pred, _, _, _ = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
                 logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+                logstring += f", bufsize={train_buffer.size}"
                 # logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
@@ -303,6 +301,34 @@ def experiment(
     plt.savefig(
         os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
     )
+    ## plot buffer
+    buf_pred_list = []
+    buf_y_list = []
+    train_buffer.shuffling = False
+    for minibatch in train_buffer:
+        x, y = minibatch
+        y_pred, _, _, _ = model(x.to(model.device))
+        buf_pred_list.append(y_pred.cpu())
+        buf_y_list.append(y.cpu())
+
+    buf_y_pred = torch.cat(buf_pred_list, dim=0)  # dim=0
+    buf_y_data = torch.cat(buf_y_list, dim=0)  # dim=0
+    buf_pred_trajs = buf_y_pred.reshape(-1, 200)
+    buf_data_trajs = buf_y_data.reshape(-1, 200)
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+    for i in range(buf_data_trajs.shape[0]):
+        plt.plot(x_time, buf_data_trajs[i, :].cpu(), color="b")
+        # plt.plot(x_time, data_trajs[i, :].cpu())
+        plt.plot(x_time, buf_pred_trajs[i, :].cpu(), color="r")
+        # plt.plot(x_time, pred_trajs[i, :].cpu())
+    ax.set_xlabel("time")
+    ax.set_ylabel(y_cols[0])
+    ax.set_title(
+        f"snngp on rollout buffer ({buf_data_trajs.shape[0]} episodes, {n_epochs} epochs)"
+    )
+    ax.legend()
+    plt.savefig(os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150)
 
     # # plot train and test data and prediction
     # fig, ax = plt.subplots(1, 1)
@@ -341,11 +367,7 @@ def experiment(
     twiny.xaxis.set_ticks_position("bottom")
     twiny.xaxis.set_label_position("bottom")
     twiny.spines.bottom.set_position(("axes", -0.2))
-    effective_batch_size = min(batch_size, 200 * n_trajectories)
-    twiny.set_xlim(
-        ax_trace.get_xlim()[0] * effective_batch_size / n_trajectories / 200,
-        ax_trace.get_xlim()[1] * effective_batch_size / n_trajectories / 200,
-    )
+    twiny.set_xlim(0, n_epochs)
     twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax_trace.set_title(f"snngp loss (n_trajs={n_trajectories}, lr={lr:.0e})")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
