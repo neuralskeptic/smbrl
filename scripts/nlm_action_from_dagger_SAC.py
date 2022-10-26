@@ -300,7 +300,7 @@ def experiment(
         ax_trace.get_xlim()[1] * effective_batch_size / n_trajectories / 200,
     )
     twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax_trace.set_title(f"snngp loss (dagger SAC det={det_sac}, lr={lr:.0e}, )")
+    ax_trace.set_title(f"nlm loss (dagger SAC det={det_sac}, lr={lr:.0e}, )")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     if plotting:
