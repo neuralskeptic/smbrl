@@ -31,9 +31,9 @@ class ReplayBuffer(object):
         self._pos = 0
         self.size = 0
         # store in gpu vs move every batch?
-        self._state = torch.empty((self.max_size, self.dim_state))
-        self._action = torch.empty((self.max_size, self.dim_action))
-        self._perm = torch.empty((self.max_size), dtype=torch.long)
+        self._state = torch.empty((self.max_size, self.dim_state)).to(self.device)
+        self._action = torch.empty((self.max_size, self.dim_action)).to(self.device)
+        self._perm = torch.empty((self.max_size), dtype=torch.long).to(self.device)
         # self._state = torch.empty((self.max_size, self.dim_state), device=self.device)
         # self._action = torch.empty((self.max_size, self.dim_action), device=self.device)
         # self._perm = torch.empty((self.max_size), dtype=torch.long, device=self.device)
@@ -41,6 +41,9 @@ class ReplayBuffer(object):
     def add(self, new_states, new_actions):
         check_shape([new_states], [("N", self.dim_state)])
         check_shape([new_actions], [("N", self.dim_action)])
+
+        new_states = new_states.to(self.device)
+        new_actions = new_actions.to(self.device)
 
         n = new_states.shape[0]
         l = self.max_size - self._pos  # space until end of buffer (no wraparound)
@@ -79,8 +82,8 @@ class ReplayBuffer(object):
         # store in gpu vs move every batch?
         if self.itr < self.size:
             indices = self._perm[0 : self.size][self.itr : self.itr + self.batchsize]
-            batch_state = self._state[indices].to(self.device)
-            batch_action = self._action[indices].to(self.device)
+            batch_state = self._state[indices]
+            batch_action = self._action[indices]
             # batch_state = self._state[indices]
             # batch_action = self._action[indices]
             self.itr += self.batchsize
