@@ -67,6 +67,9 @@ class ReplayBuffer(object):
     def actions(self):
         return self._action[0 : self.size]
 
+    def __len__(self):
+        return self.size
+
     def __iter__(self):
         self.itr = 0
         if self.shuffling:
