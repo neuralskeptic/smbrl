@@ -100,6 +100,7 @@ def render_policy(
 
     # MDP
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
+    mdp.seed(seed)
 
     # Agent
     if policy_alg == "sac":

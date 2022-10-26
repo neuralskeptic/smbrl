@@ -123,6 +123,7 @@ def experiment(
         with open(os.path.join(sac_results_dir, "args.yaml")) as f:
             sac_args = yaml.load(f, Loader=yaml.Loader)
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
+    mdp.seed(seed)
 
     ### sac agent ###
     sac_agent = Agent.load(sac_agent_path)
