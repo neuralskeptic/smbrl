@@ -20,8 +20,8 @@ class ReplayBuffer(object):
     ):
         self.dim_state = dim_state
         self.dim_action = dim_action
+        self.max_size = int(max_size)
         self.batchsize = batchsize if batchsize is not None else self.max_size
-        self.max_size = max_size
         self.shuffling = shuffling
         self.device = device
 
@@ -66,7 +66,12 @@ class ReplayBuffer(object):
 
     def __iter__(self):
         self.itr = 0
-        self._perm[0 : self.size] = torch.randperm(self.size)  # shuffle data
+        if self.shuffling:
+            self._perm[0 : self.size] = torch.randperm(self.size)  # shuffle data
+        else:
+            self._perm[0 : self.size] = torch.tensor(
+                range(self.size)
+            )  # sequential data
         return self
 
     def __next__(self):
