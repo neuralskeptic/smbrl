@@ -79,18 +79,17 @@ def render_policy(
     sac_args = load_config(sac_policy_dir)
     snngp_args = load_config(snngp_policy_dir)
     nlm_args = load_config(nlm_policy_dir)
-    # snngp_dyn_args = [
-    #     load_config(snngp_dynamics_dir_0),
-    #     load_config(snngp_dynamics_dir_1),
-    #     load_config(snngp_dynamics_dir_2),
-    #     load_config(snngp_dynamics_dir_3),
-    #     load_config(snngp_dynamics_dir_4),
-    #     load_config(snngp_dynamics_dir_5),
-    # ]
+    snngp_dyn_args = [
+        load_config(snngp_dynamics_dir_0),
+        load_config(snngp_dynamics_dir_1),
+        load_config(snngp_dynamics_dir_2),
+        load_config(snngp_dynamics_dir_3),
+        load_config(snngp_dynamics_dir_4),
+        load_config(snngp_dynamics_dir_5),
+    ]
 
     # dims
     s_dim = 6
-    s4_dim = 4
     a_dim = 1
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
@@ -147,7 +146,7 @@ def render_policy(
             args = snngp_dyn_args[i]
             model_path = snngp_dyn_paths[i]
             model = SpectralNormalizedNeuralGaussianProcess(
-                s4_dim + a_dim,
+                s_dim + a_dim,
                 1,
                 snngp_args["n_features"],
                 snngp_args["lr"],
@@ -166,15 +165,16 @@ def render_policy(
             #                   self._state[2], self._state[3]])
             # return obs, rwd, done, {'s': self._state, 'a': act}
             ########################
-            state_torch = np2torch(state).reshape([-1, s4_dim]).to(device)
+            state_torch = np2torch(state).reshape([-1, s_dim]).to(device)
             action_torch = np2torch(action).reshape([-1, a_dim]).to(device)
             state_action = torch.cat((state_torch, action_torch), dim=1)
-            next_state_torch = torch.empty(s4_dim)
-            for si in range(s4_dim):
+            next_state_torch = torch.empty(s_dim)
+            for si in range(s_dim):
                 mu, _, _, _ = dyn_models[si](state_action)
                 next_state_torch[si] = mu + state_torch[0, si]
             next_state = next_state_torch.cpu().reshape(-1).numpy()
-            reward, absorbing = mdp.env.unwrapped._rwd(next_state, action)
+            next_state4 = state6to4(next_state)
+            reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
             # next_state, reward, absorbing, last
             return next_state, reward, False, False
 
