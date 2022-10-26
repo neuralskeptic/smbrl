@@ -21,6 +21,7 @@ from src.models.linear_bayesian_models import (
     SpectralNormalizedNeuralGaussianProcess,
 )
 from src.utils.conversion_utils import df2torch, np2torch, qube_rollout2df
+from src.utils.environment_tools import state4to6, state6to4
 from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
 
@@ -206,6 +207,8 @@ def render_policy(
                 action = policy(state)
                 next_state, reward, absorbing, _ = dynamics(state, action)
             if render:
+                if dynamics_alg is not "gym":
+                    mdp.env.unwrapped._state = state6to4(next_state)  # move gym
                 mdp.render()
             episode_steps += 1
             if episode_steps >= mdp.info.horizon or absorbing:
