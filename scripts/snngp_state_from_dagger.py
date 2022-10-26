@@ -114,8 +114,8 @@ def experiment(
         state6[1] = np.sin(state4[0])
         state6[2] = np.cos(state4[1])
         state6[3] = np.sin(state4[1])
-        state6[4] = state[2]
-        state6[5] = state[3]
+        state6[4] = state4[2]
+        state6[5] = state4[3]
         return state6
 
     # add state deltas
@@ -294,7 +294,7 @@ def experiment(
         label="test pred mean(mu) & std(mu)",
     )
     ax.set_xlabel("time")
-    ax.set_ylabel("a")
+    ax.set_ylabel(y_cols[0])
     ax.set_title(
         f"snngp ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
     )
