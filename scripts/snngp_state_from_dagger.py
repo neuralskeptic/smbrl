@@ -13,7 +13,7 @@ from experiment_launcher.utils import save_args
 from matplotlib.ticker import MaxNLocator
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J
+from mushroom_rl.utils.dataset import compute_J, parse_dataset
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -31,9 +31,9 @@ def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
     n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 1000,
-    batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
-    n_features: int = 512,
+    n_epochs: int = 3000,
+    batch_size: int = 200 * 10,  # lower if gpu out of memory
+    n_features: int = 256,
     lr: float = 1e-4,
     epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
     use_cuda: bool = True,
@@ -110,8 +110,8 @@ def experiment(
     df["_ss3"] = df["ss5"]
 
     # add state deltas
-    # for i in range(4):
-    #     df[f"_ds{i}"] = df[f"_ss{i}"] - df[f"_s{i}"]
+    for i in range(4):
+        df[f"_ds{i}"] = df[f"_ss{i}"] - df[f"_s{i}"]
     for i in range(6):
         df[f"ds{i}"] = df[f"ss{i}"] - df[f"s{i}"]
     traj_dfs = [
@@ -124,7 +124,7 @@ def experiment(
     # x_cols = ["_s0", "_s1", "_s2", "_s3", "a"]
     # y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5", "a"]
-    y_cols = [f"ds{yid}"]  # WIP: later train on all outputs
+    y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
@@ -139,7 +139,9 @@ def experiment(
     test_dataloader_shuf = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    train_buffer = ReplayBuffer(dim_in, dim_out, batchsize=batch_size, device=device)
+    train_buffer = ReplayBuffer(
+        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+    )
     train_buffer.add(df2torch(train_x_df), df2torch(train_y_df))
 
     ### mdp ###
@@ -222,12 +224,9 @@ def experiment(
                 # R = compute_J(dataset, 1.0)[0]
 
                 # aggregate data
-                from mushroom_rl.utils.dataset import parse_dataset
-
                 s, a, r, ss, absorb, last = parse_dataset(dataset)
                 new_xs = np.hstack([s, a])
-                new_ys = (ss - s)[:, yid].reshape(-1, 1)
-                # breakpoint()
+                new_ys = state6to4(ss - s)[:, yid].reshape(-1, 1)
                 train_buffer.add(np2torch(new_xs), np2torch(new_ys))
 
         # log metrics every epoch
