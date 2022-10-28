@@ -3,23 +3,17 @@ from check_shape import check_shape
 
 
 class ReplayBuffer(object):
-    """
-    stores initial data
-    X: torch.tensor (N, dim_state)
-    Y: torch.tensor (N, dim_action)
-    """
-
     def __init__(
         self,
-        dim_state,
-        dim_action,
+        dim_x,
+        dim_y,
         batchsize=None,
         shuffling=True,
         max_size=int(1e4),  # lowered from 1e6 (GPU mem leaks)
         device="cpu",
     ):
-        self.dim_state = dim_state
-        self.dim_action = dim_action
+        self.dim_x = dim_x
+        self.dim_y = dim_y
         self.max_size = int(max_size)
         self.batchsize = batchsize if batchsize is not None else self.max_size
         self.shuffling = shuffling
@@ -31,41 +25,41 @@ class ReplayBuffer(object):
         self._pos = 0
         self.size = 0
         # store in gpu vs move every batch?
-        self._state = torch.empty((self.max_size, self.dim_state)).to(self.device)
-        self._action = torch.empty((self.max_size, self.dim_action)).to(self.device)
+        self._x = torch.empty((self.max_size, self.dim_x)).to(self.device)
+        self._y = torch.empty((self.max_size, self.dim_y)).to(self.device)
         self._perm = torch.empty((self.max_size), dtype=torch.long).to(self.device)
-        # self._state = torch.empty((self.max_size, self.dim_state), device=self.device)
-        # self._action = torch.empty((self.max_size, self.dim_action), device=self.device)
+        # self._x = torch.empty((self.max_size, self.dim_x), device=self.device)
+        # self._y = torch.empty((self.max_size, self.dim_y), device=self.device)
         # self._perm = torch.empty((self.max_size), dtype=torch.long, device=self.device)
 
-    def add(self, new_states, new_actions):
-        check_shape([new_states], [("N", self.dim_state)])
-        check_shape([new_actions], [("N", self.dim_action)])
+    def add(self, new_xs, new_ys):
+        check_shape([new_xs], [("N", self.dim_x)])
+        check_shape([new_ys], [("N", self.dim_y)])
 
-        new_states = new_states.to(self.device)
-        new_actions = new_actions.to(self.device)
+        new_xs = new_xs.to(self.device)
+        new_ys = new_ys.to(self.device)
 
-        n = new_states.shape[0]
+        n = new_xs.shape[0]
         l = self.max_size - self._pos  # space until end of buffer (no wraparound)
         if n <= l:  # no wraparound
-            self._state[self._pos : self._pos + n, :] = new_states
-            self._action[self._pos : self._pos + n, :] = new_actions
+            self._x[self._pos : self._pos + n, :] = new_xs
+            self._y[self._pos : self._pos + n, :] = new_ys
         else:
-            self._state[self._pos : self._pos + l, :] = new_states[0:l]
-            self._action[self._pos : self._pos + l, :] = new_actions[0:l]
-            self._state[0 : n - l, :] = new_states[l:]
-            self._action[0 : n - l, :] = new_actions[l:]
+            self._x[self._pos : self._pos + l, :] = new_xs[0:l]
+            self._y[self._pos : self._pos + l, :] = new_ys[0:l]
+            self._x[0 : n - l, :] = new_xs[l:]
+            self._y[0 : n - l, :] = new_ys[l:]
 
         self._pos = (self._pos + n) % self.max_size
         self.size = min(self.size + n, self.max_size)
 
     @property
-    def states(self):
-        return self._state[0 : self.size]
+    def xs(self):
+        return self._x[0 : self.size]
 
     @property
-    def actions(self):
-        return self._action[0 : self.size]
+    def ys(self):
+        return self._y[0 : self.size]
 
     def __len__(self):
         return self.size
@@ -82,14 +76,13 @@ class ReplayBuffer(object):
 
     def __next__(self):
         # return one batch (or less if at end of buffer)
-        # store in gpu vs move every batch?
         if self.itr < self.size:
             indices = self._perm[0 : self.size][self.itr : self.itr + self.batchsize]
-            batch_state = self._state[indices]
-            batch_action = self._action[indices]
-            # batch_state = self._state[indices]
-            # batch_action = self._action[indices]
+            batch_x = self._x[indices]
+            batch_y = self._y[indices]
+            # batch_x = self._x[indices]
+            # batch_y = self._y[indices]
             self.itr += self.batchsize
-            return batch_state, batch_action
+            return batch_x, batch_y
         else:
             raise StopIteration

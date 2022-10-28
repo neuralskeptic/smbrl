@@ -162,7 +162,7 @@ def experiment(
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
-    model.with_whitening(train_buffer.states, train_buffer.actions)
+    model.with_whitening(train_buffer.xs, train_buffer.ys)
 
     ####################################################################################################################
     #### TRAINING
