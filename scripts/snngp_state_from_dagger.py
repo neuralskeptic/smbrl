@@ -21,7 +21,7 @@ from tqdm import tqdm
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
 from src.utils.conversion_utils import df2torch, np2torch
-from src.utils.environment_tools import state4to6, state6to4
+from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
@@ -154,9 +154,26 @@ def experiment(
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
     mdp.seed(seed)
 
-    ### exploration agent ###
+    ### exploration policy (for rollouts) ###
     sac_agent = Agent.load(sac_agent_path)
     core = Core(sac_agent, mdp)
+
+    def policy(state4):
+        state6 = state4to6(state4)  # because sac trained on 6dim state
+        p = 0.5
+        if torch.randn(1) > p:
+            # # SAC det
+            # action_torch = core.agent.policy.compute_action_and_log_prob_t(
+            #     state6, compute_log_prob=False, deterministic=True
+            # )
+            # gaussian policy (zero mean, 1.5 std)
+            action_torch = torch.normal(torch.zeros(1), 1.5 * torch.ones(1))
+        else:
+            # SAC stoch
+            action_torch = core.agent.policy.compute_action_and_log_prob_t(
+                state6, compute_log_prob=False, deterministic=False
+            )
+        return action_torch.reshape(-1).numpy()
 
     ### snngp agent ###
     model = SpectralNormalizedNeuralGaussianProcess(
@@ -187,46 +204,14 @@ def experiment(
         if n % epochs_between_rollouts == 0:
             # run exploration policy against gym (on cpu)
             with torch.no_grad():
-                dataset = list()
-                episode_steps = 0
-                last = False
-                state6 = mdp.reset(None).copy()  # random initial state
-                state4 = state4to6(state6)
-
-                while not last:
-                    # choose exploratory action
-                    state6 = state4to6(state4)  # because sac trained on 6dim state
-                    p = 0.5
-                    if torch.randn(1) > p:
-                        # # SAC det
-                        # action_torch = core.agent.policy.compute_action_and_log_prob_t(
-                        #     state6, compute_log_prob=False, deterministic=True
-                        # )
-                        # gaussian policy (zero mean, 1.5 std)
-                        action_torch = torch.normal(torch.zeros(1), 1.5 * torch.ones(1))
-                    else:
-                        # SAC stoch
-                        action_torch = core.agent.policy.compute_action_and_log_prob_t(
-                            state6, compute_log_prob=False, deterministic=False
-                        )
-                    action = action_torch.reshape(-1).numpy()
-                    # run action in env
-                    next_state6, reward, absorbing, ssa_dict = mdp.step(action)
-                    next_state4 = ssa_dict["s"]  # angle, not cos/sin
-                    episode_steps += 1
-                    if episode_steps >= mdp.info.horizon or absorbing:
-                        last = True
-                    # sample = (state4, action, reward, next_state4, absorbing, last)
-                    sample = (state6, action, reward, next_state6, absorbing, last)
-                    dataset.append(sample)
-                    state4 = next_state4.copy()
+                dataset = rollout(mdp, policy, n_episodes=1)
                 # J = compute_J(dataset, mdp.info.gamma)[0]
                 # R = compute_J(dataset, 1.0)[0]
 
                 # aggregate data
                 s, a, r, ss, absorb, last = parse_dataset(dataset)
-                new_xs = np.hstack([s, a])
-                new_ys = state6to4(ss - s)[:, yid].reshape(-1, 1)
+                new_xs = np.hstack([state4to6(s), a])
+                new_ys = (ss - s)[:, yid].reshape(-1, 1)
                 train_buffer.add(np2torch(new_xs), np2torch(new_ys))
 
         # log metrics every epoch
