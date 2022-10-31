@@ -186,9 +186,9 @@ def experiment(
     with torch.no_grad():
         print("Filling rollout buffer...")
         dataset = rollout(mdp, policy, n_episodes=300, show_progress=True)
-        s, a, r, ss, absorb, last = parse_dataset(dataset)
+        s, a, r, ss, absorb, last = parse_dataset(dataset)  # everythin 4dim
         new_xs = np.hstack([state4to6(s), a])
-        new_ys = (ss - s)[:, yid].reshape(-1, 1)
+        new_ys = (ss - s)[:, yid].reshape(-1, 1)  # delta state4 = ss4 - s4
         train_buffer.add(np2torch(new_xs), np2torch(new_ys))
         print("Done.")
         model.with_whitening(train_buffer.xs, train_buffer.ys)
