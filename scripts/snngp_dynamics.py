@@ -30,8 +30,8 @@ from src.utils.time_utils import timestamp
 def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
-    n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 3000,
+    n_trajectories: int = 20,  # 80% train, 20% test
+    n_epochs: int = 300,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
     lr: float = 1e-4,
@@ -194,6 +194,7 @@ def experiment(
         model.with_whitening(train_buffer.xs, train_buffer.ys)
 
     loss_trace = []
+    lrs = []
     minib_progress = False
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
@@ -208,6 +209,13 @@ def experiment(
             model.opt.step()
             loss_trace.append(loss.detach().item())
 
+            # log lr in sync with loss (for plotting together)
+            lrs.append(model.opt.param_groups[0]["lr"])
+
+        # if n > 1500 and n % 10 == 0:
+        #     # crude lr schedule
+        #     model.opt.param_groups[0]["lr"] *= 0.99
+
         # log metrics every epoch
         if n % (n_epochs * log_frequency) == 0:
             # print(f"GPU MEM LEAK: {torch.cuda.memory_allocated():,} B".replace(",", "_"))
@@ -218,7 +226,7 @@ def experiment(
                 y_pred, _, _, _ = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
                 logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
-                logstring += f", bufsize={train_buffer.size}"
+                logstring += f", bufsize={train_buffer.size}, lr={lrs[-1]:.2}"
                 # logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
@@ -280,6 +288,26 @@ def experiment(
         os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
     )
 
+    # ## plot dataset trajectories
+    # data_trajs = test_y.reshape(-1, 200)
+    # pred_trajs = y_pred.reshape(-1, 200)
+
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+    # for i in range(data_trajs.shape[0]):
+    #     plt.plot(x_time, data_trajs[i, :].cpu(), color="b")
+    #     # plt.plot(x_time, data_trajs[i, :].cpu())
+    #     plt.plot(x_time, pred_trajs[i, :].cpu(), color="r")
+    #     # plt.plot(x_time, pred_trajs[i, :].cpu())
+    # ax.set_xlabel("time")
+    # ax.set_ylabel(y_cols[0])
+    # ax.set_title(
+    #     f"snngp ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+    # )
+    # ax.legend()
+    # plt.savefig(
+    #     os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150
+    # )
+
     ## plot buffer
     buf_pred_list = []
     buf_y_list = []
@@ -339,9 +367,15 @@ def experiment(
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
     ax_trace.plot(loss_trace, c="k")
+    # ax_trace.set_yticks(0)  # DEBUG show loss yaxis but break rest of plot
     ax_trace.set_yscale("symlog")
     ax_trace.set_xlabel("minibatches")
     ax_trace.set_ylabel("loss")
+
+    twinx = ax_trace.twinx()  # plot lr on other y axis
+    twinx.plot(lrs, c="b")
+    twinx.set_ylabel("learning rate")
+
     twiny = ax_trace.twiny()
     twiny.set_xlabel("epochs")
     twiny.xaxis.set_ticks_position("bottom")
