@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from tqdm import tqdm
 
 
 def state4to6(state4):
@@ -38,7 +39,7 @@ def state6to4(state6):
         return state4.reshape(-1, 4)
 
 
-def rollout(mdp, policy, n_episodes=1):
+def rollout(mdp, policy, n_episodes=1, show_progress=False):
     """
 
 
@@ -61,7 +62,7 @@ def rollout(mdp, policy, n_episodes=1):
 
     """
     dataset = list()
-    for i in range(n_episodes):
+    for i in tqdm(range(n_episodes), disable=not show_progress):
         episode_steps = 0
         last = False
         state4 = state6to4(mdp.reset(None).copy())

@@ -142,7 +142,6 @@ def experiment(
     train_buffer = ReplayBuffer(
         dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
     )
-    train_buffer.add(df2torch(train_x_df), df2torch(train_y_df))
 
     ### mdp ###
     try:
@@ -179,18 +178,26 @@ def experiment(
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
-    model.with_whitening(train_buffer.xs, train_buffer.ys)
 
     ####################################################################################################################
     #### TRAINING
 
+    # pre-fill rollout buffer
+    with torch.no_grad():
+        print("Filling rollout buffer...")
+        dataset = rollout(mdp, policy, n_episodes=300, show_progress=True)
+        s, a, r, ss, absorb, last = parse_dataset(dataset)
+        new_xs = np.hstack([state4to6(s), a])
+        new_ys = (ss - s)[:, yid].reshape(-1, 1)
+        train_buffer.add(np2torch(new_xs), np2torch(new_ys))
+        print("Done.")
+        model.with_whitening(train_buffer.xs, train_buffer.ys)
+
     loss_trace = []
-    one_minib = False
-    if batch_size == n_trajectories * 200 or n_trajectories < 150:
-        one_minib = True
+    minib_progress = False
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
-            tqdm(train_buffer, leave=False, position=1, disable=one_minib)
+            tqdm(train_buffer, leave=False, position=1, disable=not minib_progress)
         ):
             x, y = minibatch
             model.opt.zero_grad()
@@ -200,19 +207,6 @@ def experiment(
             loss.backward()
             model.opt.step()
             loss_trace.append(loss.detach().item())
-
-        if n % epochs_between_rollouts == 0:
-            # run exploration policy against gym (on cpu)
-            with torch.no_grad():
-                dataset = rollout(mdp, policy, n_episodes=1)
-                # J = compute_J(dataset, mdp.info.gamma)[0]
-                # R = compute_J(dataset, 1.0)[0]
-
-                # aggregate data
-                s, a, r, ss, absorb, last = parse_dataset(dataset)
-                new_xs = np.hstack([state4to6(s), a])
-                new_ys = (ss - s)[:, yid].reshape(-1, 1)
-                train_buffer.add(np2torch(new_xs), np2torch(new_ys))
 
         # log metrics every epoch
         if n % (n_epochs * log_frequency) == 0:
@@ -285,6 +279,7 @@ def experiment(
     plt.savefig(
         os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
     )
+
     ## plot buffer
     buf_pred_list = []
     buf_y_list = []
@@ -306,7 +301,7 @@ def experiment(
         # plt.plot(x_time, data_trajs[i, :].cpu())
         plt.plot(x_time, buf_pred_trajs[i, :].cpu(), color="r")
         # plt.plot(x_time, pred_trajs[i, :].cpu())
-    ax.set_xlabel("time")
+    ax.set_xlabel("steps")
     ax.set_ylabel(y_cols[0])
     ax.set_title(
         f"snngp on rollout buffer ({buf_data_trajs.shape[0]} episodes, {n_epochs} epochs)"
@@ -346,6 +341,7 @@ def experiment(
     ax_trace.plot(loss_trace, c="k")
     ax_trace.set_yscale("symlog")
     ax_trace.set_xlabel("minibatches")
+    ax_trace.set_ylabel("loss")
     twiny = ax_trace.twiny()
     twiny.set_xlabel("epochs")
     twiny.xaxis.set_ticks_position("bottom")
