@@ -35,7 +35,6 @@ def experiment(
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
     lr: float = 1e-4,
-    epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
