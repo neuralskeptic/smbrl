@@ -13,23 +13,26 @@ from experiment_launcher.utils import save_args
 from matplotlib.ticker import MaxNLocator
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J, parse_dataset
+from mushroom_rl.utils.dataset import compute_J, parse_dataset, select_first_episodes
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
+from src.feature_fns.nns import TwoLayerNetwork
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
 from src.utils.conversion_utils import df2torch, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
+from src.utils.whitening import Whitening
 
 
 def experiment(
-    alg: str = "snngp",
+    alg: str = "resnet",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
+    n_rollout_episodes: int = 300,
     n_trajectories: int = 20,  # 80% train, 20% test
     n_epochs: int = 300,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
@@ -43,7 +46,7 @@ def experiment(
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
-    wandb_group: str = "snngp_learn_dynamics",
+    wandb_group: str = "resnet_learn_dynamics",
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
@@ -173,10 +176,10 @@ def experiment(
             )
         return action_torch.reshape(-1).numpy()
 
-    ### snngp agent ###
-    model = SpectralNormalizedNeuralGaussianProcess(
-        dim_in, dim_out, n_features, lr, device=device
-    )
+    ### resnet agent ###
+    model = TwoLayerNetwork(dim_in, dim_out, n_features).to(device)
+    model.opt = torch.optim.Adam(model.parameters(), lr=lr)
+    model.device = device
 
     ####################################################################################################################
     #### TRAINING
@@ -184,13 +187,19 @@ def experiment(
     # pre-fill rollout buffer
     with torch.no_grad():
         print("Filling rollout buffer...")
-        dataset = rollout(mdp, policy, n_episodes=300, show_progress=True)
-        s, a, r, ss, absorb, last = parse_dataset(dataset)  # everythin 4dim
-        new_xs = np.hstack([state4to6(s), a])
-        new_ys = (ss - s)[:, yid].reshape(-1, 1)  # delta state4 = ss4 - s4
-        train_buffer.add(np2torch(new_xs), np2torch(new_ys))
+        train_dataset = rollout(
+            mdp, policy, n_episodes=n_rollout_episodes, show_progress=True
+        )
+        s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
+        new_xs = np2torch(np.hstack([state4to6(s), a]))
+        new_ys = np2torch((ss - s)[:, yid].reshape(-1, 1))  # delta state4 = ss4 - s4
+        # ZCA whitening
+        whitening = Whitening(new_xs, new_ys, disable_y=True)
+        new_xs = whitening.whitenX(new_xs)
+        new_ys = whitening.whitenY(new_ys)  # whitening disabled anyway
+        train_buffer.add(new_xs, new_ys)
+        # TODO test rollout buffer (with 25% of train buffer episodes)
         print("Done.")
-        model.with_whitening(train_buffer.xs, train_buffer.ys)
 
     loss_trace = []
     lrs = []
@@ -201,9 +210,9 @@ def experiment(
         ):
             x, y = minibatch
             model.opt.zero_grad()
-            ellh = model.ellh(x, y)
-            kl = model.kl()
-            loss = (-ellh + kl) / x.shape[0]
+            y_pred = model(x)
+            loss_f = torch.nn.MSELoss()
+            loss = loss_f(y, y_pred)
             loss.backward()
             model.opt.step()
             loss_trace.append(loss.detach().item())
@@ -215,14 +224,14 @@ def experiment(
         #     # crude lr schedule
         #     model.opt.param_groups[0]["lr"] *= 0.99
 
-        # log metrics every epoch
+        # log metrics
         if n % (n_epochs * log_frequency) == 0:
             # print(f"GPU MEM LEAK: {torch.cuda.memory_allocated():,} B".replace(",", "_"))
             # log
             with torch.no_grad():
                 # use latest minibatch
                 loss_ = loss_trace[-1]
-                y_pred, _, _, _ = model(x)
+                y_pred = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
                 logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
                 logstring += f", bufsize={train_buffer.size}, lr={lrs[-1]:.2}"
@@ -243,49 +252,80 @@ def experiment(
     ####################################################################################################################
     #### EVALUATION
 
-    ## plot statistics over trajectories
-    y_pred_list = []
-    for i_minibatch, minibatch in enumerate(test_dataloader):
-        x, _ = minibatch
-        y_pred, _, _, _ = model(x.to(model.device))
-        y_pred_list.append(y_pred.cpu())
+    ## plot pointwise transition prediction (1 episode)
+    """pointwise means the model predicts a next_state for every every state,action 
+    from in the episode from the dataset. this is explicitly not a rollout, 
+    and prediction errors do not add up"""
+    s, a, r, ss, absorb, last = select_first_episodes(train_dataset, 1, parse=True)
+    _x = np.hstack([state4to6(s), a])
+    _x_white = whitening.whitenX(np2torch(_x).to(device))
+    with torch.no_grad():
+        ss_yid_delta_pred_white = model(_x_white).cpu()
+    ss_yid_delta_pred = whitening.dewhitenY(ss_yid_delta_pred_white)
+    ss_yid_pred = np2torch(s[:, yid]) + ss_yid_delta_pred.reshape(-1)
 
-    y_pred = torch.cat(y_pred_list, dim=0)  # dim=0
-
+    figs, axs = plt.subplots(2, 1, figsize=(10, 7))
     x_time = torch.tensor(range(0, 200))
-    y_data_mean = test_y.reshape(-1, 200).mean(dim=0)
-    y_data_std = test_y.reshape(-1, 200).std(dim=0)
-    y_pred_mu_mean = y_pred.reshape(-1, 200).mean(dim=0)
-    y_pred_mu_std = y_pred.reshape(-1, 200).std(dim=0)
+    # axs[0]: next state prediction
+    axs[0].plot(x_time, ss[:, yid], color="b", label="data")
+    axs[0].plot(x_time, ss_yid_pred, color="r", label="resnet")
+    axs[0].set_ylabel(f"next state [{yid}/4]")
+    axs[0].legend()
+    # axs[1]: delta next state prediction
+    axs[1].plot(x_time, (ss - s)[:, yid], color="b", label="data")
+    axs[1].plot(x_time, ss_yid_delta_pred, color="r", label="resnet")
+    axs[1].set_xlabel("steps")
+    axs[1].set_ylabel(f"delta next state [{yid}/4]")
+    axs[1].legend()
+    axs[0].set_title(
+        f"pointwise dynamics on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
+    )
+    plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
 
-    fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    plot_gp(
-        ax,
-        x_time,
-        y_data_mean.cpu(),
-        y_data_std.cpu(),
-        color="b",
-        label="test data mean & std trajs",
-    )
-    # plot_gp(ax, x_time, y_pred_mu_mean, y_pred_var_sqrtmean, color='c', label="pred mean(mu) & sqrt(mean(sigma))")
-    plot_gp(
-        ax,
-        x_time,
-        y_pred_mu_mean.cpu(),
-        y_pred_mu_std.cpu(),
-        color="r",
-        alpha=0.2,
-        label="test pred mean(mu) & std(mu)",
-    )
-    ax.set_xlabel("time")
-    ax.set_ylabel(y_cols[0])
-    ax.set_title(
-        f"snngp ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
-    )
-    ax.legend()
-    plt.savefig(
-        os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
-    )
+    # ## plot statistics over trajectories
+    # y_pred_list = []
+    # for i_minibatch, minibatch in enumerate(test_dataloader):
+    #     x, _ = minibatch
+    #     with torch.no_grad():
+    #         y_pred = model(x.to(model.device))
+    #     y_pred_list.append(y_pred.cpu())
+
+    # y_pred = torch.cat(y_pred_list, dim=0)  # dim=0
+
+    # x_time = torch.tensor(range(0, 200))
+    # y_data_mean = test_y.reshape(-1, 200).mean(dim=0)
+    # y_data_std = test_y.reshape(-1, 200).std(dim=0)
+    # y_pred_mu_mean = y_pred.reshape(-1, 200).mean(dim=0)
+    # y_pred_mu_std = y_pred.reshape(-1, 200).std(dim=0)
+
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+    # plot_gp(
+    #     ax,
+    #     x_time,
+    #     y_data_mean.cpu(),
+    #     y_data_std.cpu(),
+    #     color="b",
+    #     label="test data mean & std trajs",
+    # )
+    # # plot_gp(ax, x_time, y_pred_mu_mean, y_pred_var_sqrtmean, color='c', label="pred mean(mu) & sqrt(mean(sigma))")
+    # plot_gp(
+    #     ax,
+    #     x_time,
+    #     y_pred_mu_mean.cpu(),
+    #     y_pred_mu_std.cpu(),
+    #     color="r",
+    #     alpha=0.2,
+    #     label="test pred mean(mu) & std(mu)",
+    # )
+    # ax.set_xlabel("time")
+    # ax.set_ylabel(y_cols[0])
+    # ax.set_title(
+    #     f"resnet ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+    # )
+    # ax.legend()
+    # plt.savefig(
+    #     os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
+    # )
 
     # ## plot dataset trajectories
     # data_trajs = test_y.reshape(-1, 200)
@@ -300,41 +340,43 @@ def experiment(
     # ax.set_xlabel("time")
     # ax.set_ylabel(y_cols[0])
     # ax.set_title(
-    #     f"snngp ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+    #     f"resnet ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
     # )
     # ax.legend()
     # plt.savefig(
     #     os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150
     # )
 
-    ## plot buffer
-    buf_pred_list = []
-    buf_y_list = []
-    train_buffer.shuffling = False
-    for minibatch in train_buffer:
-        x, y = minibatch
-        y_pred, _, _, _ = model(x.to(model.device))
-        buf_pred_list.append(y_pred.cpu())
-        buf_y_list.append(y.cpu())
+    # ## plot buffer
+    # buf_pred_list = []
+    # buf_y_list = []
+    # train_buffer.shuffling = False
+    # for minibatch in train_buffer:
+    #     x, y = minibatch
+    #     with torch.no_grad():
+    #         y_pred = model(x.to(model.device))
+    #     buf_pred_list.append(y_pred.cpu())
+    #     buf_y_list.append(y.cpu())
 
-    buf_y_pred = torch.cat(buf_pred_list, dim=0)  # dim=0
-    buf_y_data = torch.cat(buf_y_list, dim=0)  # dim=0
-    buf_pred_trajs = buf_y_pred.reshape(-1, 200)
-    buf_data_trajs = buf_y_data.reshape(-1, 200)
+    # buf_y_pred = torch.cat(buf_pred_list, dim=0)  # dim=0
+    # buf_y_data = torch.cat(buf_y_list, dim=0)  # dim=0
+    # buf_pred_trajs = buf_y_pred.reshape(-1, 200)
+    # buf_data_trajs = buf_y_data.reshape(-1, 200)
 
-    fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    for i in range(buf_data_trajs.shape[0]):
-        plt.plot(x_time, buf_data_trajs[i, :].cpu(), color="b")
-        # plt.plot(x_time, data_trajs[i, :].cpu())
-        plt.plot(x_time, buf_pred_trajs[i, :].cpu(), color="r")
-        # plt.plot(x_time, pred_trajs[i, :].cpu())
-    ax.set_xlabel("steps")
-    ax.set_ylabel(y_cols[0])
-    ax.set_title(
-        f"snngp on rollout buffer ({buf_data_trajs.shape[0]} episodes, {n_epochs} epochs)"
-    )
-    ax.legend()
-    plt.savefig(os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150)
+    # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+    # for i in range(buf_data_trajs.shape[0]):
+    #     i = 0
+    #     plt.plot(x_time, buf_data_trajs[i, :].cpu(), color="b")
+    #     # plt.plot(x_time, data_trajs[i, :].cpu())
+    #     plt.plot(x_time, buf_pred_trajs[i, :].cpu(), color="r")
+    #     # plt.plot(x_time, pred_trajs[i, :].cpu())
+    # ax.set_xlabel("steps")
+    # ax.set_ylabel(y_cols[0])
+    # ax.set_title(
+    #     f"resnet on rollout buffer ({buf_data_trajs.shape[0]} episodes, {n_epochs} epochs)"
+    # )
+    # ax.legend()
+    # plt.savefig(os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150)
 
     # # plot train and test data and prediction
     # fig, ax = plt.subplots(1, 1)
@@ -361,7 +403,7 @@ def experiment(
     # ax.set_xlabel("x")
     # ax.set_ylabel("y")
     # ax.legend()
-    # ax.set_title(f"snngp (N={n_datapoints}, {n_epochs} epochs)")
+    # ax.set_title(f"resnet (N={n_datapoints}, {n_epochs} epochs)")
 
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
@@ -371,9 +413,9 @@ def experiment(
     ax_trace.set_xlabel("minibatches")
     ax_trace.set_ylabel("loss")
 
-    twinx = ax_trace.twinx()  # plot lr on other y axis
-    twinx.plot(lrs, c="b")
-    twinx.set_ylabel("learning rate")
+    # twinx = ax_trace.twinx()  # plot lr on other y axis
+    # twinx.plot(lrs, c="b")
+    # twinx.set_ylabel("learning rate")
 
     twiny = ax_trace.twiny()
     twiny.set_xlabel("epochs")
@@ -382,7 +424,7 @@ def experiment(
     twiny.spines.bottom.set_position(("axes", -0.2))
     twiny.set_xlim(0, n_epochs)
     twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax_trace.set_title(f"snngp loss (n_trajs={n_trajectories}, lr={lr:.0e})")
+    ax_trace.set_title(f"resnet loss (n_trajs={n_trajectories}, lr={lr:.0e})")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     if plotting:
