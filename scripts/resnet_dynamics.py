@@ -19,7 +19,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
-from src.feature_fns.nns import TwoLayerNetwork
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
 from src.utils.conversion_utils import df2torch, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
@@ -30,14 +29,14 @@ from src.utils.whitening import Whitening
 
 
 def experiment(
-    alg: str = "resnet",
+    alg: str = "mlp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
-    n_rollout_episodes: int = 300,
+    n_rollout_episodes: int = 1,
     n_trajectories: int = 20,  # 80% train, 20% test
-    n_epochs: int = 300,
+    n_epochs: int = 5000,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
-    lr: float = 1e-4,
+    lr: float = 5e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
@@ -46,7 +45,7 @@ def experiment(
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
-    wandb_group: str = "resnet_learn_dynamics",
+    wandb_group: str = "mlp_learn_dynamics",
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
@@ -176,8 +175,19 @@ def experiment(
             )
         return action_torch.reshape(-1).numpy()
 
-    ### resnet agent ###
-    model = TwoLayerNetwork(dim_in, dim_out, n_features).to(device)
+    ### dynamics model ###
+    class DNN(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.l1 = torch.nn.Linear(dim_in, n_features)
+            self.l2 = torch.nn.Linear(n_features, n_features)
+            self.l3 = torch.nn.Linear(n_features, dim_out)
+            self.act = torch.nn.functional.softplus
+
+        def forward(self, x):
+            return self.l3(self.act(self.l2(self.act(self.l1(x)))))
+
+    model = DNN().to(device)
     model.opt = torch.optim.Adam(model.parameters(), lr=lr)
     model.device = device
 
@@ -194,9 +204,9 @@ def experiment(
         new_xs = np2torch(np.hstack([state4to6(s), a]))
         new_ys = np2torch((ss - s)[:, yid].reshape(-1, 1))  # delta state4 = ss4 - s4
         # ZCA whitening
-        whitening = Whitening(new_xs, new_ys, disable_y=True)
+        whitening = Whitening(new_xs, new_ys)
         new_xs = whitening.whitenX(new_xs)
-        new_ys = whitening.whitenY(new_ys)  # whitening disabled anyway
+        new_ys = whitening.whitenY(new_ys)
         train_buffer.add(new_xs, new_ys)
         # TODO test rollout buffer (with 25% of train buffer episodes)
         print("Done.")
@@ -268,12 +278,12 @@ def experiment(
     x_time = torch.tensor(range(0, 200))
     # axs[0]: next state prediction
     axs[0].plot(x_time, ss[:, yid], color="b", label="data")
-    axs[0].plot(x_time, ss_yid_pred, color="r", label="resnet")
+    axs[0].plot(x_time, ss_yid_pred, color="r", label=alg)
     axs[0].set_ylabel(f"next state [{yid}/4]")
     axs[0].legend()
     # axs[1]: delta next state prediction
     axs[1].plot(x_time, (ss - s)[:, yid], color="b", label="data")
-    axs[1].plot(x_time, ss_yid_delta_pred, color="r", label="resnet")
+    axs[1].plot(x_time, ss_yid_delta_pred.reshape(-1), color="r", label=alg)
     axs[1].set_xlabel("steps")
     axs[1].set_ylabel(f"delta next state [{yid}/4]")
     axs[1].legend()
@@ -320,7 +330,7 @@ def experiment(
     # ax.set_xlabel("time")
     # ax.set_ylabel(y_cols[0])
     # ax.set_title(
-    #     f"resnet ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+    #     f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
     # )
     # ax.legend()
     # plt.savefig(
@@ -340,7 +350,7 @@ def experiment(
     # ax.set_xlabel("time")
     # ax.set_ylabel(y_cols[0])
     # ax.set_title(
-    #     f"resnet ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
+    #     f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
     # )
     # ax.legend()
     # plt.savefig(
@@ -403,7 +413,7 @@ def experiment(
     # ax.set_xlabel("x")
     # ax.set_ylabel("y")
     # ax.legend()
-    # ax.set_title(f"resnet (N={n_datapoints}, {n_epochs} epochs)")
+    # ax.set_title(f"{alg} (N={n_datapoints}, {n_epochs} epochs)")
 
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
@@ -424,7 +434,7 @@ def experiment(
     twiny.spines.bottom.set_position(("axes", -0.2))
     twiny.set_xlim(0, n_epochs)
     twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax_trace.set_title(f"resnet loss (n_trajs={n_trajectories}, lr={lr:.0e})")
+    ax_trace.set_title(f"{alg} loss (n_trajs={n_rollout_episodes}, lr={lr:.0e})")
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     if plotting:
