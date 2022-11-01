@@ -205,9 +205,9 @@ def experiment(
         new_ys = np2torch((ss - s)[:, yid].reshape(-1, 1))  # delta state4 = ss4 - s4
         # ZCA whitening
         whitening = Whitening(new_xs, new_ys)
-        new_xs = whitening.whitenX(new_xs)
-        new_ys = whitening.whitenY(new_ys)
-        train_buffer.add(new_xs, new_ys)
+        new_xs_white = whitening.whitenX(new_xs)
+        new_ys_white = whitening.whitenY(new_ys)
+        train_buffer.add(new_xs_white, new_ys_white)
         # TODO test rollout buffer (with 25% of train buffer episodes)
         print("Done.")
 
@@ -268,10 +268,10 @@ def experiment(
     from in the episode from the dataset. this is explicitly not a rollout, 
     and prediction errors do not add up"""
     s, a, r, ss, absorb, last = select_first_episodes(train_dataset, 1, parse=True)
-    _x = np.hstack([state4to6(s), a])
-    _x_white = whitening.whitenX(np2torch(_x).to(device))
+    _x = np2torch(np.hstack([state4to6(s), a]))
+    _x_white = whitening.whitenX(_x)
     with torch.no_grad():
-        ss_yid_delta_pred_white = model(_x_white).cpu()
+        ss_yid_delta_pred_white = model(_x_white.to(device)).cpu()
     ss_yid_delta_pred = whitening.dewhitenY(ss_yid_delta_pred_white)
     ss_yid_pred = np2torch(s[:, yid]) + ss_yid_delta_pred.reshape(-1)
 
@@ -360,19 +360,19 @@ def experiment(
 
     # ## plot buffer
     # buf_pred_list = []
-    # buf_y_list = []
     # train_buffer.shuffling = False
     # for minibatch in train_buffer:
-    #     x, y = minibatch
+    #     x, _ = minibatch
     #     with torch.no_grad():
     #         y_pred = model(x.to(model.device))
     #     buf_pred_list.append(y_pred.cpu())
-    #     buf_y_list.append(y.cpu())
 
     # buf_y_pred = torch.cat(buf_pred_list, dim=0)  # dim=0
-    # buf_y_data = torch.cat(buf_y_list, dim=0)  # dim=0
-    # buf_pred_trajs = buf_y_pred.reshape(-1, 200)
-    # buf_data_trajs = buf_y_data.reshape(-1, 200)
+    # buf_y_data = train_buffer.ys
+    # # buf_pred_trajs = buf_y_pred.reshape(-1, 200)  # unwhitened
+    # # buf_data_trajs = buf_y_data.reshape(-1, 200)
+    # buf_pred_trajs = whitening.dewhitenY(buf_y_pred.reshape(-1, 200))
+    # buf_data_trajs = whitening.dewhitenY(buf_y_data.reshape(-1, 200))
 
     # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
     # for i in range(buf_data_trajs.shape[0]):
@@ -384,7 +384,7 @@ def experiment(
     # ax.set_xlabel("steps")
     # ax.set_ylabel(y_cols[0])
     # ax.set_title(
-    #     f"resnet on rollout buffer ({buf_data_trajs.shape[0]} episodes, {n_epochs} epochs)"
+    #     f"{alg} on rollout buffer ({buf_data_trajs.shape[0]} episodes, {n_epochs} epochs)"
     # )
     # ax.legend()
     # plt.savefig(os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150)
