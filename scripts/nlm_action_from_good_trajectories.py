@@ -101,7 +101,7 @@ def experiment(
     dim_in = len(x_cols)
     dim_out = len(y_cols)
     model = NeuralLinearModel(dim_in, dim_out, n_features, lr, device=device)
-    model.with_whitening(train_x, train_y, method="PCA")
+    model.with_whitening(train_x, train_y)
 
     def log_metrics(epoch=-1):
         ## print train and test MAE, MSE, RMSE

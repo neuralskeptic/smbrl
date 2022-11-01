@@ -55,10 +55,10 @@ class LinearBayesianModel(object):
         self.y_mean = None
         self.y_std = None
 
-    def with_whitening(self, X, Y, method="PCA"):  # or ZCA
+    def with_whitening(self, X, Y):
         # X, Y = X.to(self.device), Y.to(self.device)
         self.whitening = True
-        # PCA/ZCA for X
+        # ZCA for X
         self.x_mean = X.mean(dim=0)  # along N
         # L, Q = torch.linalg.eigh(X.T.cov())  # eig of Cov = Q diag(L) Q'
         # self.w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)

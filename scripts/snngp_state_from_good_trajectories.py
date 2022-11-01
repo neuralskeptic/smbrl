@@ -144,7 +144,7 @@ def experiment(
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
-    # model.with_whitening(train_x, train_y, method="PCA")
+    # model.with_whitening(train_x, train_y)
 
     # train
     trace = []
