@@ -4,39 +4,45 @@ from tqdm import tqdm
 
 
 def state4to6(state4):
-    state4 = state4.reshape(4, -1)
+    transposed = False
+    if len(state4.shape) == 1:  # (4,) -> (4, 1)
+        state4 = state4.reshape(4, 1)
+    if state4.shape[0] != 4:  # (n, 4) -> (4, n)
+        state4 = state4.transpose()
+        transposed = True
     n = state4.shape[1]
+    state6 = np.empty((6, n))
+    state6[0, :] = np.cos(state4[0, :])
+    state6[1, :] = np.sin(state4[0, :])
+    state6[2, :] = np.cos(state4[1, :])
+    state6[3, :] = np.sin(state4[1, :])
+    state6[4, :] = state4[2, :]
+    state6[5, :] = state4[3, :]
     if n == 1:
-        state6 = np.empty((6,))
-    else:
-        state6 = np.empty((6, n))
-    state6[0] = np.cos(state4[0])
-    state6[1] = np.sin(state4[0])
-    state6[2] = np.cos(state4[1])
-    state6[3] = np.sin(state4[1])
-    state6[4] = state4[2]
-    state6[5] = state4[3]
-    if n == 1:
-        return state6
-    else:
-        return state6.reshape(-1, 6)
+        return state6.reshape((6,))  # (6,1) -> (6,)
+    if transposed:  # input (n, 4)
+        return state6.transpose()  # (6, n) -> (n, 6)
+    return state6  # input (4, n), output (6, n)
 
 
 def state6to4(state6):
-    state6 = state6.reshape(6, -1)
+    transposed = False
+    if len(state6.shape) == 1:  # (6,) -> (6, 1)
+        state6 = state6.reshape(6, 1)
+    if state6.shape[0] != 6:  # (n, 6) -> (6, n)
+        state6 = state6.transpose()
+        transposed = True
     n = state6.shape[1]
+    state4 = np.empty((4, n))
+    state4[0, :] = np.arctan2(state6[1, :], state6[0, :])
+    state4[1, :] = np.arctan2(state6[3, :], state6[2, :])
+    state4[2, :] = state6[4, :]
+    state4[3, :] = state6[5, :]
     if n == 1:
-        state4 = np.empty((4,))
-    else:
-        state4 = np.empty((4, n))
-    state4[0] = np.arctan2(state6[1], state6[0])
-    state4[1] = np.arctan2(state6[3], state6[2])
-    state4[2] = state6[4]
-    state4[3] = state6[5]
-    if n == 1:
-        return state4
-    else:
-        return state4.reshape(-1, 4)
+        return state4.reshape((4,))  # (4,1) -> (4,)
+    if transposed:  # input (n, 4)
+        return state4.transpose()  # (4, n) -> (n, 4)
+    return state4  # input (6, n), output (4, n)
 
 
 def rollout(mdp, policy, n_episodes=1, show_progress=False):
