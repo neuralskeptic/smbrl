@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import quanser_robots
+import seaborn as sns
 import torch
 import yaml
 from experiment_launcher import run_experiment
@@ -20,7 +21,7 @@ from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
-from src.utils.conversion_utils import df2torch, np2torch
+from src.utils.conversion_utils import dataset2df_4, df2torch, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
@@ -293,70 +294,12 @@ def experiment(
     )
     plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
 
-    # ## plot statistics over trajectories
-    # y_pred_list = []
-    # for i_minibatch, minibatch in enumerate(test_dataloader):
-    #     x, _ = minibatch
-    #     with torch.no_grad():
-    #         y_pred = model(x.to(model.device))
-    #     y_pred_list.append(y_pred.cpu())
-
-    # y_pred = torch.cat(y_pred_list, dim=0)  # dim=0
-
-    # x_time = torch.tensor(range(0, 200))
-    # y_data_mean = test_y.reshape(-1, 200).mean(dim=0)
-    # y_data_std = test_y.reshape(-1, 200).std(dim=0)
-    # y_pred_mu_mean = y_pred.reshape(-1, 200).mean(dim=0)
-    # y_pred_mu_std = y_pred.reshape(-1, 200).std(dim=0)
-
-    # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    # plot_gp(
-    #     ax,
-    #     x_time,
-    #     y_data_mean.cpu(),
-    #     y_data_std.cpu(),
-    #     color="b",
-    #     label="test data mean & std trajs",
-    # )
-    # # plot_gp(ax, x_time, y_pred_mu_mean, y_pred_var_sqrtmean, color='c', label="pred mean(mu) & sqrt(mean(sigma))")
-    # plot_gp(
-    #     ax,
-    #     x_time,
-    #     y_pred_mu_mean.cpu(),
-    #     y_pred_mu_std.cpu(),
-    #     color="r",
-    #     alpha=0.2,
-    #     label="test pred mean(mu) & std(mu)",
-    # )
-    # ax.set_xlabel("time")
-    # ax.set_ylabel(y_cols[0])
-    # ax.set_title(
-    #     f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
-    # )
-    # ax.legend()
-    # plt.savefig(
-    #     os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
-    # )
-
-    # ## plot dataset trajectories
-    # data_trajs = test_y.reshape(-1, 200)
-    # pred_trajs = y_pred.reshape(-1, 200)
-
-    # fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    # for i in range(data_trajs.shape[0]):
-    #     plt.plot(x_time, data_trajs[i, :].cpu(), color="b")
-    #     # plt.plot(x_time, data_trajs[i, :].cpu())
-    #     plt.plot(x_time, pred_trajs[i, :].cpu(), color="r")
-    #     # plt.plot(x_time, pred_trajs[i, :].cpu())
-    # ax.set_xlabel("time")
-    # ax.set_ylabel(y_cols[0])
-    # ax.set_title(
-    #     f"{alg} ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
-    # )
-    # ax.legend()
-    # plt.savefig(
-    #     os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150
-    # )
+    # plot data space coverage
+    df = dataset2df_4(train_dataset)
+    # add column for trajectory id
+    df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+    cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
+    sns.pairplot(df[cols], hue="traj_id")
 
     # ## plot buffer
     # buf_pred_list = []
