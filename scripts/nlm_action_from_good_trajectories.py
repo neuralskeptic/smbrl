@@ -21,11 +21,11 @@ from src.utils.time_utils import timestamp
 def experiment(
     alg: str = "nlm",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_1000trajs_det.pkl.gz",
-    n_trajectories: int = 1,  # 80% train, 20% test
-    n_epochs: int = 1000,
+    n_trajectories: int = 100,  # 80% train, 20% test
+    n_epochs: int = 20000,
     batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
     n_features: int = 64,
-    lr: float = 4e-3,
+    lr: float = 5e-4,
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,

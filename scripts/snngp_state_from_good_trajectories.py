@@ -12,6 +12,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
+from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
 from src.utils.conversion_utils import df2torch, map_cpu
 from src.utils.plotting_utils import plot_gp
@@ -23,10 +24,10 @@ def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs.pkl.gz",
     n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 10000,
+    n_epochs: int = 1000,
     batch_size: int = 200 * 100,  # as large as possible
-    n_features: int = 64,
-    lr: float = 5e-3,
+    n_features: int = 128,
+    lr: float = 5e-4,
     use_cuda: bool = True,
     # verbose: bool = False,
     plotting: bool = False,
@@ -40,7 +41,7 @@ def experiment(
     seed: int = 0,
     results_dir: str = "logs/tmp/",
     debug: bool = True,
-    yid: str = "5",  # WIP: train for this next-state id, later train on all
+    yid: str = "0",  # WIP: train for this next-state id, later train on all
 ):
     ####################################################################################################################
     # SETUP
@@ -87,6 +88,8 @@ def experiment(
     y_cols = [f"ds{yid}"]  # WIP: later train on all outputs
     # y_cols = ["ds0", "ds1"]
     # y_cols = ["ds0", "ds1", "ds2", "ds3", "ds4", "ds5"]
+    dim_in = len(x_cols)
+    dim_out = len(y_cols)
     train_df = pd.concat(train_traj_dfs)
     test_df = pd.concat(test_traj_dfs)
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
@@ -102,40 +105,42 @@ def experiment(
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    ## whiten data
-    # PCA for X
-    x_mean = train_x.mean(dim=0)  # along N
-    L, Q = torch.linalg.eigh(train_x.T.cov())  # eig of Cov = Q diag(L) Q'
-    w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)
-    # z-score for Y
-    y_mean = train_y.mean(dim=0)  # along N
-    y_std = train_y.std(dim=0)  # along N
+    train_buffer = ReplayBuffer(dim_in, dim_out, batchsize=batch_size, device=device)
+    train_buffer.add(df2torch(train_x_df), df2torch(train_y_df))
 
-    def whitenX(x):
-        return (x - x_mean) @ w_PCA
+    # ## whiten data
+    # # PCA for X
+    # x_mean = train_x.mean(dim=0)  # along N
+    # L, Q = torch.linalg.eigh(train_x.T.cov())  # eig of Cov = Q diag(L) Q'
+    # w_PCA = torch.linalg.solve(torch.diag(L + 1e-5), Q.T)
+    # # z-score for Y
+    # y_mean = train_y.mean(dim=0)  # along N
+    # y_std = train_y.std(dim=0)  # along N
 
-    def whitenY(y):
-        return (y - y_mean) / y_std
+    # def whitenX(x):
+    #     return (x - x_mean) @ w_PCA
 
-    def dewhitenY(y):
-        return y * y_std + y_mean
+    # def whitenY(y):
+    #     return (y - y_mean) / y_std
 
-    train_x_white = whitenX(train_x)
-    train_y_white = whitenY(train_y)
-    test_x_white = whitenX(test_x)
-    test_y_white = whitenY(test_y)
+    # def dewhitenY(y):
+    #     return y * y_std + y_mean
 
-    train_dataset_white = TensorDataset(train_x_white, train_y_white)
-    test_dataset_white = TensorDataset(test_x_white, test_y_white)
-    train_dataloader_white = DataLoader(
-        train_dataset_white, batch_size=batch_size, shuffle=True
-    )
-    test_dataloader_white = DataLoader(
-        test_dataset_white, batch_size=batch_size, shuffle=False
-    )
+    # train_x_white = whitenX(train_x)
+    # train_y_white = whitenY(train_y)
+    # test_x_white = whitenX(test_x)
+    # test_y_white = whitenY(test_y)
 
-    dim_in = len(x_cols)
-    dim_out = len(y_cols)
+    # train_dataset_white = TensorDataset(train_x_white, train_y_white)
+    # test_dataset_white = TensorDataset(test_x_white, test_y_white)
+    # train_dataloader_white = DataLoader(
+    #     train_dataset_white, batch_size=batch_size, shuffle=True
+    # )
+    # test_dataloader_white = DataLoader(
+    #     test_dataset_white, batch_size=batch_size, shuffle=False
+    # )
+
+    # torch.cuda.empty_cache()  # clear unused dataset
     model = SpectralNormalizedNeuralGaussianProcess(
         dim_in, dim_out, n_features, lr, device=device
     )
@@ -148,19 +153,21 @@ def experiment(
         one_minib = True
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
-            tqdm(train_dataloader_white, leave=False, position=1, disable=one_minib)
+            # tqdm(train_dataloader_white, leave=False, position=1, disable=one_minib)
             # tqdm(train_dataloader, leave=False, position=1, disable=one_minib)
+            tqdm(train_buffer, leave=False, position=1, disable=one_minib)
         ):
             # copied from linearbayesianmodels.py for logging and model saving convenience
             x, y = minibatch
             model.opt.zero_grad()
-            # ellh = model.ellh(x, y)
-            # kl = model.kl()
-            # loss = -ellh + kl
+            ellh = model.ellh(x, y)
+            kl = model.kl()
+            loss = -ellh + kl
 
             # y_pred, _, _, _ = model(x, grad=True)
+            # y_pred = model.features(x) @ model.mu_w  # just mu
 
-            loss = ((y - y_pred) ** 2).mean()  # loss in whitened space
+            # loss = ((y - y_pred) ** 2).mean()  # loss in whitened space
             # loss = ((dewhitenY(y) - dewhitenY(y_pred))**2).mean()  # loss in true space
 
             loss.backward()
@@ -288,11 +295,12 @@ def experiment(
 
     ## plot statistics over trajectories
     y_pred_list = []
-    # for i_minibatch, minibatch in enumerate(test_dataloader):
-    for i_minibatch, minibatch in enumerate(test_dataloader_white):
+    # for i_minibatch, minibatch in enumerate(train_dataloader):
+    for i_minibatch, minibatch in enumerate(test_dataloader):
+        # for i_minibatch, minibatch in enumerate(test_dataloader_white):
         x, _ = minibatch
         y_pred, _, _, _ = model(x.to(model.device))
-        y_pred = dewhitenY(y_pred)
+        # y_pred = dewhitenY(y_pred)
         y_pred_list.append(y_pred.cpu())
 
     y_pred = torch.cat(y_pred_list, dim=0)  # dim=0
