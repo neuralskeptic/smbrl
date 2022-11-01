@@ -280,13 +280,13 @@ def experiment(
     # axs[0]: next state prediction
     axs[0].plot(x_time, ss[:, yid], color="b", label="data")
     axs[0].plot(x_time, ss_yid_pred, color="r", label=alg)
-    axs[0].set_ylabel(f"next state [{yid}/4]")
+    axs[0].set_ylabel(f"next state[4] [{yid}]")
     axs[0].legend()
     # axs[1]: delta next state prediction
     axs[1].plot(x_time, (ss - s)[:, yid], color="b", label="data")
     axs[1].plot(x_time, ss_yid_delta_pred.reshape(-1), color="r", label=alg)
     axs[1].set_xlabel("steps")
-    axs[1].set_ylabel(f"delta next state [{yid}/4]")
+    axs[1].set_ylabel(f"delta next state[4] [{yid}]")
     axs[1].legend()
     axs[0].set_title(
         f"pointwise dynamics on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
