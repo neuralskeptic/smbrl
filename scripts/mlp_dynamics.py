@@ -33,7 +33,7 @@ def experiment(
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
     n_rollout_episodes: int = 1,
     n_trajectories: int = 20,  # 80% train, 20% test
-    n_epochs: int = 5000,
+    n_epochs: int = 10000,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
     lr: float = 5e-3,
@@ -230,9 +230,10 @@ def experiment(
             # log lr in sync with loss (for plotting together)
             lrs.append(model.opt.param_groups[0]["lr"])
 
-        # if n > 1500 and n % 10 == 0:
-        #     # crude lr schedule
-        #     model.opt.param_groups[0]["lr"] *= 0.99
+        if n > 1500:
+            # decaying lr
+            tau_decay = 1500
+            model.opt.param_groups[0]["lr"] *= np.exp(-1 / tau_decay)
 
         # log metrics
         if n % (n_epochs * log_frequency) == 0:
