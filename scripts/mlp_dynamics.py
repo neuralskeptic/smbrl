@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
-from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
+from src.models.dnns import DNN3
 from src.utils.conversion_utils import dataset2df_4, df2torch, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.plotting_utils import plot_gp
@@ -177,20 +177,7 @@ def experiment(
         return action_torch.reshape(-1).numpy()
 
     ### dynamics model ###
-    class DNN(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.l1 = torch.nn.Linear(dim_in, n_features)
-            self.l2 = torch.nn.Linear(n_features, n_features)
-            self.l3 = torch.nn.Linear(n_features, dim_out)
-            self.act = torch.nn.functional.softplus
-
-        def forward(self, x):
-            return self.l3(self.act(self.l2(self.act(self.l1(x)))))
-
-    model = DNN().to(device)
-    model.opt = torch.optim.Adam(model.parameters(), lr=lr)
-    model.device = device
+    model = DNN3(dim_in, dim_out, n_features, lr, device).to(device)
 
     ####################################################################################################################
     #### TRAINING
