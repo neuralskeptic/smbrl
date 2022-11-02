@@ -8,6 +8,7 @@ import quanser_robots
 import torch
 import yaml
 from experiment_launcher import run_experiment
+from matplotlib import pyplot as plt
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import parse_dataset
@@ -195,13 +196,9 @@ def render_policy(
         raise Exception(f"Dynamics algorithm -{dynamics_alg}- unknown. Aborting")
 
     ####################################################################################################################
-    #### RUNNING & PLOTTING
+    #### RUNNING
 
-    if plot:
-        from matplotlib import pyplot as plt
-
-        fig, axs = plt.subplots(2, 1, sharex=True, figsize=(10, 10))
-
+    datasets = []
     for i in tqdm(range(n_runs)):
         ##### RUN AGENT for one episode #####
         dataset = list()
@@ -230,28 +227,38 @@ def render_policy(
             dataset.append(sample)
             state4 = next_state4.copy()
 
+        datasets.append(dataset)
         mdp.stop()
 
-        # MAX_STEPS = 100 + 80
-        if plot:
-            s, a, r, ss, absorb, last = parse_dataset(dataset)
-            # axs[0].plot(r[:MAX_STEPS])
-            # axs[1].plot(a[:MAX_STEPS])
-            axs[0].plot(r)
-            axs[1].plot(a)
+    ####################################################################################################################
+    #### PLOTTING
+
     if plot:
-        axs[0].set_title(f"run {policy_alg} policy against {dynamics_alg} dynamics")
-        axs[0].grid(True)
-        axs[1].grid(True)
-        axs[1].set_xlabel("steps")
-        axs[0].set_ylabel("reward")
-        axs[1].set_ylabel("action")
-        # plt.savefig(
-        #     os.path.join(
-        #         repo_dir, results_dir, f"run_policy_{alg}_ep{agent_epoch}.png"
-        #     ),
-        #     dpi=150,
-        # )
+        fig, axs = plt.subplots(5, 2, figsize=(10, 7))
+        x_time = torch.tensor(range(0, 200))
+        for dataset in datasets:
+            s, a, r, ss, absorb, last = parse_dataset(dataset)
+            # plot rewards
+            axs[0, 0].plot(x_time, r)
+            # plot actions
+            axs[0, 1].plot(x_time, a, color="b", label="gym")
+            for yi in range(s4_dim):
+                # delta next state prediction
+                axs[yi + 1, 0].plot(x_time, (ss - s)[:, yi])
+                # next state prediction
+                axs[yi + 1, 1].plot(x_time, ss[:, yi])
+        axs[0, 0].set_ylabel("reward")
+        axs[0, 0].legend()
+        axs[0, 1].set_ylabel("action")
+        for yi in range(s4_dim):
+            axs[yi + 1, 0].set_ylabel(f"delta ss[{yi}]")
+            axs[yi + 1, 1].set_ylabel(f"ss[{yi}]")
+        axs[-1, 0].set_xlabel("steps")
+        axs[-1, 1].set_xlabel("steps")
+        fig.suptitle(
+            f"run {n_runs}x {policy_alg} policy against {dynamics_alg} dynamics"
+        )
+        # plt.savefig(os.path.join(results_dir, "action_rollout.png"), dpi=150)
 
     if show_plots:
         plt.show()
