@@ -269,6 +269,57 @@ def experiment(
     )
     plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
 
+    ### plot rollout of action traj (1 episode) ###
+    # s, a, r, ss, absorb, last = select_first_episodes(train_dataset, 1, parse=True)
+    s, a, r, ss, absorb, last = select_first_episodes(test_dataset, 1, parse=True)
+
+    open_loop_dataset = list()
+    episode_steps = 0
+    last = False
+    action_iter = iter(a)
+    state4 = state6to4(mdp.reset(None).copy())
+    while last is False:
+        action = action_iter.__next__()
+        # dynamics model only predicts one dimension; mdp does rest
+        _x = np2torch(np.hstack([state4to6(state4), action]))
+        _x_white = whitening.whitenX(_x)
+        with torch.no_grad():
+            ss_yid_delta_pred_white = model(_x_white.to(device)).cpu()
+        ss_yid_delta_pred = whitening.dewhitenY(ss_yid_delta_pred_white)
+        ss_yid_pred = state4[yid] + ss_yid_delta_pred.reshape(-1)
+        # gym
+        _, reward, absorbing, ssa_dict = mdp.step(action)
+        next_state4_gym = ssa_dict["s"]
+        # merge
+        next_state4 = next_state4_gym.copy()
+        next_state4[yid] = ss_yid_pred
+        episode_steps += 1
+        if episode_steps >= mdp.info.horizon:
+            last = True
+        sample = (state4, action, reward, next_state4, absorbing, last)
+        open_loop_dataset.append(sample)
+        state4 = next_state4.copy()
+
+    _s, _a, _r, _ss, _absorb, _last = parse_dataset(open_loop_dataset)
+
+    figs, axs = plt.subplots(2, 1, figsize=(10, 7))
+    x_time = torch.tensor(range(0, 200))
+    # axs[0]: reward
+    axs[0].plot(x_time, r, color="b", label="gym")
+    axs[0].plot(x_time, _r, color="r", label=alg)
+    axs[0].set_ylabel(f"reward")
+    axs[0].legend()
+    # axs[1]: predicted state dimension
+    axs[1].plot(x_time, ss[:, yid], color="b", label="gym")
+    axs[1].plot(x_time, _ss[:, yid], color="r", label=alg)
+    axs[1].set_xlabel("steps")
+    axs[1].set_ylabel(f"delta next state[{yid}]")
+    axs[1].legend()
+    axs[0].set_title(
+        f"action rollout on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
+    )
+    plt.savefig(os.path.join(results_dir, "action_rollout.png"), dpi=150)
+
     ### plot data space coverage ###
     if plot_data:
         # train data
