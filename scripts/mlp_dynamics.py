@@ -32,8 +32,7 @@ from src.utils.whitening import Whitening
 def experiment(
     alg: str = "mlp",
     sac_agent_dir: str = "models/2022_07_15__14_57_42",
-    n_rollout_episodes: int = 100,
-    n_trajectories: int = 20,  # 80% train, 20% test
+    n_train_episodes: int = 100,
     n_epochs: int = 100,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
@@ -133,17 +132,11 @@ def experiment(
             )
         return action_torch.reshape(-1).numpy()
 
-    ### dynamics model ###
-    model = DNN3(dim_in, dim_out, n_features, lr, device).to(device)
-
-    ####################################################################################################################
-    #### TRAINING
-
-    # pre-fill rollout buffer
+    ### collect train data (fill rollout buffer) ###
     with torch.no_grad():
         print("Collecting rollouts ...")
         # train buffer
-        train_episodes = n_rollout_episodes
+        train_episodes = n_train_episodes
         train_dataset = rollout(
             mdp, policy, n_episodes=train_episodes, show_progress=True
         )
@@ -168,6 +161,12 @@ def experiment(
         new_ys_white = whitening.whitenY(new_ys)
         test_buffer.add(new_xs_white, new_ys_white)
         print("Done.")
+
+    ### dynamics model ###
+    model = DNN3(dim_in, dim_out, n_features, lr, device).to(device)
+
+    ####################################################################################################################
+    #### TRAINING
 
     loss_trace = []
     test_loss_trace = []
@@ -257,18 +256,17 @@ def experiment(
         axs[yi, 0].plot(x_time, (ss - s)[:, yi], color="b", label="data")
         axs[yi, 0].plot(x_time, ss_delta_pred[:, yi], color="r", label=alg)
         axs[yi, 0].set_ylabel(f"delta ss[{yi}]")
-        axs[yi, 0].legend()
         # next state prediction
         axs[yi, 1].plot(x_time, ss[:, yi], color="b", label="data")
         axs[yi, 1].plot(x_time, ss_pred[:, yi], color="r", label=alg)
         axs[yi, 1].set_ylabel(f"ss[{yi}]")
-        axs[yi, 1].legend()
+    axs[0, 1].legend()
     axs[yi, 0].set_xlabel("steps")
     axs[yi, 1].set_xlabel("steps")
     axs[0, 0].set_title("delta state predictions")
     axs[0, 1].set_title("states with predicted delta states")
     fig.suptitle(
-        f"pointwise dynamics on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
+        f"pointwise dynamics on 1 episode ({n_train_episodes} episodes, {n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
 
@@ -310,7 +308,6 @@ def experiment(
     axs[0, 0].legend()
     # plot actions
     axs[0, 1].plot(x_time, a, color="b", label="gym")
-    axs[0, 1].plot(x_time, _a, color="r", label=alg)
     axs[0, 1].set_ylabel("action")
     for yi in range(dim_out):
         # delta next state prediction
@@ -324,7 +321,7 @@ def experiment(
     axs[-1, 0].set_xlabel("steps")
     axs[-1, 1].set_xlabel("steps")
     fig.suptitle(
-        f"action rollout on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
+        f"action rollout on 1 episode ({n_train_episodes} episodes, {n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "action_rollout.png"), dpi=150)
 
@@ -420,7 +417,7 @@ def experiment(
     # twinx.plot(lrs, c="b", label='lr')
     # twinx.set_ylabel("learning rate")
 
-    ax_trace.set_title(f"{alg} loss (n_trajs={n_rollout_episodes}, lr={lr:.0e})")
+    ax_trace.set_title(f"{alg} loss (n_trajs={n_train_episodes}, lr={lr:.0e})")
     fig_trace.legend()
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
