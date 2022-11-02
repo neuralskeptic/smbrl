@@ -53,7 +53,6 @@ def experiment(
     seed: int = 0,
     results_dir: str = "logs/tmp/",
     debug: bool = True,
-    yid: int = 0,  # WIP: train for this next-state id, later train on all
 ):
     ####################################################################################################################
     #### SETUP (saved to yaml)
@@ -71,7 +70,7 @@ def experiment(
     # Results directory
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
     results_dir = os.path.join(
-        repo_dir, results_dir, wandb_group, str(seed), f"s{yid}", timestamp()
+        repo_dir, results_dir, wandb_group, str(seed), timestamp()
     )
     os.makedirs(results_dir, exist_ok=True)
 
@@ -91,7 +90,7 @@ def experiment(
     print(f"Logs in {results_dir}")
 
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5", "a"]
-    y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
+    y_cols = ["_ds0", "_ds1", "_ds2", "_ds3"]
     dim_in = len(x_cols)
     dim_out = len(y_cols)
 
@@ -150,7 +149,7 @@ def experiment(
         )
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
-        new_ys = np2torch((ss - s)[:, yid].reshape(-1, 1))  # delta state4 = ss4 - s4
+        new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
         # ZCA whitening
         whitening = Whitening(new_xs, new_ys)
         new_xs_white = whitening.whitenX(new_xs)
@@ -163,7 +162,7 @@ def experiment(
         )
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
-        new_ys = np2torch((ss - s)[:, yid].reshape(-1, 1))  # delta state4 = ss4 - s4
+        new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
         # whiten like test data
         new_xs_white = whitening.whitenX(new_xs)
         new_ys_white = whitening.whitenY(new_ys)
@@ -247,24 +246,28 @@ def experiment(
     _x = np2torch(np.hstack([state4to6(s), a]))
     _x_white = whitening.whitenX(_x)
     with torch.no_grad():
-        ss_yid_delta_pred_white = model(_x_white.to(device)).cpu()
-    ss_yid_delta_pred = whitening.dewhitenY(ss_yid_delta_pred_white)
-    ss_yid_pred = np2torch(s[:, yid]) + ss_yid_delta_pred.reshape(-1)
+        ss_delta_pred_white = model(_x_white.to(device)).cpu()
+    ss_delta_pred = whitening.dewhitenY(ss_delta_pred_white)
+    ss_pred = np2torch(s) + ss_delta_pred
 
-    figs, axs = plt.subplots(2, 1, figsize=(10, 7))
+    fig, axs = plt.subplots(4, 2, figsize=(10, 7))
     x_time = torch.tensor(range(0, 200))
-    # axs[0]: next state prediction
-    axs[0].plot(x_time, ss[:, yid], color="b", label="data")
-    axs[0].plot(x_time, ss_yid_pred, color="r", label=alg)
-    axs[0].set_ylabel(f"next state[4] [{yid}]")
-    axs[0].legend()
-    # axs[1]: delta next state prediction
-    axs[1].plot(x_time, (ss - s)[:, yid], color="b", label="data")
-    axs[1].plot(x_time, ss_yid_delta_pred.reshape(-1), color="r", label=alg)
-    axs[1].set_xlabel("steps")
-    axs[1].set_ylabel(f"delta next state[4] [{yid}]")
-    axs[1].legend()
-    axs[0].set_title(
+    for yi in range(dim_out):
+        # delta next state prediction
+        axs[yi, 0].plot(x_time, (ss - s)[:, yi], color="b", label="data")
+        axs[yi, 0].plot(x_time, ss_delta_pred[:, yi], color="r", label=alg)
+        axs[yi, 0].set_ylabel(f"delta ss[{yi}]")
+        axs[yi, 0].legend()
+        # next state prediction
+        axs[yi, 1].plot(x_time, ss[:, yi], color="b", label="data")
+        axs[yi, 1].plot(x_time, ss_pred[:, yi], color="r", label=alg)
+        axs[yi, 1].set_ylabel(f"ss[{yi}]")
+        axs[yi, 1].legend()
+    axs[yi, 0].set_xlabel("steps")
+    axs[yi, 1].set_xlabel("steps")
+    axs[0, 0].set_title("delta state predictions")
+    axs[0, 1].set_title("states with predicted delta states")
+    fig.suptitle(
         f"pointwise dynamics on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
@@ -280,42 +283,47 @@ def experiment(
     state4 = state6to4(mdp.reset(None).copy())
     while last is False:
         action = action_iter.__next__()
-        # dynamics model only predicts one dimension; mdp does rest
+        # dynamics model
         _x = np2torch(np.hstack([state4to6(state4), action]))
         _x_white = whitening.whitenX(_x)
         with torch.no_grad():
-            ss_yid_delta_pred_white = model(_x_white.to(device)).cpu()
-        ss_yid_delta_pred = whitening.dewhitenY(ss_yid_delta_pred_white)
-        ss_yid_pred = state4[yid] + ss_yid_delta_pred.reshape(-1)
-        # gym
-        _, reward, absorbing, ssa_dict = mdp.step(action)
-        next_state4_gym = ssa_dict["s"]
-        # merge
-        next_state4 = next_state4_gym.copy()
-        next_state4[yid] = ss_yid_pred
+            ss_delta_pred_white = model(_x_white.to(device)).cpu()
+        ss_delta_pred = whitening.dewhitenY(ss_delta_pred_white)
+        next_state4 = state4 + ss_delta_pred.numpy()
         episode_steps += 1
         if episode_steps >= mdp.info.horizon:
             last = True
+        # get reward from internal gym method
+        reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
         sample = (state4, action, reward, next_state4, absorbing, last)
         open_loop_dataset.append(sample)
         state4 = next_state4.copy()
 
     _s, _a, _r, _ss, _absorb, _last = parse_dataset(open_loop_dataset)
 
-    figs, axs = plt.subplots(2, 1, figsize=(10, 7))
+    fig, axs = plt.subplots(5, 2, figsize=(10, 7))
     x_time = torch.tensor(range(0, 200))
-    # axs[0]: reward
-    axs[0].plot(x_time, r, color="b", label="gym")
-    axs[0].plot(x_time, _r, color="r", label=alg)
-    axs[0].set_ylabel(f"reward")
-    axs[0].legend()
-    # axs[1]: predicted state dimension
-    axs[1].plot(x_time, ss[:, yid], color="b", label="gym")
-    axs[1].plot(x_time, _ss[:, yid], color="r", label=alg)
-    axs[1].set_xlabel("steps")
-    axs[1].set_ylabel(f"delta next state[{yid}]")
-    axs[1].legend()
-    axs[0].set_title(
+    # plot rewards
+    axs[0, 0].plot(x_time, r, color="b", label="gym")
+    axs[0, 0].plot(x_time, _r, color="r", label=alg)
+    axs[0, 0].set_ylabel("reward")
+    axs[0, 0].legend()
+    # plot actions
+    axs[0, 1].plot(x_time, a, color="b", label="gym")
+    axs[0, 1].plot(x_time, _a, color="r", label=alg)
+    axs[0, 1].set_ylabel("action")
+    for yi in range(dim_out):
+        # delta next state prediction
+        axs[yi + 1, 0].plot(x_time, (ss - s)[:, yi], color="b", label="data")
+        axs[yi + 1, 0].plot(x_time, (_ss - _s)[:, yi], color="r", label=alg)
+        axs[yi + 1, 0].set_ylabel(f"delta ss[{yi}]")
+        # next state prediction
+        axs[yi + 1, 1].plot(x_time, ss[:, yi], color="b", label="data")
+        axs[yi + 1, 1].plot(x_time, _ss[:, yi], color="r", label=alg)
+        axs[yi + 1, 1].set_ylabel(f"ss[{yi}]")
+    axs[-1, 0].set_xlabel("steps")
+    axs[-1, 1].set_xlabel("steps")
+    fig.suptitle(
         f"action rollout on 1 episode ({n_rollout_episodes} episodes, {n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "action_rollout.png"), dpi=150)
