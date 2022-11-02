@@ -31,7 +31,7 @@ from src.utils.whitening import Whitening
 
 def experiment(
     alg: str = "mlp",
-    dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
+    sac_agent_dir: str = "models/2022_07_15__14_57_42",
     n_rollout_episodes: int = 100,
     n_trajectories: int = 20,  # 80% train, 20% test
     n_epochs: int = 100,
@@ -40,6 +40,8 @@ def experiment(
     lr: float = 5e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
+    plot_data: bool = False,
+    # plot_data: bool = True,
     plotting: bool = False,
     log_frequency: float = 0.01,  # every p% epochs of n_epochs
     model_save_frequency: float = 0.1,  # every n-th of n_epochs
@@ -74,7 +76,7 @@ def experiment(
     os.makedirs(results_dir, exist_ok=True)
 
     # sac agent dir
-    sac_results_dir = os.path.dirname(os.path.join(repo_dir, dataset_file))
+    sac_results_dir = os.path.join(repo_dir, sac_agent_dir)
     sac_agent_path = os.path.join(repo_dir, sac_results_dir, "agent_end.msh")
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
@@ -85,63 +87,19 @@ def experiment(
     ####################################################################################################################
     #### EXPERIMENT SETUP
 
-    print(f"Alg: {alg}, Seed: {seed}, Dataset: {dataset_file}")
+    print(f"Alg: {alg}, Seed: {seed}")
     print(f"Logs in {results_dir}")
 
-    ### INITIAL DATASET ###
-    # df: [s0-s5, a, r, ss0-ss5, absorb, last]
-    df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
-    df = df[df["traj_id"] < n_trajectories]  # take only n_trajectories
-    df = df.astype("float32")  # otherwise spectral_norm complains
-    ##### qube.step(a) ##### (self._state = th, al, thd, ald)
-    # rwd, done = self._rwd(self._state, a)
-    # self._state, act = self._ctrl_step(a)
-    # obs = np.float32([np.cos(self._state[0]), np.sin(self._state[0]),
-    #                   np.cos(self._state[1]), np.sin(self._state[1]),
-    #                   self._state[2], self._state[3]])
-    # return obs, rwd, done, {'s': self._state, 'a': act}
-    ########################
-    # transform state space: sin/cos to angles (atan2 approx averages errors)
-    df["_s0"] = np.arctan2(df["s1"], df["s0"])
-    df["_s1"] = np.arctan2(df["s3"], df["s2"])
-    df["_s2"] = df["s4"]
-    df["_s3"] = df["s5"]
-    df["_ss0"] = np.arctan2(df["ss1"], df["ss0"])
-    df["_ss1"] = np.arctan2(df["ss3"], df["ss2"])
-    df["_ss2"] = df["ss4"]
-    df["_ss3"] = df["ss5"]
-
-    # add state deltas
-    for i in range(4):
-        df[f"_ds{i}"] = df[f"_ss{i}"] - df[f"_s{i}"]
-    for i in range(6):
-        df[f"ds{i}"] = df[f"ss{i}"] - df[f"s{i}"]
-    traj_dfs = [
-        traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
-    ]
-    train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
-    train_df = pd.concat(train_traj_dfs)
-    test_df = pd.concat(test_traj_dfs)
-
-    # x_cols = ["_s0", "_s1", "_s2", "_s3", "a"]
-    # y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5", "a"]
     y_cols = [f"_ds{yid}"]  # WIP: later train on all outputs
     dim_in = len(x_cols)
     dim_out = len(y_cols)
-    train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
-    test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
-
-    test_x = df2torch(test_x_df).to(device)
-    test_y = df2torch(test_y_df).to(device)
-
-    test_dataset = TensorDataset(test_x, test_y)
-
-    # TODO replace test dataloader with ReplayBuffer
-    test_dataloader_shuf = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     train_buffer = ReplayBuffer(
+        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+    )
+
+    test_buffer = ReplayBuffer(
         dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
     )
 
@@ -184,9 +142,11 @@ def experiment(
 
     # pre-fill rollout buffer
     with torch.no_grad():
-        print("Filling rollout buffer...")
+        print("Collecting rollouts ...")
+        # train buffer
+        train_episodes = n_rollout_episodes
         train_dataset = rollout(
-            mdp, policy, n_episodes=n_rollout_episodes, show_progress=True
+            mdp, policy, n_episodes=train_episodes, show_progress=True
         )
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
@@ -196,7 +156,18 @@ def experiment(
         new_xs_white = whitening.whitenX(new_xs)
         new_ys_white = whitening.whitenY(new_ys)
         train_buffer.add(new_xs_white, new_ys_white)
-        # TODO test rollout buffer (with 25% of train buffer episodes)
+        # test buffer
+        test_episodes = int(train_episodes / 4)
+        test_dataset = rollout(
+            mdp, policy, n_episodes=test_episodes, show_progress=True
+        )
+        s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
+        new_xs = np2torch(np.hstack([state4to6(s), a]))
+        new_ys = np2torch((ss - s)[:, yid].reshape(-1, 1))  # delta state4 = ss4 - s4
+        # whiten like test data
+        new_xs_white = whitening.whitenX(new_xs)
+        new_ys_white = whitening.whitenY(new_ys)
+        test_buffer.add(new_xs_white, new_ys_white)
         print("Done.")
 
     loss_trace = []
@@ -251,11 +222,12 @@ def experiment(
     ####################################################################################################################
     #### EVALUATION
 
-    ## plot pointwise transition prediction (1 episode)
+    ### plot pointwise transition prediction (1 episode) ###
     """pointwise means the model predicts a next_state for every every state,action 
     from in the episode from the dataset. this is explicitly not a rollout, 
     and prediction errors do not add up"""
-    s, a, r, ss, absorb, last = select_first_episodes(train_dataset, 1, parse=True)
+    # s, a, r, ss, absorb, last = select_first_episodes(train_dataset, 1, parse=True)
+    s, a, r, ss, absorb, last = select_first_episodes(test_dataset, 1, parse=True)
     _x = np2torch(np.hstack([state4to6(s), a]))
     _x_white = whitening.whitenX(_x)
     with torch.no_grad():
