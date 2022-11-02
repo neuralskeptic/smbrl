@@ -171,6 +171,7 @@ def experiment(
         print("Done.")
 
     loss_trace = []
+    test_loss_trace = []
     lrs = []
     minib_progress = False
     for n in tqdm(range(n_epochs + 1), position=0):
@@ -200,10 +201,25 @@ def experiment(
             # log
             with torch.no_grad():
                 # use latest minibatch
-                loss_ = loss_trace[-1]
                 y_pred = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
-                logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+
+                # test loss
+                train_buffer.shuffling = False
+                with torch.no_grad():
+                    test_losses = []
+                    for minibatch in test_buffer:
+                        _x_test, _y_test = minibatch
+                        _y_test_pred = model(_x_test.to(device))
+                        _test_loss = torch.nn.MSELoss()(_y_test, _y_test_pred)
+                        test_losses.append(_test_loss.item())
+                test_loss = np.mean(test_losses)
+                test_loss_trace.append(test_loss)
+
+                logstring = (
+                    f"Epoch {n} Train: Loss={loss_trace[-1]:.2}, RMSE={rmse:.2f}"
+                )
+                logstring += f", test loss={test_loss_trace[-1]:.2}"
                 logstring += f", bufsize={train_buffer.size}, lr={lrs[-1]:.2}"
                 # logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
@@ -328,24 +344,25 @@ def experiment(
 
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
-    ax_trace.plot(loss_trace, c="k")
+
+    def scaled_xaxis(y_points, n_on_axis):
+        return np.arange(len(y_points)) / len(y_points) * n_on_axis
+
+    x_train_loss = scaled_xaxis(loss_trace, n_epochs)
+    ax_trace.plot(x_train_loss, loss_trace, c="k", label="train loss")
+    x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
+    ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
     # ax_trace.set_yticks(0)  # DEBUG show loss yaxis but break rest of plot
     ax_trace.set_yscale("symlog")
-    ax_trace.set_xlabel("minibatches")
+    ax_trace.set_xlabel("epochs")
     ax_trace.set_ylabel("loss")
 
     # twinx = ax_trace.twinx()  # plot lr on other y axis
-    # twinx.plot(lrs, c="b")
+    # twinx.plot(lrs, c="b", label='lr')
     # twinx.set_ylabel("learning rate")
 
-    twiny = ax_trace.twiny()
-    twiny.set_xlabel("epochs")
-    twiny.xaxis.set_ticks_position("bottom")
-    twiny.xaxis.set_label_position("bottom")
-    twiny.spines.bottom.set_position(("axes", -0.2))
-    twiny.set_xlim(0, n_epochs)
-    twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax_trace.set_title(f"{alg} loss (n_trajs={n_rollout_episodes}, lr={lr:.0e})")
+    fig_trace.legend()
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     if plotting:
