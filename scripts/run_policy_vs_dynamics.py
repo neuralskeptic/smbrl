@@ -26,18 +26,16 @@ from src.utils.conversion_utils import df2torch, np2torch, qube_rollout2df
 from src.utils.environment_tools import state4to6, state6to4
 from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
+from src.utils.whitening import WhiteningWrapper
 
 
 def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
     snngp_policy_dir: str = "logs/tmp/snngp_clone_SAC/0/2022_10_21__22_05_47",
     nlm_policy_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_10_21__19_40_42",
-    dynamics_dir_0: str = "logs/tmp/mlp_learn_dynamics/0/s0/2022_11_02__11_01_56",
-    dynamics_dir_1: str = "logs/tmp/mlp_learn_dynamics/0/s1/2022_11_02__11_02_12",
-    dynamics_dir_2: str = "logs/tmp/mlp_learn_dynamics/0/s2/2022_11_02__11_02_24",
-    dynamics_dir_3: str = "logs/tmp/mlp_learn_dynamics/0/s3/2022_11_02__11_02_40",
+    dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_02__20_50_34",
     policy_alg: str = "sac",  # of ['sac', 'snngp', 'nlm']
-    dynamics_alg: str = "gym",  # of ['gym', 'mlp', 'snngp']
+    dynamics_alg: str = "mlp",  # of ['gym', 'mlp', 'snngp']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,
     # render: bool = True,
@@ -59,12 +57,7 @@ def render_policy(
     sac_agent_path = os.path.join(repo_dir, sac_policy_dir, "agent_end.msh")
     snngp_agent_path = os.path.join(repo_dir, snngp_policy_dir, "agent_end.pth")
     nlm_agent_path = os.path.join(repo_dir, nlm_policy_dir, "agent_end.pth")
-    dynamics_paths = [
-        os.path.join(repo_dir, dynamics_dir_0, "agent_end.pth"),
-        os.path.join(repo_dir, dynamics_dir_1, "agent_end.pth"),
-        os.path.join(repo_dir, dynamics_dir_2, "agent_end.pth"),
-        os.path.join(repo_dir, dynamics_dir_3, "agent_end.pth"),
-    ]
+    dynamics_path = os.path.join(repo_dir, dynamics_dir, "agent_end.pth")
 
     # load configs
     def load_config(config_dir):
@@ -78,12 +71,7 @@ def render_policy(
     sac_args = load_config(sac_policy_dir)
     snngp_args = load_config(snngp_policy_dir)
     nlm_args = load_config(nlm_policy_dir)
-    dyn_args = [
-        load_config(dynamics_dir_0),
-        load_config(dynamics_dir_1),
-        load_config(dynamics_dir_2),
-        load_config(dynamics_dir_3),
-    ]
+    dyn_args = load_config(dynamics_dir)
 
     # dims
     s6_dim = 6
@@ -147,31 +135,23 @@ def render_policy(
     # return obs, rwd, done, {'s': self._state, 'a': act}
     ########################
     if dynamics_alg == "mlp":
-        dyn_models = []
-        for i in range(s4_dim):  # n dynamics models
-            args = dyn_args[i]
-            model_path = dynamics_paths[i]
-            model = DNN3(
+        model = WhiteningWrapper(
+            DNN3(
                 d_in=s6_dim + a_dim,
-                d_out=1,
-                d_hidden=args["n_features"],
-                lr=args["lr"],
+                d_out=s4_dim,
+                d_hidden=dyn_args["n_features"],
+                lr=dyn_args["lr"],
                 device=device,
             )
-            state_dict = torch.load(model_path)
-            model.load_state_dict(state_dict)
-            dyn_models.append(model)
+        )
+        state_dict = torch.load(dynamics_path)
+        model.load_state_dict(state_dict)
 
         def dynamics(state4, action):
-            state6 = state4to6(state4)
-            state_torch = np2torch(state6).reshape(-1, s6_dim).to(device)
-            action_torch = np2torch(action).reshape(-1, a_dim).to(device)
-            state_action = torch.cat((state_torch, action_torch), dim=1)
-            next_state4 = np.empty(s4_dim)
-            breakpoint()
-            for si in range(s4_dim):
-                y_pred = dyn_models[si](state_action)
-                next_state4[si] = state4[si] + y_pred.cpu().numpy()
+            _x = np2torch(np.hstack([state4to6(state4), action]))
+            with torch.no_grad():
+                ss_delta_pred = model(_x.to(device)).cpu()
+            next_state4 = state4 + ss_delta_pred.numpy()
             reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
             # next_state, reward, absorbing, last
             return next_state4, reward, False, False
