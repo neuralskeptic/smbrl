@@ -26,7 +26,7 @@ from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
-from src.utils.whitening import Whitening
+from src.utils.whitening import WhiteningWrapper
 
 
 def experiment(
@@ -143,11 +143,7 @@ def experiment(
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
         new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
-        # ZCA whitening
-        whitening = Whitening(new_xs, new_ys)
-        new_xs_white = whitening.whitenX(new_xs)
-        new_ys_white = whitening.whitenY(new_ys)
-        train_buffer.add(new_xs_white, new_ys_white)
+        train_buffer.add(new_xs, new_ys)
         # test buffer
         test_episodes = int(train_episodes / 4)
         test_dataset = rollout(
@@ -156,14 +152,12 @@ def experiment(
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
         new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
-        # whiten like test data
-        new_xs_white = whitening.whitenX(new_xs)
-        new_ys_white = whitening.whitenY(new_ys)
-        test_buffer.add(new_xs_white, new_ys_white)
+        test_buffer.add(new_xs, new_ys)
         print("Done.")
 
     ### dynamics model ###
-    model = DNN3(dim_in, dim_out, n_features, lr, device).to(device)
+    model = WhiteningWrapper(DNN3(dim_in, dim_out, n_features, lr, device)).to(device)
+    model.init_whitening(train_buffer.xs, train_buffer.ys)
 
     ####################################################################################################################
     #### TRAINING
@@ -243,10 +237,8 @@ def experiment(
     # s, a, r, ss, absorb, last = select_first_episodes(train_dataset, 1, parse=True)
     s, a, r, ss, absorb, last = select_first_episodes(test_dataset, 1, parse=True)
     _x = np2torch(np.hstack([state4to6(s), a]))
-    _x_white = whitening.whitenX(_x)
     with torch.no_grad():
-        ss_delta_pred_white = model(_x_white.to(device)).cpu()
-    ss_delta_pred = whitening.dewhitenY(ss_delta_pred_white)
+        ss_delta_pred = model(_x.to(device)).cpu()
     ss_pred = np2torch(s) + ss_delta_pred
 
     fig, axs = plt.subplots(4, 2, figsize=(10, 7))
@@ -283,10 +275,8 @@ def experiment(
         action = action_iter.__next__()
         # dynamics model
         _x = np2torch(np.hstack([state4to6(state4), action]))
-        _x_white = whitening.whitenX(_x)
         with torch.no_grad():
-            ss_delta_pred_white = model(_x_white.to(device)).cpu()
-        ss_delta_pred = whitening.dewhitenY(ss_delta_pred_white)
+            ss_delta_pred = model(_x.to(device)).cpu()
         next_state4 = state4 + ss_delta_pred.numpy()
         episode_steps += 1
         if episode_steps >= mdp.info.horizon:
