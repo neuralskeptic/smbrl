@@ -4,19 +4,15 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import quanser_robots
 import seaborn as sns
 import torch
 import yaml
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
-from matplotlib.ticker import MaxNLocator
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import compute_J, parse_dataset, select_first_episodes
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer

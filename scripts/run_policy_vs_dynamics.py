@@ -34,7 +34,7 @@ def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
     snngp_policy_dir: str = "logs/tmp/snngp_clone_SAC/0/2022_10_21__22_05_47",
     nlm_policy_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_10_21__19_40_42",
-    dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_02__20_50_34",
+    mlp_dynamics_dir: str = "logs/tmp/mlp_learn_dynamics/0/2022_11_02__21_16_55",
     dynamics_alg: str = "mlp",  # of ['gym', 'mlp', 'snngp']
     policy_alg: str = "snngp",  # of ['sac', 'snngp', 'nlm']
     use_cuda: bool = True,  # gp too slow on cpu
@@ -58,7 +58,7 @@ def render_policy(
     sac_agent_path = os.path.join(repo_dir, sac_policy_dir, "agent_end.msh")
     snngp_agent_path = os.path.join(repo_dir, snngp_policy_dir, "agent_end.pth")
     nlm_agent_path = os.path.join(repo_dir, nlm_policy_dir, "agent_end.pth")
-    dynamics_path = os.path.join(repo_dir, dynamics_dir, "agent_end.pth")
+    mlp_dynamics_path = os.path.join(repo_dir, mlp_dynamics_dir, "agent_end.pth")
 
     # load configs
     def load_config(config_dir):
@@ -72,7 +72,7 @@ def render_policy(
     sac_args = load_config(sac_policy_dir)
     snngp_args = load_config(snngp_policy_dir)
     nlm_args = load_config(nlm_policy_dir)
-    dyn_args = load_config(dynamics_dir)
+    mlp_dyn_args = load_config(mlp_dynamics_dir)
 
     # dims
     s6_dim = 6
@@ -140,53 +140,24 @@ def render_policy(
             DNN3(
                 d_in=s6_dim + a_dim,
                 d_out=s4_dim,
-                d_hidden=dyn_args["n_features"],
-                lr=dyn_args["lr"],
+                d_hidden=mlp_dyn_args["n_features"],
+                lr=mlp_dyn_args["lr"],
                 device=device,
             )
         )
-        state_dict = torch.load(dynamics_path)
+        state_dict = torch.load(mlp_dynamics_path)
         model.load_state_dict(state_dict)
 
         def dynamics(state4, action):
             _x = np2torch(np.hstack([state4to6(state4), action]))
-            with torch.no_grad():
-                ss_delta_pred = model(_x.to(device)).cpu()
+            ss_delta_pred = model(_x.to(device)).cpu()
             next_state4 = state4 + ss_delta_pred.numpy()
             reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
             # next_state, reward, absorbing, last
             return next_state4, reward, False, False
 
     elif dynamics_alg == "snngp":
-        dyn_models = []
-        for i in range(6):  # n dynamics models
-            args = dyn_args[i]
-            model_path = dynamics_paths[i]
-            model = SpectralNormalizedNeuralGaussianProcess(
-                s6_dim + a_dim,
-                1,
-                args["n_features"],
-                args["lr"],
-                device=device,
-            )
-            state_dict = torch.load(model_path)
-            model.load_state_dict(state_dict)
-            dyn_models.append(model)
-
-        def dynamics(state, action):
-            state_torch = np2torch(state).reshape([-1, s6_dim]).to(device)
-            action_torch = np2torch(action).reshape([-1, a_dim]).to(device)
-            state_action = torch.cat((state_torch, action_torch), dim=1)
-            next_state_torch = torch.empty(s6_dim)
-            for si in range(s6_dim):
-                mu, _, _, _ = dyn_models[si](state_action)
-                next_state_torch[si] = mu + state_torch[0, si]
-            next_state = next_state_torch.cpu().reshape(-1).numpy()
-            next_state4 = state6to4(next_state)
-            reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
-            # next_state, reward, absorbing, last
-            return next_state, reward, False, False
-
+        pass
     elif dynamics_alg == "gym":
 
         def dynamics(state, action):
