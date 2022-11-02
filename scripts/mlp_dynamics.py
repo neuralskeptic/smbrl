@@ -253,12 +253,20 @@ def experiment(
     )
     plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
 
-    # plot data space coverage
-    df = dataset2df_4(train_dataset)
-    # add column for trajectory id
-    df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
-    cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
-    sns.pairplot(df[cols], hue="traj_id")
+    ### plot data space coverage ###
+    if plot_data:
+        # train data
+        df = dataset2df_4(train_dataset)
+        df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
+        sns.pairplot(df[cols], hue="traj_id")
+        plt.title("train data")
+        # test data
+        df = dataset2df_4(test_dataset)
+        df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
+        sns.pairplot(df[cols], hue="traj_id")
+        plt.title("test data")
 
     # ## plot buffer
     # buf_pred_list = []
