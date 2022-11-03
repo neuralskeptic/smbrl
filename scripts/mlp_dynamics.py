@@ -365,33 +365,6 @@ def experiment(
     # ax.legend()
     # plt.savefig(os.path.join(results_dir, "traj_plots__test_data_pred.png"), dpi=150)
 
-    # # plot train and test data and prediction
-    # fig, ax = plt.subplots(1, 1)
-    # ax.scatter(x_train, y_train, c="grey", marker="x", s=5, label="train")
-    # ax.scatter(x_test, y_test, c="k", s=5, label="test")
-    # # mu_train, sigma_train, _, _ = model(x_train)
-    # # plt.errorbar(
-    # #     x_train.reshape(-1),
-    # #     mu_train.reshape(-1),
-    # #     torch.diag(sigma_train),
-    # #     fmt="none",
-    # #     color="r",
-    # #     label="pred",
-    # # )
-    # mu_test, sigma_test, _, _ = model(x_test)
-    # plt.errorbar(
-    #     x_test.reshape(-1),
-    #     mu_test.reshape(-1),
-    #     torch.diag(sigma_test),
-    #     fmt="none",
-    #     color="r",
-    #     label="pred",
-    # )
-    # ax.set_xlabel("x")
-    # ax.set_ylabel("y")
-    # ax.legend()
-    # ax.set_title(f"{alg} (N={n_datapoints}, {n_epochs} epochs)")
-
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
 
