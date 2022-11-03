@@ -313,18 +313,26 @@ def experiment(
 
     ### plot data space coverage ###
     if plot_data:
+        # cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
+        cols = ["theta", "alpha", "theta_dot", "alpha_dot"]
         # train data
         df = dataset2df_4(train_dataset)
-        df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
-        cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
-        sns.pairplot(df[cols], hue="traj_id")
-        plt.title("train data")
+        # df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        # g = sns.PairGrid(df[cols], hue="traj_id")
+        g = sns.PairGrid(df[cols])
+        g.map_diag(sns.histplot, hue=None)
+        g.map_offdiag(plt.plot)
+        g.fig.suptitle("train data", y=1.01)
+        g.savefig(os.path.join(results_dir, "train_data.png"), dpi=150)
         # test data
         df = dataset2df_4(test_dataset)
-        df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
-        cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
-        sns.pairplot(df[cols], hue="traj_id")
-        plt.title("test data")
+        # df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        # g = sns.PairGrid(df[cols], hue="traj_id")
+        g = sns.PairGrid(df[cols])
+        g.map_diag(sns.histplot, hue=None)
+        g.map_offdiag(plt.plot)
+        g.figure.suptitle(f"test data ({test_episodes} episodes)", y=1.01)
+        g.savefig(os.path.join(results_dir, "test_data.png"), dpi=150)
 
     # ## plot buffer
     # buf_pred_list = []
