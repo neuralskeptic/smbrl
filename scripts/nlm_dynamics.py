@@ -16,7 +16,7 @@ from mushroom_rl.utils.dataset import parse_dataset, select_first_episodes
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
-from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
+from src.models.linear_bayesian_models import NeuralLinearModel
 from src.utils.conversion_utils import dataset2df_4, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.seeds import fix_random_seed
@@ -25,7 +25,7 @@ from src.utils.whitening import WhiteningWrapper
 
 
 def experiment(
-    alg: str = "snngp",
+    alg: str = "nlm",
     sac_agent_dir: str = "models/2022_07_15__14_57_42",
     n_train_episodes: int = 100,
     n_epochs: int = 100,
@@ -42,7 +42,7 @@ def experiment(
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
     # wandb_entity: str = "showmezeplozz",
-    wandb_group: str = "snngp_learn_dynamics",
+    wandb_group: str = "nlm_learn_dynamics",
     # wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
@@ -150,11 +150,9 @@ def experiment(
         test_buffer.add(new_xs, new_ys)
         print("Done.")
 
-    ### snngp agent ###
-    model = SpectralNormalizedNeuralGaussianProcess(
-        dim_in, dim_out, n_features, lr, device=device
-    )
-    # model = WhiteningWrapper(SpectralNormalizedNeuralGaussianProcess(
+    ### nlm agent ###
+    model = NeuralLinearModel(dim_in, dim_out, n_features, lr, device=device)
+    # model = WhiteningWrapper(NeuralLinearModel(
     #     dim_in, dim_out, n_features, lr, device=device
     # ))
     # model.init_whitening(train_buffer.xs, train_buffer.ys)
