@@ -12,14 +12,13 @@ from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J, parse_dataset, select_first_episodes
+from mushroom_rl.utils.dataset import parse_dataset, select_first_episodes
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.dnns import DNN3
-from src.utils.conversion_utils import dataset2df_4, df2torch, np2torch
+from src.utils.conversion_utils import dataset2df_4, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
-from src.utils.plotting_utils import plot_gp
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
 from src.utils.whitening import WhiteningWrapper
