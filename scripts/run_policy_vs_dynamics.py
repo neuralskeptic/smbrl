@@ -32,10 +32,12 @@ from src.utils.seeds import fix_random_seed
 def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
     snngp_policy_dir: str = "logs/tmp/snngp_clone_SAC/0/2022_10_21__22_05_47",
-    nlm_policy_dir: str = "logs/tmp/nlm_clone_SAC/0/2022_10_21__19_40_42",
-    mlp_dynamics_dir: str = "logs/tmp/mlp_learn_dynamics/0/2022_11_02__21_16_55",
-    dynamics_alg: str = "mlp",  # of ['gym', 'mlp', 'snngp']
-    policy_alg: str = "snngp",  # of ['sac', 'snngp', 'nlm']
+    nlm_policy_dir: str = "debug/logs/tmp/nlm_clone_SAC/0/2022_11_10__03_05_44",
+    # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__03_40_49",  # no y whitening
+    mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__03_43_09",  # y whitening
+    nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_10__03_38_51",
+    dynamics_alg: str = "nlm",  # of ['gym', 'mlp', 'nlm', 'snngp']
+    policy_alg: str = "nlm",  # of ['sac', 'snngp', 'nlm']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,
     # render: bool = True,
@@ -58,6 +60,7 @@ def render_policy(
     snngp_agent_path = os.path.join(repo_dir, snngp_policy_dir, "agent_end.pth")
     nlm_agent_path = os.path.join(repo_dir, nlm_policy_dir, "agent_end.pth")
     mlp_dynamics_path = os.path.join(repo_dir, mlp_dynamics_dir, "agent_end.pth")
+    nlm_dynamics_path = os.path.join(repo_dir, nlm_dynamics_dir, "agent_end.pth")
 
     # load configs
     def load_config(config_dir):
@@ -72,6 +75,7 @@ def render_policy(
     snngp_args = load_config(snngp_policy_dir)
     nlm_args = load_config(nlm_policy_dir)
     mlp_dyn_args = load_config(mlp_dynamics_dir)
+    nlm_dyn_args = load_config(nlm_dynamics_dir)
 
     # dims
     s6_dim = 6
@@ -85,7 +89,6 @@ def render_policy(
 
     # MDP
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
-    mdp.seed(seed)
 
     # Agent
     if policy_alg == "sac":
@@ -99,27 +102,27 @@ def render_policy(
             return action.cpu().reshape(-1).numpy()
 
     elif policy_alg == "nlm":
-        agent = NeuralLinearModel(
-            s6_dim, a_dim, nlm_args["n_features"], nlm_args["lr"], device=device
-        )
+        agent = NeuralLinearModel(s6_dim, a_dim, nlm_args["n_features"])
+        agent.to(device)
         state_dict = torch.load(nlm_agent_path)
         agent.load_state_dict(state_dict)
 
         def policy(state):
             state_torch = np2torch(state).reshape(1, -1).to(device)
-            mu, _, _, _ = agent(state_torch)
+            mu = agent(state_torch, covs=False)
             return mu.cpu().reshape(-1).numpy()
 
     elif policy_alg == "snngp":
         agent = SpectralNormalizedNeuralGaussianProcess(
-            s6_dim, a_dim, snngp_args["n_features"], snngp_args["lr"], device=device
+            s6_dim, a_dim, snngp_args["n_features"]
         )
+        agent.to(device)
         state_dict = torch.load(snngp_agent_path)
         agent.load_state_dict(state_dict)
 
         def policy(state):
             state_torch = np2torch(state).reshape(1, -1).to(device)
-            mu, _, _, _ = agent(state_torch)
+            mu = agent(state_torch, covs=False)
             return mu.cpu().reshape(-1).numpy()
 
     else:
@@ -135,21 +138,36 @@ def render_policy(
     # return obs, rwd, done, {'s': self._state, 'a': act}
     ########################
     if dynamics_alg == "mlp":
-        model = WhiteningWrapper(
-            DNN3(
-                d_in=s6_dim + a_dim,
-                d_out=s4_dim,
-                d_hidden=mlp_dyn_args["n_features"],
-                lr=mlp_dyn_args["lr"],
-                device=device,
-            )
+        model = DNN3(
+            d_in=s6_dim + a_dim,
+            d_out=s4_dim,
+            d_hidden=mlp_dyn_args["n_features"],
         )
+        model.to(device)
         state_dict = torch.load(mlp_dynamics_path)
         model.load_state_dict(state_dict)
 
         def dynamics(state4, action):
             _x = np2torch(np.hstack([state4to6(state4), action]))
             ss_delta_pred = model(_x.to(device)).cpu()
+            next_state4 = state4 + ss_delta_pred.numpy()
+            reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
+            # next_state, reward, absorbing, last
+            return next_state4, reward, False, False
+
+    elif dynamics_alg == "nlm":
+        model = NeuralLinearModel(
+            dim_x=s6_dim + a_dim,
+            dim_y=s4_dim,
+            dim_features=nlm_dyn_args["n_features"],
+        )
+        model.to(device)
+        state_dict = torch.load(nlm_dynamics_path)
+        model.load_state_dict(state_dict)
+
+        def dynamics(state4, action):
+            _x = np2torch(np.hstack([state4to6(state4), action]))
+            ss_delta_pred = model(_x.to(device), covs=False).cpu()
             next_state4 = state4 + ss_delta_pred.numpy()
             reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
             # next_state, reward, absorbing, last
@@ -173,7 +191,8 @@ def render_policy(
         ##### RUN AGENT for one episode #####
         dataset = list()
         episode_steps = 0
-        state6 = mdp.reset(None).copy()
+        mdp.seed(seed + i)
+        state6 = mdp.reset().copy()
         state4 = state6to4(state6)
 
         last = False
