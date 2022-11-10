@@ -1,4 +1,3 @@
-import json
 import os
 import time
 
@@ -30,7 +29,7 @@ def experiment(
     n_epochs: int = 100,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
-    lr: float = 5e-3,
+    lr: float = 1e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
     plot_data: bool = False,
@@ -179,7 +178,7 @@ def experiment(
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
 
                 # test loss
-                train_buffer.shuffling = False
+                test_buffer.shuffling = False
                 with torch.no_grad():
                     test_losses = []
                     for minibatch in test_buffer:

@@ -27,10 +27,10 @@ def experiment(
     alg: str = "mlp",
     sac_agent_dir: str = "models/2022_07_15__14_57_42",
     n_train_episodes: int = 100,
-    n_epochs: int = 100,
+    n_epochs: int = 300,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
-    lr: float = 5e-3,
+    lr: float = 1e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
     plot_data: bool = False,
@@ -196,7 +196,7 @@ def experiment(
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
 
                 # test loss
-                train_buffer.shuffling = False
+                test_buffer.shuffling = False
                 with torch.no_grad():
                     test_losses = []
                     for minibatch in test_buffer:
