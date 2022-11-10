@@ -240,20 +240,19 @@ def render_policy(
 
     if plot:
         fig, axs = plt.subplots(5, 2, figsize=(10, 7))
-        x_time = torch.tensor(range(0, 200))
         for dataset in datasets:
             s, a, r, ss, absorb, last = parse_dataset(dataset)
+            x_time = torch.tensor(range(0, len(s)))
             # plot rewards
             axs[0, 0].plot(x_time, r)
             # plot actions
-            axs[0, 1].plot(x_time, a, color="b", label="gym")
+            axs[0, 1].plot(x_time, a, color="b")
             for yi in range(s4_dim):
                 # delta next state prediction
                 axs[yi + 1, 0].plot(x_time, (ss - s)[:, yi])
                 # next state prediction
                 axs[yi + 1, 1].plot(x_time, ss[:, yi])
         axs[0, 0].set_ylabel("reward")
-        axs[0, 0].legend()
         axs[0, 1].set_ylabel("action")
         for yi in range(s4_dim):
             axs[yi + 1, 0].set_ylabel(f"delta ss[{yi}]")
