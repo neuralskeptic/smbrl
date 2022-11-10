@@ -96,12 +96,8 @@ def experiment(
     )
 
     ### mdp ###
-    try:
-        with open(os.path.join(sac_results_dir, "args.json")) as f:
-            sac_args = json.load(f)
-    except:
-        with open(os.path.join(sac_results_dir, "args.yaml")) as f:
-            sac_args = yaml.load(f, Loader=yaml.Loader)
+    with open(os.path.join(sac_results_dir, "args.yaml")) as f:
+        sac_args = yaml.load(f, Loader=yaml.Loader)
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
     mdp.seed(seed)
 
@@ -149,7 +145,7 @@ def experiment(
         test_buffer.add(new_xs, new_ys)
         print("Done.")
 
-    ### nlm agent ###
+    ### agent ###
     model = NeuralLinearModel(dim_in, dim_out, n_features)
     model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
     model.to(device)

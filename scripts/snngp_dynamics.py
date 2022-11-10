@@ -21,7 +21,6 @@ from src.utils.conversion_utils import dataset2df_4, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
-from src.utils.whitening import WhiteningWrapper
 
 
 def experiment(
@@ -97,12 +96,8 @@ def experiment(
     )
 
     ### mdp ###
-    try:
-        with open(os.path.join(sac_results_dir, "args.json")) as f:
-            sac_args = json.load(f)
-    except:
-        with open(os.path.join(sac_results_dir, "args.yaml")) as f:
-            sac_args = yaml.load(f, Loader=yaml.Loader)
+    with open(os.path.join(sac_results_dir, "args.yaml")) as f:
+        sac_args = yaml.load(f, Loader=yaml.Loader)
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
     mdp.seed(seed)
 
@@ -150,49 +145,38 @@ def experiment(
         test_buffer.add(new_xs, new_ys)
         print("Done.")
 
-    ### snngp agent ###
-    model = SpectralNormalizedNeuralGaussianProcess(
-        dim_in, dim_out, n_features, lr, device=device
-    )
-    # model = WhiteningWrapper(SpectralNormalizedNeuralGaussianProcess(
-    #     dim_in, dim_out, n_features, lr, device=device
-    # ))
-    # model.init_whitening(train_buffer.xs, train_buffer.ys)
+    ### agent ###
+    model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features)
+    # model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
+    model.init_whitening(train_buffer.xs, train_buffer.ys)
+    model.to(device)
+
+    ### optimizer
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     ####################################################################################################################
     #### TRAINING
 
     loss_trace = []
     test_loss_trace = []
-    lrs = []
     minib_progress = False
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
             tqdm(train_buffer, leave=False, position=1, disable=not minib_progress)
         ):
             x, y = minibatch
-            model.opt.zero_grad()
-            y_pred = model(x)
-            loss = model.elbo_loss(x, y)
+            opt.zero_grad()
+            loss = -model.elbo(x, y)
             loss.backward()
-            model.opt.step()
+            opt.step()
             loss_trace.append(loss.detach().item())
-
-            # log lr in sync with loss (for plotting together)
-            lrs.append(model.opt.param_groups[0]["lr"])
-
-        # if n > 5000:
-        #     # decaying lr
-        #     tau_decay = 3000
-        #     model.opt.param_groups[0]["lr"] *= np.exp(-1 / tau_decay)
 
         # log metrics
         if n % (n_epochs * log_frequency) == 0:
-            # print(f"GPU MEM LEAK: {torch.cuda.memory_allocated():,} B".replace(",", "_"))
             # log
             with torch.no_grad():
                 # use latest minibatch
-                y_pred = model(x)
+                y_pred = model(x, covs=False)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
 
                 # test loss
@@ -201,8 +185,7 @@ def experiment(
                     test_losses = []
                     for minibatch in test_buffer:
                         _x_test, _y_test = minibatch
-                        _y_test_pred = model(_x_test.to(device))
-                        _test_loss = torch.nn.MSELoss()(_y_test, _y_test_pred)
+                        _test_loss = -model.elbo(_x_test, _y_test)
                         test_losses.append(_test_loss.item())
                 test_loss = np.mean(test_losses)
                 test_loss_trace.append(test_loss)
@@ -211,8 +194,6 @@ def experiment(
                     f"Epoch {n} Train: Loss={loss_trace[-1]:.2}, RMSE={rmse:.2f}"
                 )
                 logstring += f", test loss={test_loss_trace[-1]:.2}"
-                logstring += f", bufsize={train_buffer.size}, lr={lrs[-1]:.2}"
-                # logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
                     f.write(logstring + "\n")
@@ -220,8 +201,6 @@ def experiment(
         if n % (n_epochs * model_save_frequency) == 0:
             # Save the agent
             torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
-
-    mdp.stop()
 
     # Save the agent after training
     torch.save(model.state_dict(), os.path.join(results_dir, "agent_end.pth"))
@@ -237,7 +216,8 @@ def experiment(
     s, a, r, ss, absorb, last = select_first_episodes(test_dataset, 1, parse=True)
     _x = np2torch(np.hstack([state4to6(s), a]))
     with torch.no_grad():
-        ss_delta_pred = model(_x.to(device)).cpu()
+        ss_delta_pred = model(_x.to(device), covs=False)
+        ss_delta_pred = ss_delta_pred.cpu()
     ss_pred = np2torch(s) + ss_delta_pred
 
     fig, axs = plt.subplots(4, 2, figsize=(10, 7))
@@ -257,7 +237,7 @@ def experiment(
     axs[0, 0].set_title("delta state predictions")
     axs[0, 1].set_title("states with predicted delta states")
     fig.suptitle(
-        f"pointwise dynamics on 1 episode ({n_train_episodes} episodes, {n_epochs} epochs, lr={lr})"
+        f"{alg} pointwise dynamics on 1 episode ({n_train_episodes} episodes, {n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "pointwise_dynamics_pred.png"), dpi=150)
 
@@ -275,8 +255,8 @@ def experiment(
         # dynamics model
         _x = np2torch(np.hstack([state4to6(state4), action]))
         with torch.no_grad():
-            ss_delta_pred = model(_x.to(device)).cpu()
-        next_state4 = state4 + ss_delta_pred.numpy()
+            ss_delta_pred = model(_x.to(device), covs=False)
+        next_state4 = state4 + ss_delta_pred.cpu().numpy()
         episode_steps += 1
         if episode_steps >= mdp.info.horizon:
             last = True
@@ -310,7 +290,7 @@ def experiment(
     axs[-1, 0].set_xlabel("steps")
     axs[-1, 1].set_xlabel("steps")
     fig.suptitle(
-        f"action rollout on 1 episode ({n_train_episodes} episodes, {n_epochs} epochs, lr={lr})"
+        f"{alg} action rollout on 1 episode ({n_train_episodes} episodes, {n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "action_rollout.png"), dpi=150)
 
@@ -378,15 +358,9 @@ def experiment(
     ax_trace.plot(x_train_loss, loss_trace, c="k", label="train loss")
     x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
     ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
-    # ax_trace.set_yticks(0)  # DEBUG show loss yaxis but break rest of plot
     ax_trace.set_yscale("symlog")
     ax_trace.set_xlabel("epochs")
     ax_trace.set_ylabel("loss")
-
-    # twinx = ax_trace.twinx()  # plot lr on other y axis
-    # twinx.plot(lrs, c="b", label='lr')
-    # twinx.set_ylabel("learning rate")
-
     ax_trace.set_title(f"{alg} loss (n_trajs={n_train_episodes}, lr={lr:.0e})")
     fig_trace.legend()
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)

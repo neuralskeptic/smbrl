@@ -12,13 +12,10 @@ from matplotlib import pyplot as plt
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import parse_dataset
-from mushroom_rl.utils.preprocessors import StandardizationPreprocessor
-from sklearn.model_selection import train_test_split
 from torch.distributions import MultivariateNormal
 from tqdm import tqdm
 
 from src.models.dnns import DNN3
-from src.models.gp_models import ExactGPModel
 from src.models.linear_bayesian_models import (
     NeuralLinearModel,
     SpectralNormalizedNeuralGaussianProcess,
@@ -36,8 +33,9 @@ def render_policy(
     # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__03_40_49",  # no y whitening
     mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__03_43_09",  # y whitening
     nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_10__03_38_51",
-    dynamics_alg: str = "nlm",  # of ['gym', 'mlp', 'nlm', 'snngp']
-    policy_alg: str = "nlm",  # of ['sac', 'snngp', 'nlm']
+    snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_16_26",
+    dynamics_alg: str = "snngp",  # of ['gym', 'mlp', 'nlm', 'snngp']
+    policy_alg: str = "sac",  # of ['sac', 'snngp', 'nlm']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,
     # render: bool = True,
@@ -61,6 +59,7 @@ def render_policy(
     nlm_agent_path = os.path.join(repo_dir, nlm_policy_dir, "agent_end.pth")
     mlp_dynamics_path = os.path.join(repo_dir, mlp_dynamics_dir, "agent_end.pth")
     nlm_dynamics_path = os.path.join(repo_dir, nlm_dynamics_dir, "agent_end.pth")
+    snngp_dynamics_path = os.path.join(repo_dir, snngp_dynamics_dir, "agent_end.pth")
 
     # load configs
     def load_config(config_dir):
@@ -76,6 +75,7 @@ def render_policy(
     nlm_args = load_config(nlm_policy_dir)
     mlp_dyn_args = load_config(mlp_dynamics_dir)
     nlm_dyn_args = load_config(nlm_dynamics_dir)
+    snngp_dyn_args = load_config(snngp_dynamics_dir)
 
     # dims
     s6_dim = 6
@@ -174,7 +174,23 @@ def render_policy(
             return next_state4, reward, False, False
 
     elif dynamics_alg == "snngp":
-        pass
+        model = SpectralNormalizedNeuralGaussianProcess(
+            dim_x=s6_dim + a_dim,
+            dim_y=s4_dim,
+            dim_features=snngp_dyn_args["n_features"],
+        )
+        model.to(device)
+        state_dict = torch.load(snngp_dynamics_path)
+        model.load_state_dict(state_dict)
+
+        def dynamics(state4, action):
+            _x = np2torch(np.hstack([state4to6(state4), action]))
+            ss_delta_pred = model(_x.to(device), covs=False).cpu()
+            next_state4 = state4 + ss_delta_pred.numpy()
+            reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
+            # next_state, reward, absorbing, last
+            return next_state4, reward, False, False
+
     elif dynamics_alg == "gym":
 
         def dynamics(state, action):
