@@ -1,26 +1,25 @@
-import json
 import os
 import time
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import quanser_robots
+import seaborn as sns
 import torch
 import yaml
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
-from matplotlib.ticker import MaxNLocator
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J
+from mushroom_rl.utils.dataset import compute_J, parse_dataset
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
-from src.utils.conversion_utils import df2torch, np2torch
-from src.utils.plotting_utils import plot_gp
+from src.utils.conversion_utils import dataset2df_4, df2torch, np2torch
+from src.utils.environment_tools import rollout, state4to6
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
 
@@ -29,7 +28,7 @@ def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
     n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 4000,
+    n_epochs: int = 1000,
     batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
     n_features: int = 128,
     lr: float = 5e-4,
@@ -37,6 +36,8 @@ def experiment(
     det_sac: bool = True,  # if sac used to collect data with dagger is determ.
     use_cuda: bool = True,
     # verbose: bool = False,
+    plot_data: bool = False,
+    # plot_data: bool = True,
     plotting: bool = False,
     log_frequency: float = 0.01,  # every p% epochs of n_epochs
     model_save_frequency: float = 0.1,  # every n-th of n_epochs
@@ -103,103 +104,99 @@ def experiment(
     train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
     test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
 
-    test_x = df2torch(test_x_df).to(device)
-    test_y = df2torch(test_y_df).to(device)
-
-    test_dataset = TensorDataset(test_x, test_y)
-
-    # TODO replace test dataloader with ReplayBuffer
-    test_dataloader_shuf = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    train_buffer = ReplayBuffer(dim_in, dim_out, batchsize=batch_size, device=device)
+    train_buffer = ReplayBuffer(
+        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+    )
     train_buffer.add(df2torch(train_x_df), df2torch(train_y_df))
 
+    test_buffer = ReplayBuffer(
+        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+    )
+    test_buffer.add(df2torch(test_x_df), df2torch(test_y_df))
+
     ### mdp ###
-    try:
-        with open(os.path.join(sac_results_dir, "args.json")) as f:
-            sac_args = json.load(f)
-    except:
-        with open(os.path.join(sac_results_dir, "args.yaml")) as f:
-            sac_args = yaml.load(f, Loader=yaml.Loader)
+    with open(os.path.join(sac_results_dir, "args.yaml")) as f:
+        sac_args = yaml.load(f, Loader=yaml.Loader)
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
     mdp.seed(seed)
 
     ### sac agent ###
     sac_agent = Agent.load(sac_agent_path)
-    prepro = None
     core = Core(sac_agent, mdp)
 
-    ### snngp agent ###
-    model = SpectralNormalizedNeuralGaussianProcess(
-        dim_in, dim_out, n_features, lr, device=device
-    )
-    model.with_whitening(train_buffer.states, train_buffer.actions)
+    def policy(state4):
+        state6 = state4to6(state4)  # because sac trained on 6dim state
+        action_torch = core.agent.policy.compute_action_and_log_prob_t(
+            state6, compute_log_prob=False, deterministic=True
+        )
+        return action_torch.reshape(-1).numpy()
+
+    ### agent ###
+    model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features)
+    model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
+    model.to(device)
+
+    ### optimizer
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     ####################################################################################################################
     #### TRAINING
 
+    train_dataset = []
     loss_trace = []
-    one_minib = False
-    if batch_size == n_trajectories * 200 or n_trajectories < 150:
-        one_minib = True
+    test_loss_trace = []
+    minib_progress = False
     for n in tqdm(range(n_epochs + 1), position=0):
         for i_minibatch, minibatch in enumerate(
-            tqdm(train_buffer, leave=False, position=1, disable=one_minib)
+            tqdm(train_buffer, leave=False, position=1, disable=not minib_progress)
         ):
             x, y = minibatch
-            model.opt.zero_grad()
-            ellh = model.ellh(x, y)
-            kl = model.kl()
-            loss = (-ellh + kl) / x.shape[0]
+            opt.zero_grad()
+            # ellh = model.ellh(x, y)
+            # kl = model.kl()
+            # loss = (-ellh + kl) / x.shape[0]
+            loss = -model.elbo(x, y)
             loss.backward()
-            model.opt.step()
+            opt.step()
             loss_trace.append(loss.detach().item())
 
         if n % epochs_between_rollouts == 0:
-            # run model against gym (on cpu)
+            ### collect rollout data ###
             with torch.no_grad():
-                dataset = list()
-                episode_steps = 0
-                last = False
-                state = mdp.reset(None).copy()  # random initial state
-                while not last:
-                    state_torch = np2torch(state).reshape(1, -1).to(device)
-                    action_torch = model(state_torch, covs=False)
-                    action = action_torch.reshape(-1).cpu().numpy()
-                    next_state, reward, absorbing, _ = mdp.step(action)
-                    episode_steps += 1
-                    if episode_steps >= mdp.info.horizon or absorbing:
-                        last = True
-                    sample = (state, action, reward, next_state, absorbing, last)
-                    dataset.append(sample)
-                    state = next_state.copy()
+                dataset = rollout(mdp, policy, n_episodes=1, show_progress=False)
+                train_dataset.extend(dataset)
                 J = compute_J(dataset, mdp.info.gamma)[0]
                 R = compute_J(dataset, 1.0)[0]
+                # aggregate
+                s, a, r, ss, absorb, last = parse_dataset(dataset)  # everything 4dim
+                new_xs = np2torch(np.hstack([state4to6(s)]))
+                new_ys = np2torch(a)
+                train_buffer.add(new_xs, new_ys)
 
-                # run sac on collected states & aggregate data
-                new_states = torch.empty((len(dataset), dim_in))
-                new_actions = torch.empty((len(dataset), dim_out))
-                for i in range(len(dataset)):
-                    visited_state = dataset[i][0]
-                    new_state = np2torch(visited_state).reshape(-1, dim_in)
-                    new_states[i, :] = new_state
-                # Note: compute_action_and_log_prob_t was hacked to be deterministic
-                new_actions = core.agent.policy.compute_action_and_log_prob_t(
-                    new_states, compute_log_prob=False, deterministic=det_sac
-                )
-                train_buffer.add(new_states, new_actions)
-
-        # log metrics every epoch
+        # log metrics
         if n % (n_epochs * log_frequency) == 0:
-            # print(f"GPU MEM LEAK: {torch.cuda.memory_allocated():,} B".replace(",", "_"))
             # log
             with torch.no_grad():
                 # use latest minibatch
-                loss_ = loss_trace[-1]
-                y_pred, _, _, _ = model(x)
+                y_pred = model(x, covs=False)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
-                logstring = f"Epoch {n} Train: Loss={loss_:.2}, RMSE={rmse:.2f}"
+
+                # test loss
+                test_buffer.shuffling = False
+                with torch.no_grad():
+                    test_losses = []
+                    for minibatch in test_buffer:
+                        _x_test, _y_test = minibatch
+                        _test_loss = -model.elbo(_x_test, _y_test)
+                        test_losses.append(_test_loss.item())
+                test_loss = np.mean(test_losses)
+                test_loss_trace.append(test_loss)
+
+                logstring = (
+                    f"Epoch {n} Train: Loss={loss_trace[-1]:.2}, RMSE={rmse:.2f}"
+                )
+                logstring += f", test loss={test_loss_trace[-1]:.2}"
+                logstring += f", bufsize={train_buffer.size}"
                 logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
@@ -217,94 +214,85 @@ def experiment(
     ####################################################################################################################
     #### EVALUATION
 
-    ## plot statistics over trajectories
-    y_pred_list = []
-    for i_minibatch, minibatch in enumerate(test_dataloader):
-        x, _ = minibatch
-        y_pred, _, _, _ = model(x.to(model.device))
-        y_pred_list.append(y_pred.cpu())
+    ### collect test rollouts ###
+    with torch.no_grad():
+        print("Collecting test rollouts ...")
+        # test buffer
+        test_episodes = 10
+        test_dataset = rollout(
+            mdp, policy, n_episodes=test_episodes, show_progress=True
+        )
+        s, a, r, ss, absorb, last = parse_dataset(test_dataset)  # everything 4dim
+        new_xs = np2torch(np.hstack([state4to6(s)]))
+        new_ys = np2torch(a)
+        test_buffer.add(new_xs, new_ys)
+        print("Done.")
 
-    y_pred = torch.cat(y_pred_list, dim=0)  # dim=0
-
-    x_time = torch.tensor(range(0, 200))
-    y_data_mean = test_y.reshape(-1, 200).mean(dim=0)
-    y_data_std = test_y.reshape(-1, 200).std(dim=0)
-    y_pred_mu_mean = y_pred.reshape(-1, 200).mean(dim=0)
-    y_pred_mu_std = y_pred.reshape(-1, 200).std(dim=0)
+    ### plot pointwise action prediction ###
+    """pointwise means the model predicts an action for every every state 
+    in the dataset. this is explicitly not a rollout, and prediction errors 
+    do not add up"""
+    s, a, r, ss, absorb, last = parse_dataset(test_dataset)
+    _x = np2torch(np.hstack([state4to6(s)]))
+    with torch.no_grad():
+        a_pred = model(_x.to(device), covs=False).cpu()
+    a = a.reshape(-1, mdp.info.horizon)
+    a_pred = a_pred.reshape(-1, mdp.info.horizon)
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
-    plot_gp(
-        ax,
-        x_time,
-        y_data_mean.cpu(),
-        y_data_std.cpu(),
-        color="b",
-        label="test data mean & std trajs",
-    )
-    # plot_gp(ax, x_time, y_pred_mu_mean, y_pred_var_sqrtmean, color='c', label="pred mean(mu) & sqrt(mean(sigma))")
-    plot_gp(
-        ax,
-        x_time,
-        y_pred_mu_mean.cpu(),
-        y_pred_mu_std.cpu(),
-        color="r",
-        alpha=0.2,
-        label="test pred mean(mu) & std(mu)",
-    )
-    ax.set_xlabel("time")
-    ax.set_ylabel("a")
-    ax.set_title(
-        f"snngp ({len(train_traj_dfs)}/{len(test_traj_dfs)} episodes, {n_epochs} epochs)"
-    )
+    x_time = torch.tensor(range(0, 200))
+    for ei in range(test_episodes):
+        ax.plot(x_time, a[ei, :], color="b")
+        ax.plot(x_time, a_pred[ei, :], color="r")
+    # replot last with label
+    ax.plot(x_time, a[ei, :], color="b", label="data")
+    ax.plot(x_time, a_pred[ei, :], color="r", label=alg)
     ax.legend()
-    plt.savefig(
-        os.path.join(results_dir, "mean-std_traj_plots__test_data_pred.png"), dpi=150
+    ax.set_xlabel("steps")
+    ax.set_ylabel("action")
+    ax.set_title(
+        f"{alg} pointwise action on {test_episodes} episode ({n_epochs} epochs, lr={lr})"
     )
+    plt.savefig(os.path.join(results_dir, "pointwise_action_pred.png"), dpi=150)
 
-    # # plot train and test data and prediction
-    # fig, ax = plt.subplots(1, 1)
-    # ax.scatter(x_train, y_train, c="grey", marker="x", s=5, label="train")
-    # ax.scatter(x_test, y_test, c="k", s=5, label="test")
-    # # mu_train, sigma_train, _, _ = model(x_train)
-    # # plt.errorbar(
-    # #     x_train.reshape(-1),
-    # #     mu_train.reshape(-1),
-    # #     torch.diag(sigma_train),
-    # #     fmt="none",
-    # #     color="r",
-    # #     label="pred",
-    # # )
-    # mu_test, sigma_test, _, _ = model(x_test)
-    # plt.errorbar(
-    #     x_test.reshape(-1),
-    #     mu_test.reshape(-1),
-    #     torch.diag(sigma_test),
-    #     fmt="none",
-    #     color="r",
-    #     label="pred",
-    # )
-    # ax.set_xlabel("x")
-    # ax.set_ylabel("y")
-    # ax.legend()
-    # ax.set_title(f"snngp (N={n_datapoints}, {n_epochs} epochs)")
+    ### plot data space coverage ###
+    if plot_data:
+        # cols = ["theta", "alpha", "theta_dot", "alpha_dot", "traj_id"]
+        cols = ["theta", "alpha", "theta_dot", "alpha_dot"]
+        # train data
+        df = dataset2df_4(train_dataset)
+        # df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        # g = sns.PairGrid(df[cols], hue="traj_id")
+        g = sns.PairGrid(df[cols])
+        g.map_diag(sns.histplot, hue=None)
+        g.map_offdiag(plt.plot)
+        g.fig.suptitle("train data", y=1.01)
+        g.savefig(os.path.join(results_dir, "train_data.png"), dpi=150)
+        # test data
+        df = dataset2df_4(test_dataset)
+        # df["traj_id"] = torch.floor(df2torch(df.index) / mdp.info.horizon)
+        # g = sns.PairGrid(df[cols], hue="traj_id")
+        g = sns.PairGrid(df[cols])
+        g.map_diag(sns.histplot, hue=None)
+        g.map_offdiag(plt.plot)
+        g.figure.suptitle(f"test data ({test_episodes} episodes)", y=1.01)
+        g.savefig(os.path.join(results_dir, "test_data.png"), dpi=150)
 
     # plot training loss
     fig_trace, ax_trace = plt.subplots()
-    ax_trace.plot(loss_trace, c="k")
+
+    def scaled_xaxis(y_points, n_on_axis):
+        return np.arange(len(y_points)) / len(y_points) * n_on_axis
+
+    x_train_loss = scaled_xaxis(loss_trace, n_epochs)
+    ax_trace.plot(x_train_loss, loss_trace, c="k", label="train loss")
+    x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
+    ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
     ax_trace.set_yscale("symlog")
-    ax_trace.set_xlabel("minibatches")
-    twiny = ax_trace.twiny()
-    twiny.set_xlabel("epochs")
-    twiny.xaxis.set_ticks_position("bottom")
-    twiny.xaxis.set_label_position("bottom")
-    twiny.spines.bottom.set_position(("axes", -0.2))
-    effective_batch_size = min(batch_size, 200 * n_trajectories)
-    twiny.set_xlim(
-        ax_trace.get_xlim()[0] * effective_batch_size / n_trajectories / 200,
-        ax_trace.get_xlim()[1] * effective_batch_size / n_trajectories / 200,
-    )
-    twiny.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax_trace.set_title(f"snngp loss (dagger SAC det={det_sac}, lr={lr:.0e}, )")
+    ax_trace.set_xlabel("epochs")
+    ax_trace.set_ylabel("loss")
+    ax_trace.set_title(f"{alg} loss (lr={lr:.0e})")
+    fig_trace.legend()
     plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
 
     if plotting:
