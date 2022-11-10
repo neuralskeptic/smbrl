@@ -27,7 +27,6 @@ from src.utils.conversion_utils import df2torch, np2torch, qube_rollout2df
 from src.utils.environment_tools import state4to6, state6to4
 from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
-from src.utils.whitening import WhiteningWrapper
 
 
 def render_policy(

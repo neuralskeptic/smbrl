@@ -21,7 +21,6 @@ from src.utils.conversion_utils import dataset2df_4, np2torch
 from src.utils.environment_tools import rollout, state4to6, state6to4
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
-from src.utils.whitening import WhiteningWrapper
 
 
 def experiment(
@@ -151,8 +150,13 @@ def experiment(
         print("Done.")
 
     ### dynamics model ###
-    model = WhiteningWrapper(DNN3(dim_in, dim_out, n_features, lr, device)).to(device)
+    model = DNN3(dim_in, dim_out, n_features)
+    # model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
     model.init_whitening(train_buffer.xs, train_buffer.ys)
+    model.to(device)
+
+    ### optimizer
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
 
     ####################################################################################################################
     #### TRAINING
@@ -166,21 +170,21 @@ def experiment(
             tqdm(train_buffer, leave=False, position=1, disable=not minib_progress)
         ):
             x, y = minibatch
-            model.opt.zero_grad()
+            opt.zero_grad()
             y_pred = model(x)
             loss_f = torch.nn.MSELoss()
             loss = loss_f(y, y_pred)
             loss.backward()
-            model.opt.step()
+            opt.step()
             loss_trace.append(loss.detach().item())
 
             # log lr in sync with loss (for plotting together)
-            lrs.append(model.opt.param_groups[0]["lr"])
+            lrs.append(opt.param_groups[0]["lr"])
 
         # if n > 5000:
         #     # decaying lr
         #     tau_decay = 3000
-        #     model.opt.param_groups[0]["lr"] *= np.exp(-1 / tau_decay)
+        #     opt.param_groups[0]["lr"] *= np.exp(-1 / tau_decay)
 
         # log metrics
         if n % (n_epochs * log_frequency) == 0:

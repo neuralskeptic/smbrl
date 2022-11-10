@@ -13,16 +13,7 @@ def df2torch(df):
 
 
 def vec(x):
-    """
-    TODO pytorch
-    https://stackoverflow.com/questions/25248290/most-elegant-implementation-of-matlabs-vec-function-in-numpy
-    """
-    shape = x.shape
-    if len(shape) == 3:
-        a, b, c = shape
-        return x.reshape((a, b * c), order="F")
-    else:
-        return x.reshape((-1, 1), order="F")
+    return x.T.reshape(-1)
 
 
 def autograd_tensor(x):
