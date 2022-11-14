@@ -28,12 +28,12 @@ from src.utils.seeds import fix_random_seed
 
 def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
-    snngp_policy_dir: str = "logs/tmp/snngp_clone_SAC/0/2022_10_21__22_05_47",
-    nlm_policy_dir: str = "debug/logs/tmp/nlm_clone_SAC/0/2022_11_10__03_05_44",
-    # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__03_40_49",  # no y whitening
-    mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__03_43_09",  # y whitening
+    snngp_policy_dir: str = "debug/logs/tmp/snngp_clone_SAC/0/2022_11_10__05_43_00",
+    nlm_policy_dir: str = "debug/logs/tmp/nlm_clone_SAC/0/2022_11_10__06_13_06",
+    mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_31_35",  # no y whitening
+    # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_30_01",  # y whitening
     nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_10__03_38_51",
-    snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_16_26",
+    snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_23_45",
     dynamics_alg: str = "snngp",  # of ['gym', 'mlp', 'nlm', 'snngp']
     policy_alg: str = "sac",  # of ['sac', 'snngp', 'nlm']
     use_cuda: bool = True,  # gp too slow on cpu

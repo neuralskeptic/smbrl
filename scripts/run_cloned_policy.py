@@ -41,7 +41,7 @@ def render_policy(
     # plot: bool = False,
     plot: bool = True,
     show_plots: bool = False,
-    seed: int = -1,  ## IGNORED (only needed to run with with run_experiment)
+    seed: int = 0,
 ):
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
     try:
@@ -71,10 +71,9 @@ def render_policy(
 
     # MDP
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
-    mdp.seed(seed)
 
     # Fix seed
-    fix_random_seed(args["seed"], mdp=None)
+    fix_random_seed(args["seed"])
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
@@ -141,7 +140,8 @@ def render_policy(
         else:  # snngp
             model = SpectralNormalizedNeuralGaussianProcess
 
-        agent = model(dim_in, dim_out, args["n_features"], lr, device=device)
+        agent = model(dim_in, dim_out, args["n_features"])
+        agent.to(device)
         state_dict = torch.load(agent_path)
         agent.load_state_dict(state_dict)
 
@@ -172,6 +172,7 @@ def render_policy(
         #                              dynamic_ncols=True, disable=quiet,
         #                              leave=False)
         # reset
+        mdp.seed(seed + i)
         state = mdp.reset(None).copy()
 
         last = False

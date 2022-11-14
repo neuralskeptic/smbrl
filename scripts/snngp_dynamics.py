@@ -108,10 +108,6 @@ def experiment(
         state6 = state4to6(state4)  # because sac trained on 6dim state
         p = 0.5
         if torch.randn(1) > p:
-            # # SAC det
-            # action_torch = core.agent.policy.compute_action_and_log_prob_t(
-            #     state6, compute_log_prob=False, deterministic=True
-            # )
             # gaussian policy (zero mean, 1.5 std)
             action_torch = torch.normal(torch.zeros(1), 1.5 * torch.ones(1))
         else:
@@ -144,7 +140,7 @@ def experiment(
         test_buffer.add(new_xs, new_ys)
         print("Done.")
 
-    ### agent ###
+    ### dynamics model ###
     model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features)
     # model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
     model.init_whitening(train_buffer.xs, train_buffer.ys)
@@ -189,9 +185,8 @@ def experiment(
                 test_loss = np.mean(test_losses)
                 test_loss_trace.append(test_loss)
 
-                logstring = (
-                    f"Epoch {n} Train: Loss={loss_trace[-1]:.2}, RMSE={rmse:.2f}"
-                )
+                logstring = f"Epoch {n} Train: Loss={loss_trace[-1]:.2}"
+                logstring += f", RMSE={rmse:.2f}"
                 logstring += f", test loss={test_loss_trace[-1]:.2}"
                 print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
                 with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
