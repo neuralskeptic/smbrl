@@ -26,10 +26,10 @@ def experiment(
     alg: str = "nlm",
     sac_agent_dir: str = "models/2022_07_15__14_57_42",
     n_train_episodes: int = 100,
-    n_epochs: int = 100,
+    n_epochs: int = 100,  # for assump 2,3 use 500
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_features: int = 256,
-    lr: float = 1e-3,
+    lr: float = 1e-3,  # for assump 2,3 use 4e-3
     use_cuda: bool = True,
     # verbose: bool = False,
     plot_data: bool = False,

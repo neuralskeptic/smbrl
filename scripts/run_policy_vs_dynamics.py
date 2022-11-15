@@ -32,9 +32,11 @@ def render_policy(
     nlm_policy_dir: str = "debug/logs/tmp/nlm_clone_SAC/0/2022_11_10__06_13_06",
     mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_31_35",  # no y whitening
     # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_30_01",  # y whitening
-    nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_10__03_38_51",
+    nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__20_00_34",  # assump 1 (exc)
+    # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_56_40",  # assump 2 (ok)
+    # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_58_51",  # assump 3 (ok)
     snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_23_45",
-    dynamics_alg: str = "snngp",  # of ['gym', 'mlp', 'nlm', 'snngp']
+    dynamics_alg: str = "nlm",  # of ['gym', 'mlp', 'nlm', 'snngp']
     policy_alg: str = "sac",  # of ['sac', 'snngp', 'nlm']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,

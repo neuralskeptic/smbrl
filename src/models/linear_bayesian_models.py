@@ -24,9 +24,6 @@ class LinearBayesianModel(nn.Module):
         self.register_buffer(
             "prior_cov_in", self.prior_var_in * torch.eye(dim_features)
         )
-        self.register_buffer(
-            "prior_cov_in_tril", torch.sqrt(self.prior_var_in) * torch.eye(dim_features)
-        )
 
         # parameters (saved)
         self.post_mean = nn.Parameter(torch.zeros(dim_features, dim_y))
@@ -34,11 +31,30 @@ class LinearBayesianModel(nn.Module):
         self.post_cov_in_chol = nn.Parameter(torch.eye(dim_features))
         ## parameterize in square root form to ensure positive definiteness
         self.error_vars_out_sqrt = nn.Parameter(1e-2 * torch.ones(dim_y))
-        # assume: error_cov_out = prior_cov_out = post_cov_out
 
-    def post_cov_in(self):
-        lower_triangular = self.post_cov_in_tril()
-        return lower_triangular @ lower_triangular.t()
+        # assumptions/simplifications
+        # 1: LEARN (diag) error output covariance = post out cov = prior out cov
+        # 2: LEARN (diag) error output covariance
+        #    && LEARN (chol) post out cov = prior out cov
+        # 3: LEARN (diag) error output covariance
+        #    && LEARN (chol) post out cov
+        #    && CONST (c*I) prior out cov
+        ################## CHANGE ME ###################
+        self.assumption = 1
+        ################################################
+        if self.assumption == 1:
+            pass  # assume: error_cov_out = prior_cov_out = post_cov_out
+        elif self.assumption == 2:
+            self.post_cov_out_chol = nn.Parameter(torch.eye(dim_y))
+        elif self.assumption == 3:
+            self.post_cov_out_chol = nn.Parameter(torch.eye(dim_y))
+            self.register_buffer("prior_var_out", torch.tensor(1 + 1e-3))
+            self.register_buffer("prior_cov_out", self.prior_var_out * torch.eye(dim_y))
+
+    # check eigenvalues of learnt cov matrices
+    # plt.plot(torch.linalg.eigh(self.error_cov_out())[0].cpu().detach())
+    # plt.plot(torch.linalg.eigh(self.post_cov_in())[0].cpu().detach())
+    # plt.plot(torch.linalg.eigh(self.post_cov_out())[0].cpu().detach())
 
     def post_cov_in_tril(self):
         # make diagonal of post_cov_in_chol positive (softplus)
@@ -49,6 +65,24 @@ class LinearBayesianModel(nn.Module):
         lower_triangular_wo_diag = torch.tril(self.post_cov_in_chol, diagonal=-1)
         lower_triangular = lower_triangular_wo_diag + diagonal
         return lower_triangular
+
+    def post_cov_in(self):
+        lower_triangular = self.post_cov_in_tril()
+        return lower_triangular @ lower_triangular.t()
+
+    def post_cov_out_tril(self):
+        # make diagonal of post_cov_in_chol positive (softplus)
+        # (this makes sure L@L.T is positive definite)
+        diagonal = torch.diag_embed(
+            torch.nn.functional.softplus(self.post_cov_out_chol.diag())
+        )
+        lower_triangular_wo_diag = torch.tril(self.post_cov_out_chol, diagonal=-1)
+        lower_triangular = lower_triangular_wo_diag + diagonal
+        return lower_triangular
+
+    def post_cov_out(self):
+        lower_triangular = self.post_cov_out_tril()
+        return lower_triangular @ lower_triangular.t()
 
     def error_cov_out(self):
         return torch.diag(torch.pow(self.error_vars_out_sqrt, 2))
@@ -92,8 +126,15 @@ class LinearBayesianModel(nn.Module):
         KL divergence of the variational posterior from the prior
         """
         # assumption
-        prior_cov_out = self.error_cov_out()
-        post_cov_out = self.error_cov_out()
+        if self.assumption == 1:
+            prior_cov_out = self.error_cov_out()  # prior == error
+            post_cov_out = self.error_cov_out()  # post == error
+        elif self.assumption == 2:
+            prior_cov_out = self.post_cov_out()  # prior == post
+            post_cov_out = self.post_cov_out()  # learn
+        elif self.assumption == 3:
+            prior_cov_out = self.prior_cov_out  # const
+            post_cov_out = self.post_cov_out()  # learn
 
         with torch.set_grad_enabled(True):
             n = x.shape[0]
