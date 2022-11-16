@@ -121,7 +121,9 @@ class LinearBayesianModel(nn.Module):
         should be equivalent to `ellh(x, y) - kl()`
         - is matrix normal compatible
 
-        computes elbo in 4th form, i.e. L = E_q[log p(y|w)] - KL[q(w)||p(w|y)],
+        computes elbo in 3rd form
+            L = E_q[log p(y|w)] - KL[q(w)||p(w|y)],
+            (wikipedia: https://en.wikipedia.org/wiki/Evidence_lower_bound#Main_forms)
         expected log likelihood with w from variational posterior q(w) minus
         KL divergence of the variational posterior from the prior
         """
