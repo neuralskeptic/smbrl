@@ -28,6 +28,7 @@ from src.utils.seeds import fix_random_seed
 
 def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
+    mlp_policy_dir: str = "debug/logs/tmp/mlp_clone_SAC/0/2022_11_16__17_33_53",
     snngp_policy_dir: str = "debug/logs/tmp/snngp_clone_SAC/0/2022_11_10__05_43_00",
     nlm_policy_dir: str = "debug/logs/tmp/nlm_clone_SAC/0/2022_11_10__06_13_06",
     mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_31_35",  # no y whitening
@@ -36,8 +37,8 @@ def render_policy(
     # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_56_40",  # assump 2 (ok)
     # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_58_51",  # assump 3 (ok)
     snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_23_45",
+    policy_alg: str = "mlp",  # of ['sac', 'mlp', 'nlm', 'snngp']
     dynamics_alg: str = "nlm",  # of ['gym', 'mlp', 'nlm', 'snngp']
-    policy_alg: str = "sac",  # of ['sac', 'snngp', 'nlm']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,
     # render: bool = True,
@@ -57,8 +58,9 @@ def render_policy(
     # dirs & paths
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
     sac_agent_path = os.path.join(repo_dir, sac_policy_dir, "agent_end.msh")
-    snngp_agent_path = os.path.join(repo_dir, snngp_policy_dir, "agent_end.pth")
+    mlp_agent_path = os.path.join(repo_dir, mlp_policy_dir, "agent_end.pth")
     nlm_agent_path = os.path.join(repo_dir, nlm_policy_dir, "agent_end.pth")
+    snngp_agent_path = os.path.join(repo_dir, snngp_policy_dir, "agent_end.pth")
     mlp_dynamics_path = os.path.join(repo_dir, mlp_dynamics_dir, "agent_end.pth")
     nlm_dynamics_path = os.path.join(repo_dir, nlm_dynamics_dir, "agent_end.pth")
     snngp_dynamics_path = os.path.join(repo_dir, snngp_dynamics_dir, "agent_end.pth")
@@ -73,8 +75,9 @@ def render_policy(
                 return yaml.load(f, Loader=yaml.Loader)
 
     sac_args = load_config(sac_policy_dir)
-    snngp_args = load_config(snngp_policy_dir)
+    mlp_args = load_config(mlp_policy_dir)
     nlm_args = load_config(nlm_policy_dir)
+    snngp_args = load_config(snngp_policy_dir)
     mlp_dyn_args = load_config(mlp_dynamics_dir)
     nlm_dyn_args = load_config(nlm_dynamics_dir)
     snngp_dyn_args = load_config(snngp_dynamics_dir)
@@ -102,6 +105,17 @@ def render_policy(
                 state, compute_log_prob=False, deterministic=True
             )
             return action.cpu().reshape(-1).numpy()
+
+    elif policy_alg == "mlp":
+        agent = DNN3(s6_dim, a_dim, mlp_args["n_features"])
+        agent.to(device)
+        state_dict = torch.load(mlp_agent_path)
+        agent.load_state_dict(state_dict)
+
+        def policy(state):
+            state_torch = np2torch(state).reshape(1, -1).to(device)
+            mu = agent(state_torch)
+            return mu.cpu().reshape(-1).numpy()
 
     elif policy_alg == "nlm":
         agent = NeuralLinearModel(s6_dim, a_dim, nlm_args["n_features"])
