@@ -134,7 +134,7 @@ def experiment(
         test_dataset = rollout(
             mdp, policy, n_episodes=test_episodes, show_progress=True
         )
-        s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
+        s, a, r, ss, absorb, last = parse_dataset(test_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
         new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
         test_buffer.add(new_xs, new_ys)
