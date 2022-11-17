@@ -3,7 +3,6 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import quanser_robots
 import seaborn as sns
 import torch
@@ -12,13 +11,12 @@ from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
-from mushroom_rl.utils.dataset import compute_J, parse_dataset
-from sklearn.model_selection import train_test_split
+from mushroom_rl.utils.dataset import arrays_as_dataset, compute_J, parse_dataset
 from tqdm import tqdm
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.linear_bayesian_models import SpectralNormalizedNeuralGaussianProcess
-from src.utils.conversion_utils import dataset2df_4, df2torch, np2torch
+from src.utils.conversion_utils import dataset2df_4, np2torch
 from src.utils.environment_tools import rollout, state4to6
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
@@ -27,13 +25,14 @@ from src.utils.time_utils import timestamp
 def experiment(
     alg: str = "snngp",
     dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
-    n_trajectories: int = 5,  # 80% train, 20% test
-    n_epochs: int = 1000,
-    batch_size: int = 200 * 100,  # minibatching iff <= 200*n_traj
+    n_initial_replay_episodes: int = 10,
+    max_replay_buffer_size: int = int(1e4),
+    n_test_episodes: int = 10,
+    n_epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
+    n_epochs: int = 5000,
+    batch_size: int = 200 * 100,  # lower if gpu out of memory
     n_features: int = 128,
-    lr: float = 5e-4,
-    epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
-    det_sac: bool = True,  # if sac used to collect data with dagger is determ.
+    lr: float = 1e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
     plot_data: bool = False,
@@ -85,34 +84,20 @@ def experiment(
     print(f"Alg: {alg}, Seed: {seed}, Dataset: {dataset_file}")
     print(f"Logs in {results_dir}")
 
-    ### INITIAL DATASET ###
-    # df: [s0-s5, a, r, ss0-ss5, absorb, last]
-    df = pd.read_pickle(os.path.join(repo_dir, dataset_file))
-    df = df[df["traj_id"] < n_trajectories]  # take only n_trajectories
-    df = df.astype("float32")  # otherwise spectral_norm complains
-    traj_dfs = [
-        traj.reset_index(drop=True) for (traj_id, traj) in df.groupby("traj_id")
-    ]
-    train_traj_dfs, test_traj_dfs = train_test_split(traj_dfs, test_size=0.2)
-    train_df = pd.concat(train_traj_dfs)
-    test_df = pd.concat(test_traj_dfs)
-
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
     y_cols = ["a"]
     dim_in = len(x_cols)
     dim_out = len(y_cols)
-    train_x_df, train_y_df = train_df[x_cols], train_df[y_cols]
-    test_x_df, test_y_df = test_df[x_cols], test_df[y_cols]
 
     train_buffer = ReplayBuffer(
-        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+        dim_in,
+        dim_out,
+        batchsize=batch_size,
+        device=device,
+        max_size=max_replay_buffer_size,
     )
-    train_buffer.add(df2torch(train_x_df), df2torch(train_y_df))
 
-    test_buffer = ReplayBuffer(
-        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
-    )
-    test_buffer.add(df2torch(test_x_df), df2torch(test_y_df))
+    test_buffer = ReplayBuffer(dim_in, dim_out, batchsize=batch_size, device=device)
 
     ### mdp ###
     with open(os.path.join(sac_results_dir, "args.yaml")) as f:
@@ -124,17 +109,44 @@ def experiment(
     sac_agent = Agent.load(sac_agent_path)
     core = Core(sac_agent, mdp)
 
-    def policy(state4):
+    def sac_policy(state4):
         state6 = state4to6(state4)  # because sac trained on 6dim state
         action_torch = core.agent.policy.compute_action_and_log_prob_t(
             state6, compute_log_prob=False, deterministic=True
         )
         return action_torch.reshape(-1).numpy()
 
+    ### collect train & test data (prefill train rollout buffer) ###
+    with torch.no_grad():
+        print("Collecting rollouts ...")
+        # train buffer
+        train_dataset = rollout(
+            mdp, sac_policy, n_episodes=n_initial_replay_episodes, show_progress=True
+        )
+        s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
+        new_xs = np2torch(np.hstack([state4to6(s)]))
+        new_ys = np2torch(a)
+        train_buffer.add(new_xs, new_ys)
+        # test buffer
+        test_dataset = rollout(
+            mdp, sac_policy, n_episodes=n_test_episodes, show_progress=True
+        )
+        s, a, r, ss, absorb, last = parse_dataset(test_dataset)  # everything 4dim
+        new_xs = np2torch(np.hstack([state4to6(s)]))
+        new_ys = np2torch(a)
+        test_buffer.add(new_xs, new_ys)
+        print("Done.")
+
     ### agent ###
     model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features)
-    model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
+    # model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
+    model.init_whitening(train_buffer.xs, train_buffer.ys)
     model.to(device)
+
+    def model_policy(state4):
+        state6_torch = np2torch(state4to6(state4)).to(device)
+        action_torch = model(state6_torch, covs=False)
+        return action_torch.cpu().reshape(-1).numpy()
 
     ### optimizer
     opt = torch.optim.Adam(model.parameters(), lr=lr)
@@ -142,91 +154,94 @@ def experiment(
     ####################################################################################################################
     #### TRAINING
 
-    train_dataset = []
-    loss_trace = []
-    test_loss_trace = []
-    minib_progress = False
-    for n in tqdm(range(n_epochs + 1), position=0):
-        for i_minibatch, minibatch in enumerate(
-            tqdm(train_buffer, leave=False, position=1, disable=not minib_progress)
-        ):
-            x, y = minibatch
-            opt.zero_grad()
-            # ellh = model.ellh(x, y)
-            # kl = model.kl()
-            # loss = (-ellh + kl) / x.shape[0]
-            loss = -model.elbo(x, y)
-            loss.backward()
-            opt.step()
-            loss_trace.append(loss.detach().item())
+    try:
+        losses, test_losses = [], []
+        Rs, rmses, bufsizes = [], [], []
+        minib_progress = False
+        for n in tqdm(range(n_epochs + 1), position=0):
+            for i_minibatch, minibatch in enumerate(
+                tqdm(train_buffer, leave=False, position=1, disable=not minib_progress)
+            ):
+                x, y = minibatch
+                opt.zero_grad()
+                loss = -model.elbo(x, y)
+                loss.backward()
+                opt.step()
+                losses.append(loss.detach().item())
 
-        if n % epochs_between_rollouts == 0:
-            ### collect rollout data ###
-            with torch.no_grad():
-                dataset = rollout(mdp, policy, n_episodes=1, show_progress=False)
-                train_dataset.extend(dataset)
-                J = compute_J(dataset, mdp.info.gamma)[0]
-                R = compute_J(dataset, 1.0)[0]
-                # aggregate
-                s, a, r, ss, absorb, last = parse_dataset(dataset)  # everything 4dim
-                new_xs = np2torch(np.hstack([state4to6(s)]))
-                new_ys = np2torch(a)
-                train_buffer.add(new_xs, new_ys)
-
-        # log metrics
-        if n % (n_epochs * log_frequency) == 0:
-            # log
-            with torch.no_grad():
-                # use latest minibatch
-                y_pred = model(x, covs=False)
-                rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
-
-                # test loss
-                test_buffer.shuffling = False
+            if n % n_epochs_between_rollouts == 0:
                 with torch.no_grad():
-                    test_losses = []
-                    for minibatch in test_buffer:
-                        _x_test, _y_test = minibatch
-                        _test_loss = -model.elbo(_x_test, _y_test)
-                        test_losses.append(_test_loss.item())
-                test_loss = np.mean(test_losses)
-                test_loss_trace.append(test_loss)
+                    # run model against gym
+                    dataset = rollout(mdp, model_policy, n_episodes=1)
+                    s, a, r, ss, absorb, last = parse_dataset(
+                        dataset
+                    )  # everything 4dim
+                    # reward of model
+                    J = compute_J(dataset, mdp.info.gamma)[0]
+                    R = compute_J(dataset, 1.0)[0]
+                    new_xs = np2torch(
+                        np.hstack([state4to6(s)])
+                    )  # take explored states ...
+                    a_sac = sac_policy(s).reshape(-1, 1)
+                    new_ys = np2torch(a_sac)  # ... and (true) sac actions
+                    train_buffer.add(new_xs, new_ys)
+                    # store dataset with sac actions
+                    modified_dataset = arrays_as_dataset(s, a_sac, r, ss, absorb, last)
+                    # logging
+                    train_dataset.append(modified_dataset)
+                    Rs.append(R)
+                    bufsizes.append(train_buffer.size)
 
-                logstring = (
-                    f"Epoch {n} Train: Loss={loss_trace[-1]:.2}, RMSE={rmse:.2f}"
+            # log metrics
+            if n % (n_epochs * log_frequency) == 0:
+                # log
+                with torch.no_grad():
+                    # train rmse
+                    with torch.no_grad():
+                        _sqr_residuals_sum = []
+                        _n_sqr_residuals_ = 0
+                        for minibatch in train_buffer:
+                            _x, _y = minibatch
+                            _y_pred = model(_x, covs=False)
+                            _sqr_residual = torch.pow(_y_pred - _y, 2)
+                            _sqr_residuals_sum.append(_sqr_residual.sum().item())
+                            _n_sqr_residuals_ += len(_sqr_residual)
+                    rmse = np.sqrt(sum(_sqr_residuals_sum) / _n_sqr_residuals_)
+                    rmses.append(rmse)
+
+                    # test loss
+                    test_buffer.shuffling = False
+                    with torch.no_grad():
+                        _test_losses = []
+                        for minibatch in test_buffer:
+                            _x_test, _y_test = minibatch
+                            _test_loss = -model.elbo(_x_test, _y_test)
+                            _test_losses.append(_test_loss.item())
+                    test_loss = np.mean(_test_losses)
+                    test_losses.append(test_loss)
+
+                    logstring = f"Epoch {n} Train: Loss={losses[-1]:.2}"
+                    logstring += f", RMSE={rmse:.2f}"
+                    logstring += f", test loss={test_losses[-1]:.2}"
+                    logstring += f", J={J:.2f}, R={R:.2f}"
+                    logstring += f", bufsize={train_buffer.size}"
+                    print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
+                    with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+                        f.write(logstring + "\n")
+
+            if n % (n_epochs * model_save_frequency) == 0:
+                # Save the agent
+                torch.save(
+                    model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth")
                 )
-                logstring += f", test loss={test_loss_trace[-1]:.2}"
-                logstring += f", bufsize={train_buffer.size}"
-                logstring += f", J={J:.2f}, R={R:.2f}"  # off-sync with computation
-                print("\r" + logstring + "\033[K")  # \033[K = erase to end of line
-                with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
-                    f.write(logstring + "\n")
-
-        if n % (n_epochs * model_save_frequency) == 0:
-            # Save the agent
-            torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}.pth"))
-
-    mdp.stop()
+    except KeyboardInterrupt:
+        pass  # save policy until now and show results
 
     # Save the agent after training
     torch.save(model.state_dict(), os.path.join(results_dir, "agent_end.pth"))
 
     ####################################################################################################################
     #### EVALUATION
-
-    ### collect test rollouts ###
-    with torch.no_grad():
-        print("Collecting test rollouts ...")
-        # test buffer
-        test_episodes = 10
-        test_dataset = rollout(
-            mdp, policy, n_episodes=test_episodes, show_progress=True
-        )
-        s, a, r, ss, absorb, last = parse_dataset(test_dataset)  # everything 4dim
-        new_xs = np2torch(np.hstack([state4to6(s)]))
-        new_ys = np2torch(a)
-        test_buffer.add(new_xs, new_ys)
-        print("Done.")
 
     ### plot pointwise action prediction ###
     """pointwise means the model predicts an action for every every state 
@@ -235,13 +250,14 @@ def experiment(
     s, a, r, ss, absorb, last = parse_dataset(test_dataset)
     _x = np2torch(np.hstack([state4to6(s)]))
     with torch.no_grad():
-        a_pred = model(_x.to(device), covs=False).cpu()
+        a_pred = model(_x.to(device), covs=False)
+        a_pred = a_pred.cpu()
     a = a.reshape(-1, mdp.info.horizon)
     a_pred = a_pred.reshape(-1, mdp.info.horizon)
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
     x_time = torch.tensor(range(0, 200))
-    for ei in range(test_episodes):
+    for ei in range(a.shape[0]):
         ax.plot(x_time, a[ei, :], color="b")
         ax.plot(x_time, a_pred[ei, :], color="r")
     # replot last with label
@@ -251,7 +267,7 @@ def experiment(
     ax.set_xlabel("steps")
     ax.set_ylabel("action")
     ax.set_title(
-        f"{alg} pointwise action on {test_episodes} episode ({n_epochs} epochs, lr={lr})"
+        f"{alg} pointwise action on {n_test_episodes} episodes ({n_epochs} epochs, lr={lr})"
     )
     plt.savefig(os.path.join(results_dir, "pointwise_action_pred.png"), dpi=150)
 
@@ -266,7 +282,7 @@ def experiment(
         g = sns.PairGrid(df[cols])
         g.map_diag(sns.histplot, hue=None)
         g.map_offdiag(plt.plot)
-        g.fig.suptitle("train data", y=1.01)
+        g.fig.suptitle("train data ({len(train_dataset)} episodes)", y=1.01)
         g.savefig(os.path.join(results_dir, "train_data.png"), dpi=150)
         # test data
         df = dataset2df_4(test_dataset)
@@ -275,25 +291,36 @@ def experiment(
         g = sns.PairGrid(df[cols])
         g.map_diag(sns.histplot, hue=None)
         g.map_offdiag(plt.plot)
-        g.figure.suptitle(f"test data ({test_episodes} episodes)", y=1.01)
+        g.figure.suptitle(f"test data ({n_test_episodes} episodes)", y=1.01)
         g.savefig(os.path.join(results_dir, "test_data.png"), dpi=150)
 
-    # plot training loss
-    fig_trace, ax_trace = plt.subplots()
+    # plot training stats
+    fig, axs = plt.subplots(4, 1, figsize=(10, 15), dpi=150)
 
     def scaled_xaxis(y_points, n_on_axis):
         return np.arange(len(y_points)) / len(y_points) * n_on_axis
 
-    x_train_loss = scaled_xaxis(loss_trace, n_epochs)
-    ax_trace.plot(x_train_loss, loss_trace, c="k", label="train loss")
-    x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
-    ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
-    ax_trace.set_yscale("symlog")
-    ax_trace.set_xlabel("epochs")
-    ax_trace.set_ylabel("loss")
-    ax_trace.set_title(f"{alg} loss (lr={lr:.0e})")
-    fig_trace.legend()
-    plt.savefig(os.path.join(results_dir, "loss.png"), dpi=150)
+    # plot train & test loss
+    axs[0].set_ylabel("loss")
+    axs[0].plot(scaled_xaxis(losses, n), losses, c="k", label="train loss")
+    axs[0].plot(scaled_xaxis(test_losses, n), test_losses, c="g", label="test loss")
+    axs[0].legend()
+    axs[0].set_yscale("symlog")
+    # plot rmse
+    axs[1].plot(scaled_xaxis(rmses, n), rmses, label="rmse")
+    axs[1].set_ylim([0, 1.05 * max(rmses)])
+    axs[1].set_ylabel("RMSE")
+    # plot rewards
+    axs[2].plot(scaled_xaxis(Rs, n), Rs, "r", label="cum. reward")
+    axs[2].set_ylim([0, 1.05 * max(Rs)])
+    axs[2].set_ylabel("cum. reward")
+    # plot bufsize
+    axs[3].plot(scaled_xaxis(bufsizes, n), bufsizes, "gray", label="buf size")
+    axs[3].set_ylabel("replay buffer size")
+
+    axs[3].set_xlabel("epochs")
+    axs[0].set_title(f"{alg} training stats (lr={lr:.0e})")
+    plt.savefig(os.path.join(results_dir, "training_stats.png"), dpi=150)
 
     if plotting:
         plt.show()
