@@ -24,7 +24,7 @@ from src.utils.time_utils import timestamp
 
 def experiment(
     alg: str = "snngp",
-    dataset_file: str = "models/2022_07_15__14_57_42/SAC_on_Qube-100-v0_100trajs_det.pkl.gz",
+    sac_agent_dir: str = "models/2022_07_15__14_57_42",
     n_initial_replay_episodes: int = 10,
     max_replay_buffer_size: int = int(1e4),
     n_test_episodes: int = 10,
@@ -70,7 +70,7 @@ def experiment(
     os.makedirs(results_dir, exist_ok=True)
 
     # sac agent dir
-    sac_results_dir = os.path.dirname(os.path.join(repo_dir, dataset_file))
+    sac_results_dir = os.path.join(repo_dir, sac_agent_dir)
     sac_agent_path = os.path.join(repo_dir, sac_results_dir, "agent_end.msh")
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
@@ -81,7 +81,7 @@ def experiment(
     ####################################################################################################################
     #### EXPERIMENT SETUP
 
-    print(f"Alg: {alg}, Seed: {seed}, Dataset: {dataset_file}")
+    print(f"Alg: {alg}, Seed: {seed}")
     print(f"Logs in {results_dir}")
 
     x_cols = ["s0", "s1", "s2", "s3", "s4", "s5"]
