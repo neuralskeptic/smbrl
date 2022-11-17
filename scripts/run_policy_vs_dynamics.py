@@ -1,9 +1,7 @@
 import json
 import os
 
-import gpytorch
 import numpy as np
-import pandas as pd
 import quanser_robots
 import torch
 import yaml
@@ -12,7 +10,6 @@ from matplotlib import pyplot as plt
 from mushroom_rl.core import Agent, Core
 from mushroom_rl.environments import Gym
 from mushroom_rl.utils.dataset import parse_dataset
-from torch.distributions import MultivariateNormal
 from tqdm import tqdm
 
 from src.models.dnns import DNN3
@@ -20,9 +17,8 @@ from src.models.linear_bayesian_models import (
     NeuralLinearModel,
     SpectralNormalizedNeuralGaussianProcess,
 )
-from src.utils.conversion_utils import df2torch, np2torch, qube_rollout2df
+from src.utils.conversion_utils import np2torch
 from src.utils.environment_tools import state4to6, state6to4
-from src.utils.replay_agent import replay_agent
 from src.utils.seeds import fix_random_seed
 
 
@@ -114,8 +110,8 @@ def render_policy(
 
         def policy(state):
             state_torch = np2torch(state).reshape(1, -1).to(device)
-            mu = agent(state_torch)
-            return mu.cpu().reshape(-1).numpy()
+            action_torch = agent(state_torch)
+            return action_torch.cpu().reshape(-1).numpy()
 
     elif policy_alg == "nlm":
         agent = NeuralLinearModel(s6_dim, a_dim, nlm_args["n_features"])
@@ -255,7 +251,7 @@ def render_policy(
     #### PLOTTING
 
     if plot:
-        fig, axs = plt.subplots(5, 2, figsize=(10, 7))
+        fig, axs = plt.subplots(5, 2, figsize=(10, 7), dpi=150)
         for dataset in datasets:
             s, a, r, ss, absorb, last = parse_dataset(dataset)
             x_time = torch.tensor(range(0, len(s)))
