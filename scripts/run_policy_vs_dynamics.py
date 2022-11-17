@@ -28,9 +28,9 @@ from src.utils.seeds import fix_random_seed
 
 def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
-    mlp_policy_dir: str = "debug/logs/tmp/mlp_clone_SAC/0/2022_11_16__17_33_53",
-    snngp_policy_dir: str = "debug/logs/tmp/snngp_clone_SAC/0/2022_11_10__05_43_00",
-    nlm_policy_dir: str = "debug/logs/tmp/nlm_clone_SAC/0/2022_11_10__06_13_06",
+    mlp_policy_dir: str = "models/mlp_clone_SAC/2022_11_17__00_53_25",
+    nlm_policy_dir: str = "models/nlm_clone_SAC/2022_11_17__00_17_24",
+    snngp_policy_dir: str = "models/snngp_clone_SAC/2022_11_17__14_56_23",
     mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_31_35",  # no y whitening
     # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_30_01",  # y whitening
     nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__20_00_34",  # assump 1 (exc)
@@ -38,7 +38,7 @@ def render_policy(
     # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_58_51",  # assump 3 (ok)
     snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_23_45",
     policy_alg: str = "mlp",  # of ['sac', 'mlp', 'nlm', 'snngp']
-    dynamics_alg: str = "nlm",  # of ['gym', 'mlp', 'nlm', 'snngp']
+    dynamics_alg: str = "gym",  # of ['gym', 'mlp', 'nlm', 'snngp']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,
     # render: bool = True,
