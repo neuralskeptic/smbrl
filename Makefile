@@ -8,7 +8,9 @@ mushroom_rl: FORCE
 	cd externals/mushroom_rl; pip install --no-use-pep517 -e .[all,mujoco,plots]
 experiment_launcher: FORCE
 	cd externals/experiment_launcher; pip install -e .
-externals: quanser_robots mushroom_rl experiment_launcher FORCE
+i2c: FORCE
+	cd externals/input-inference-for-control; pip install -e .
+externals: quanser_robots mushroom_rl experiment_launcher i2c FORCE
 
 lint: FORCE
 	black . && isort --gitignore .

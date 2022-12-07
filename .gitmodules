@@ -7,3 +7,6 @@
 [submodule "externals/experiment_launcher"]
 	path = externals/experiment_launcher
 	url = git@git.ias.informatik.tu-darmstadt.de:common/experiment_launcher.git
+[submodule "externals/input-inference-for-control"]
+	path = externals/input-inference-for-control
+	url = https://github.com/JoeMWatson/input-inference-for-control.git
