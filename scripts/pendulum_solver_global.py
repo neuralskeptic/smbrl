@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import torch
 from pytorch_minimize.optim import MinimizeWrapper
 from torch.autograd.functional import hessian, jacobian
+from tqdm import tqdm
 
 import wandb
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
@@ -286,7 +287,7 @@ def linear_gaussian_smoothing(
     future_posterior: MultivariateGaussian,
 ) -> MultivariateGaussian:
     """.
-    See https://vismod.media.mit.edu/tech-reports/TR-531.pdf, Section 3.2
+    See https://vismod.media.mit.edu/tech-reports/TR-531.pdf , Section 3.2
     """
     J = torch.linalg.solve(
         predicted_prior.covariance, predicted_prior.cross_covariance
@@ -317,27 +318,37 @@ class Policy(ABC):
 
 class TimeVaryingLinearGaussian(Policy):
     def __init__(
-        self, horizon: int, dim_x: int, dim_u: int, action_covariance: torch.Tensor
+        self,
+        horizon: int,
+        dim_x: int,
+        dim_u: int,
+        action_covariance: torch.Tensor,
+        device: torch.device = torch.device("cpu"),
     ):
         assert action_covariance.shape == (dim_u, dim_u)
         self.horizon, self.dim_x, self.dim_u = horizon, dim_x, dim_u
         self.k_actual = torch.tile(
             1e-3 * torch.sin(torch.linspace(0, 20 * torch.pi, horizon))[:, None],
             (1, dim_u),
-        )
-        self.K_actual = torch.zeros((horizon, dim_u, dim_x))
+        ).to(device)
+        self.K_actual = torch.zeros((horizon, dim_u, dim_x)).to(device)
         self.k_opt, self.K_opt = self.k_actual.clone(), self.K_actual.clone()
-        self.sigma = torch.tile(action_covariance, (horizon, 1, 1))
+        self.sigma = torch.tile(action_covariance, (horizon, 1, 1)).to(device)
         self.chol = torch.tile(
             torch.linalg.cholesky(action_covariance), (horizon, 1, 1)
-        )
+        ).to(device)
+        self.device = device
 
     def actual(self):
         from copy import deepcopy
 
         # copy = deepcopy(self)  # crashes: only leaf tensors deepcopy-able
         copy = TimeVaryingLinearGaussian(
-            self.horizon, self.dim_x, self.dim_u, self.sigma[0, :, :].detach()
+            self.horizon,
+            self.dim_x,
+            self.dim_u,
+            self.sigma[0, :, :].detach(),
+            device=self.device,
         )
         copy.k_opt = self.k_actual.detach()
         copy.K_opt = self.K_actual.detach()
@@ -507,6 +518,12 @@ class PseudoPosteriorSolver(object):
             next_state = self.approximate_inference_dynamics(env, state_action_cost)
             future_state_dist += [next_state]
             state = next_state
+        # plt.plot([dist.mean[0].detach() for dist in future_state_dist])
+        # plt.plot([dist.mean[1].detach() for dist in future_state_dist])
+        # plt.plot([dist.covariance[0,0].detach() for dist in future_state_dist])
+        # plt.plot([dist.covariance[1,1].detach() for dist in future_state_dist])
+        # plt.plot([forward_state_action_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u))
+        #           .covariance.item() for i in range(200)])
         return state_action_dist, future_state_dist, state
 
     def backward_pass(
@@ -530,6 +547,8 @@ class PseudoPosteriorSolver(object):
                 slice(0, self.dim_x)
             )  # pass the state posterior to previous timestep
             dist += [state_action_posterior]
+        # plt.plot([d.covariance[0,0].detach() for d in dist])
+        # plt.plot([d.covariance[1,1].detach() for d in dist])
         return list(reversed(dist))
 
     def __call__(self, n_iteration: int):
@@ -576,6 +595,11 @@ class PseudoPosteriorSolver(object):
             self.compute_metrics(
                 state_action_posterior, state_action_policy, self.alpha
             )
+
+            # plt.plot([forward_state_action_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
+            # plt.plot([predicted_state_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
+            # plt.plot([state_action_posterior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
+            # plt.plot([state_action_policy[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
             policy.update_from_distribution(state_action_posterior, state_action_policy)
             self.alpha = self.update_temperature_strategy(
                 self.cost,
@@ -855,30 +879,34 @@ class Annealing(TemperatureStrategy):
 if __name__ == "__main__":
     torch.set_printoptions(precision=7)
     torch.set_default_dtype(torch.float64)
-    task_horizon = 200
-    environment = Pendulum()
-    initial_state = torch.Tensor([torch.pi, 0.0])
 
-    use_cuda = False  # TODO
+    use_cuda = True
     wandb.init(project="i2c_mlp-dyn")
 
     ### training hyperparams ###
-    seed = 0
+    seed = 1
     n_epochs = 3
-    n_rollout_episodes = 10  # rollouts per epoch
+    n_rollout_episodes = 100  # rollouts per epoch
+    task_horizon = 200
     # dynamics model
-    n_features_dyn = 10
-    n_epochs_dyn = 100
+    n_features_dyn = 256
+    n_epochs_dyn = 300
     lr_dyn = 1e-3
     batch_size_dyn = 200 * 10  # lower if gpu out of memory
     # i2c solver
-    n_iterations = 3
+    n_iterations = 10
     # Fix seed
     fix_random_seed(seed)
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
     wandb.config = locals()
+
+    ####################################################################################################################
+    #### EXPERIMENT SETUP
+
+    environment = Pendulum()
+    initial_state = torch.Tensor([torch.pi, 0.0]).to(device)
 
     def state_action_cost(xu):
         # swing-up from \theta = \pi -> 0
@@ -889,8 +917,13 @@ if __name__ == "__main__":
     quad_params = CubatureQuadrature(1, 0, 0)
     gh_params = GaussHermiteQuadrature(degree=3)
     initial_state_distribution = MultivariateGaussian(
-        initial_state, 0.3 * torch.eye(environment.dim_x), None, None, None
-    )  # TODO made wider (learn more global, nonlinear, robust)
+        initial_state,
+        1e-6 * torch.eye(environment.dim_x).to(device),
+        None,
+        None,
+        None
+        # initial_state, 0.3 * torch.eye(environment.dim_x), None, None, None  # wider (learn more global, nonlinear, robust)
+    )
 
     # for alpha in [1e-1, 1, 10, 100, 1000]:
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
@@ -900,8 +933,10 @@ if __name__ == "__main__":
         # patch call to also return input (as env does)
         def patch_call(fn):
             def wrap(self, xu):
+                # xu_max = torch.tensor([1e1, 1e1, environment.u_mx])
+                # xu = torch.clip(xu, -xu_max, xu_max)
                 delta_x = fn(self, xu)  # model learns deltas
-                return xu[:, : environment.dim_x] + delta_x, xu
+                return xu[:, : environment.dim_x].detach() + delta_x, xu
 
             return wrap
 
@@ -918,7 +953,8 @@ if __name__ == "__main__":
             task_horizon,
             environment.dim_x,
             environment.dim_u,
-            action_covariance=0.2 * torch.eye(environment.dim_u),
+            action_covariance=0.2 * torch.eye(environment.dim_u).to(device),
+            device=device,
         )
 
         ### global policy model ###
@@ -965,28 +1001,33 @@ if __name__ == "__main__":
             max_size=1e4,
         )
 
+        ####################################################################################################################
+        #### TRAINING
+
         for i in range(n_epochs):
             # Rollout global policy in env -> ReplayBuffer
-            print("Collecting rollouts ...")
-            for _ in range(n_rollout_episodes):
-                state_distr = torch.distributions.MultivariateNormal(
-                    initial_state_distribution.mean,
-                    initial_state_distribution.covariance,
-                )
+            tqdm.write("Collecting rollouts ...")
+            state_distr = torch.distributions.MultivariateNormal(
+                initial_state_distribution.mean,
+                initial_state_distribution.covariance,
+            )
+            for _ in tqdm(range(n_rollout_episodes)):
                 state = state_distr.sample()
-                s, a = environment.run(state, global_policy, task_horizon)
+                ss, a = environment.run(
+                    state, global_policy.actual(), task_horizon
+                )  # rollout with actual
                 # drop last state and action to create next-state
-                s = s[:-1, :]
-                a = a[:-1, :]
-                ss = s[0:, :]
-                new_xs = torch.hstack([s, a])  # sin-cos <-> alpha?
-                new_ys = ss - s  # y = delta s
-                train_buffer.add(new_xs, new_ys)
+                s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
+                train_buffer.add(torch.hstack([s, a]), ss)
+            breakpoint()
 
             # Learn Dynamics
+            tqdm.write("Training Dynamics ...")
             # TODO change to nlm/snngp with ELBO loss
             global_dynamics.train()
-            for n in range(n_epochs_dyn + 1):
+            dyn_loss_trace = []
+            torch.autograd.set_detect_anomaly(True)
+            for n in tqdm(range(n_epochs_dyn + 1)):
                 for i_minibatch, minibatch in enumerate(train_buffer):
                     x, y = minibatch
                     opt_dyn.zero_grad()
@@ -995,11 +1036,67 @@ if __name__ == "__main__":
                     loss = loss_f(y, y_pred)
                     loss.backward()
                     opt_dyn.step()
-                    wandb.log({"loss_dyn": loss.detach().item()})
+                    dyn_loss_trace.append(loss.detach().item())
+                    wandb.log({"loss_dyn": dyn_loss_trace[-1]})
             global_dynamics.eval()
+            plt.figure()
+            plt.semilogy(dyn_loss_trace)
+
+            ## test dynamics model in rollouts
+            with torch.no_grad():
+                state_distr = torch.distributions.MultivariateNormal(
+                    initial_state_distribution.mean,
+                    initial_state_distribution.covariance,
+                )
+
+                # global_policy = FakePolicy()
+                ## plot pointwise & rollout predictions
+                state = state_distr.sample()
+                # run environment
+                ss_env, a_env = environment.run(state, global_policy, task_horizon)
+                s_env = torch.cat([state.unsqueeze(0), ss_env[:-1, :]])
+                # run dynamics model
+                ss_pred_pw = torch.zeros((task_horizon, environment.dim_x))
+                s_pred_roll = torch.zeros((task_horizon, environment.dim_x))
+                ss_pred_roll = torch.zeros((task_horizon, environment.dim_x))
+                a_pred_roll = torch.zeros((task_horizon, environment.dim_u))
+                for t in range(task_horizon):
+                    # pointwise
+                    xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
+                    ss_pred_pw[t, :], xu = global_dynamics(xu)
+                    # rollout
+                    s_pred_roll[t, :] = state
+                    a_pred_roll[t, :] = global_policy.predict(s_pred_roll[t, :], t)
+                    xu = torch.cat((s_pred_roll[t, :], a_pred_roll[t, :]))[None, :]
+                    ss_pred_roll[t, :], xu_ = global_dynamics(xu)  # updated xu?
+                    state = ss_pred_roll[t, :]
+                # plot
+                fig, axs = plt.subplots(environment.dim_x, 2, figsize=(10, 7))
+                x_time = torch.tensor(range(0, task_horizon))
+                for yi in range(environment.dim_x):
+                    # pointwise next state prediction
+                    axs[yi, 0].plot(x_time, ss_env[:, yi], color="b", label="data")
+                    axs[yi, 0].plot(
+                        x_time, ss_pred_pw[:, yi], color="r", label="dyn model"
+                    )
+                    axs[yi, 0].set_ylabel(f"ss[{yi}]")
+                    # rollout next state prediction
+                    axs[yi, 1].plot(x_time, ss_env[:, yi], color="b", label="data")
+                    axs[yi, 1].plot(
+                        x_time, ss_pred_roll[:, yi], color="r", label="dyn model"
+                    )
+                    axs[yi, 1].set_ylabel(f"ss[{yi}]")
+                axs[0, 1].legend()
+                axs[yi, 0].set_xlabel("steps")
+                axs[yi, 1].set_xlabel("steps")
+                axs[0, 0].set_title("pointwise next state predictions")
+                axs[0, 1].set_title("rollout next state prediction")
+                plt.pause(0.01)
+            # breakpoint()
 
             # i2c: find local (optimal) policy
-            local_policy = i2c_solver(n_iteration=n_iterations)
+            with torch.no_grad():
+                local_policy = i2c_solver(n_iteration=n_iterations)
 
             # Fit global policy to local policy
             # min KL[mean local_policy || global_policy]
@@ -1007,18 +1104,19 @@ if __name__ == "__main__":
             # should do: global_policy.predict(x, t)
 
             ## plot current i2c optimal controller
-            fix, axs = plt.subplots(3)
-            for i, (k, v) in enumerate(i2c_solver.metrics.items()):
-                with torch.no_grad():
-                    # axs[i].plot(v, label=f"$\epsilon={kl_bound}$")
-                    # axs[i].plot(v, label=f"$\\alpha={alpha}$")
-                    axs[i].plot(v, label=f"$Polyak$")
-                    # axs[i].plot(v, label=f"Maximum Likelihood")
-                    # axs[i].plot(v, label="Quadratic Model")
-                    # axs[i].plot(v, label="Annealing")
-                    axs[i].set_ylabel(k)
-            for ax in axs:
-                ax.legend()
+            with torch.no_grad():
+                fix, axs = plt.subplots(3)
+                for i, (k, v) in enumerate(i2c_solver.metrics.items()):
+                    with torch.no_grad():
+                        # axs[i].plot(v, label=f"$\epsilon={kl_bound}$")
+                        # axs[i].plot(v, label=f"$\\alpha={alpha}$")
+                        axs[i].plot(v, label=f"$Polyak$")
+                        # axs[i].plot(v, label=f"Maximum Likelihood")
+                        # axs[i].plot(v, label="Quadratic Model")
+                        # axs[i].plot(v, label="Annealing")
+                        axs[i].set_ylabel(k)
+                for ax in axs:
+                    ax.legend()
     # agent.plot_metrics()
     initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
     with torch.no_grad():
