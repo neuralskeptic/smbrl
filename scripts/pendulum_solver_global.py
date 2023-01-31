@@ -244,7 +244,7 @@ class QuadratureInference(object):
     def forward_pts(
         self, f: Callable, mu_x: torch.Tensor, x_pts: torch.Tensor
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
-        y_pts, x_pts = f(x_pts)  # return updated arg, because env clips u
+        y_pts, var_, x_pts = f(x_pts)  # return updated arg, because env clips u
         mu_y = torch.einsum("b,bi->i", self.weights_mu, y_pts)
         diff_x = x_pts - mu_x[None, :]
         diff_y = y_pts - mu_y[None, :]
@@ -272,8 +272,8 @@ class QuadratureGaussianInference(QuadratureInference):
     def forward_pts(
         self, f: Callable, mu_x: torch.Tensor, x_pts: torch.Tensor
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
-        breakpoint()
-        y_pts, sigma_pts = f(x_pts)
+        # breakpoint()
+        y_pts, sigma_pts, x_pts = f(x_pts)
         mu_y = torch.einsum("b,bi->i", self.weights_mu, y_pts)
         diff_x = x_pts - mu_x[None, :]
         diff_y = y_pts - mu_y[None, :]
@@ -321,7 +321,8 @@ def linear_gaussian_smoothing(
         + J @ (future_posterior.covariance - predicted_prior.covariance) @ J.T
     )
     if covariance.det() <= 0:  # TODO debug
-        covariance = nearest_spd(covariance)
+        # covariance = nearest_spd(covariance)
+        breakpoint()
     return MultivariateGaussian(
         mean,
         covariance,
@@ -379,8 +380,10 @@ class TimeVaryingLinearGaussian(Policy):
 
     def __call__(self, x: torch.Tensor, t: int) -> torch.Tensor:
         """Assumes batch input."""
-        return self.k_opt[t, :] + x @ self.K_opt[t, :, :].T, torch.tile(
-            self.sigma[t, :, :], (x.shape[0], 1, 1)
+        return (
+            self.k_opt[t, :] + x @ self.K_opt[t, :, :].T,
+            torch.tile(self.sigma[t, :, :], (x.shape[0], 1, 1)),
+            x,
         )
 
     def predict(self, x: torch.Tensor, t: int) -> torch.Tensor:
@@ -406,7 +409,8 @@ class TimeVaryingLinearGaussian(Policy):
                 self.k_opt[t, ...] = u.mean - self.K_opt[t, ...] @ x.mean
                 self.sigma[t, ...] = u.covariance
                 if self.sigma[t, ...].det() <= 0:
-                    self.sigma[t, ...] = nearest_spd(self.sigma[t, ...])
+                    # self.sigma[t, ...] = nearest_spd(self.sigma[t, ...])
+                    breakpoint()
                 try:  # TODO debug
                     torch.linalg.cholesky(self.sigma[t, ...])
                 except:
@@ -442,8 +446,11 @@ class Pendulum(object):
         u = torch.clip(u, -self.u_mx, self.u_mx)
         th_dot_dot = -3.0 * g / (2 * l) * torch.sin(x[:, 0] + torch.pi) - d * x[:, 1]
         th_dot_dot += 3.0 / (m * l**2) * u
-        x_dot = x[:, 1] + th_dot_dot * dt
-        x_pos = x[:, 0] + x_dot * dt
+        # variant from http://underactuated.mit.edu/pend.html
+        # th_dot_dot = -g / l * torch.sin(x[:, 0] + torch.pi) - d / (m*l**2) * x[:, 1]
+        # th_dot_dot += 1.0 / (m * l**2) * u
+        x_dot = x[:, 1] + th_dot_dot * dt  # theta_dot
+        x_pos = x[:, 0] + x_dot * dt  # theta
 
         x2 = torch.stack((x_pos, x_dot), dim=1)
         xu[:, 2] = u
@@ -555,12 +562,14 @@ class PseudoPosteriorSolver(object):
                 cost, alpha, state_action_policy
             )
             if state_action_cost.covariance.det() <= 0:  # TODO debug
-                state_action_cost.covariance = nearest_spd(state_action_cost.covariance)
+                # state_action_cost.covariance = nearest_spd(state_action_cost.covariance)
+                breakpoint()
             state_action_dist += [state_action_cost]
             # update state_action_cost with dynamics correlations
             next_state = self.approximate_inference_dynamics(env, state_action_cost)
             if next_state.covariance.det() <= 0:  # TODO debug
-                next_state.covariance = nearest_spd(next_state.covariance)
+                # next_state.covariance = nearest_spd(next_state.covariance)
+                breakpoint()
             future_state_dist += [next_state]
             state = next_state
         # breakpoint()  # TODO debug
@@ -595,24 +604,25 @@ class PseudoPosteriorSolver(object):
                 future_state_posterior,
             )
             if state_action_posterior.covariance.det() <= 0:  # TODO debug
-                state_action_posterior.covariance = nearest_spd(
-                    state_action_posterior.covariance
-                )
+                # state_action_posterior.covariance = nearest_spd(
+                #     state_action_posterior.covariance
+                # )
                 breakpoint()
             future_state_posterior = state_action_posterior.marginalize(
                 slice(0, self.dim_x)
             )  # pass the state posterior to previous timestep
             if future_state_posterior.covariance.det() <= 0:  # TODO debug
-                future_state_posterior.covariance = nearest_spd(
-                    future_state_posterior.covariance
-                )
+                # future_state_posterior.covariance = nearest_spd(
+                #     future_state_posterior.covariance
+                # )
+                breakpoint()
             dist += [state_action_posterior]
         # breakpoint()
         # plt.plot([d.covariance[0,0].detach() for d in dist])
         # plt.plot([d.covariance[1,1].detach() for d in dist])
         return list(reversed(dist))
 
-    def __call__(self, n_iteration: int):
+    def __call__(self, n_iteration: int, plot_posterior: bool = True):
         initial_alpha = 0.0
         self.init_metrics()
         policy = self.policy_prior
@@ -674,8 +684,9 @@ class PseudoPosteriorSolver(object):
             # plt.show()
             # if converged(metrics):
             #   break
-        # plot_trajectory_distribution(forward_state_action_prior, f"filter{i}")
-        plot_trajectory_distribution(state_action_posterior, "posterior")
+        if plot_posterior:
+            # plot_trajectory_distribution(forward_state_action_prior, f"filter{i}")
+            plot_trajectory_distribution(state_action_posterior, "posterior")
         return policy
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
@@ -971,7 +982,7 @@ if __name__ == "__main__":
     ### training hyperparams ###
     seed = 1
     n_epochs = 10
-    n_rollout_episodes = 10  # rollouts per epoch
+    n_rollout_episodes = 20  # rollouts per epoch
     task_horizon = 200
     # dynamics model
     # use_dyn_model = False
@@ -979,16 +990,20 @@ if __name__ == "__main__":
     # dyn_model_type = 'mlp'
     dyn_model_type = "nlm"
     plot_dyn = True
-    n_features_dyn = 256
-    n_epochs_dyn = 200
-    lr_dyn = 3e-5
+    n_features_dyn = 64
+    n_epochs_dyn = 100
+    # lr_dyn = 3e-4  # mlp
+    lr_dyn = 1e-4  # nlm
     batch_size_dyn = 200 * 10  # lower if gpu out of memory
     # policy model
     use_policy_model = False
     # i2c solver
-    n_iterations = 7
+    n_iterations = 1
     # i2c local policy
-    plot_local_policy = True
+    plot_local_policy = False
+
+    eval_plot = False
+
     # Fix seed
     fix_random_seed(seed)
 
@@ -1000,6 +1015,9 @@ if __name__ == "__main__":
     #### EXPERIMENT SETUP
 
     environment = Pendulum()
+    dim_xu = environment.dim_xu
+    dim_x = environment.dim_x
+    dim_u = environment.dim_u
     initial_state = torch.Tensor([torch.pi, 0.0])
 
     def state_action_cost(xu):
@@ -1013,18 +1031,28 @@ if __name__ == "__main__":
 
     initial_state_distribution = MultivariateGaussian(
         initial_state,
-        1e-6 * torch.eye(environment.dim_x),
-        # 1e-2 * torch.eye(environment.dim_x),  # more exploration
+        1e-6 * torch.eye(dim_x),
+        # 1e-2 * torch.eye(dim_x),  # more exploration
         None,
         None,
         None
-        # initial_state, 0.3 * torch.eye(environment.dim_x), None, None, None  # wider (learn more global, nonlinear, robust)
+        # initial_state, 0.3 * torch.eye(dim_x), None, None, None  # wider (learn more global, nonlinear, robust)
     )
 
-    train_buffer = ReplayBuffer(  # inputs and outputs of dynamics
-        environment.dim_xu,
-        environment.dim_x,
+    # inputs and outputs of dynamics
+    train_buffer = ReplayBuffer(
+        dim_xu,
+        dim_x,
         batchsize=batch_size_dyn,
+        device=device,
+        max_size=1e4,
+    )
+
+    # inputs and outputs of dynamics
+    test_buffer = ReplayBuffer(
+        dim_xu,
+        dim_x,
+        batchsize=1e4,  # max size
         device=device,
         max_size=1e4,
     )
@@ -1032,52 +1060,78 @@ if __name__ == "__main__":
     ## global dynamics model ###
     if dyn_model_type == "env":
         global_dynamics = environment
-        ai_dyn = QuadratureInference(environment.dim_xu, quad_params)
+        ai_dyn = QuadratureInference(dim_xu, quad_params)
     elif dyn_model_type == "mlp":
 
         def patch_call(fn):
             def wrap(self, xu):
-                u = xu[:, environment.dim_x :]
-                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-                xu[:, environment.dim_x :] = u
-                delta_x = fn(self, xu)  # model learns deltas
-                return xu[:, : environment.dim_x].detach() + delta_x, xu
+                xu[:, 2] = torch.clamp(xu[:, 2], -environment.u_mx, +environment.u_mx)
+                # input angles get split sin/cos
+                # output states are deltas
+                xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
+                xu_sincos[:, 0] = xu[:, 0].sin()
+                xu_sincos[:, 1] = xu[:, 0].cos()
+                xu_sincos[:, 2] = xu[:, 1]
+                xu_sincos[:, 3] = xu[:, 2]
+                delta_x = fn(self, xu_sincos)
+                # delta_x = fn(self, xu)
+                var = 0.01  # fake variance
+                return xu[:, :dim_x].detach() + delta_x, var, xu
 
             return wrap
 
         DNN3.__call__ = patch_call(DNN3.__call__)
-        global_dynamics = DNN3(environment.dim_xu, environment.dim_x, n_features_dyn)
+        dim_input = dim_xu + 1  # sin,cos of theta
+        # dim_input = dim_xu
+        global_dynamics = DNN3(dim_input, dim_x, n_features_dyn)
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
         loss_fn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x)[0], y)
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
-        ai_dyn = QuadratureInference(environment.dim_xu, quad_params)
+        ai_dyn = QuadratureInference(dim_xu, quad_params)
     elif dyn_model_type == "nlm":
 
         def patch_call(fn):
             def wrap(self, xu):
-                d_mu, cov, cov_in, cov_out = fn(self, xu)  # model learns deltas
+                xu[:, 2] = torch.clamp(xu[:, 2], -environment.u_mx, +environment.u_mx)
+                # input angles get split sin/cos
+                # output states are deltas
+                xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
+                xu_sincos[:, 0] = xu[:, 0].sin()
+                xu_sincos[:, 1] = xu[:, 0].cos()
+                xu_sincos[:, 2] = xu[:, 1]
+                xu_sincos[:, 3] = xu[:, 2]
+                delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
                 # cov_bii = torch.einsum('n,ij->nij', cov_out.diag(), cov_in)
-                cov_bii = torch.einsum("ij,n->nij", cov_out, cov_in.diag())
-                mu = xu[:, : environment.dim_x].detach() + d_mu
-                return mu, cov_bii
+                cov_bij = torch.einsum("ij,n->nij", cov_out, cov_in.diag())
+                mu = xu[:, :dim_x].detach() + delta_mu
+                return mu, cov_bij, xu
 
             return wrap
 
+        dim_input = dim_xu + 1  # sin,cos of theta
         NeuralLinearModel.__call__ = patch_call(NeuralLinearModel.__call__)
-        global_dynamics = NeuralLinearModel(
-            environment.dim_xu, environment.dim_x, n_features_dyn
-        )
-        # model.init_whitening(train_bxuffer.xs, train_buffer.ys)
-        loss_fn = lambda x, y: -global_dynamics.elbo(x, y)
+        global_dynamics = NeuralLinearModel(dim_input, dim_x, n_features_dyn)
+        # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
+
+        def loss_fn(xu, x_next):
+            xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
+            xu_sincos[:, 0] = xu[:, 0].sin()
+            xu_sincos[:, 1] = xu[:, 0].cos()
+            xu_sincos[:, 2] = xu[:, 1]
+            xu_sincos[:, 3] = xu[:, 2]
+            delta_x = x_next - xu[:, :dim_x]
+            return -global_dynamics.elbo(xu_sincos, delta_x)
+
+        # loss_fn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x), y)
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
-        ai_dyn = QuadratureGaussianInference(environment.dim_xu, quad_params)
+        ai_dyn = QuadratureGaussianInference(dim_xu, quad_params)
 
     ### local policy ###
     local_policy = TimeVaryingLinearGaussian(
         task_horizon,
-        environment.dim_x,
-        environment.dim_u,
-        action_covariance=0.2 * torch.eye(environment.dim_u),
+        dim_x,
+        dim_u,
+        action_covariance=0.2 * torch.eye(dim_u),
     )
 
     ### global policy model ###
@@ -1090,8 +1144,8 @@ if __name__ == "__main__":
     # if deterministic -> QuadratureInference (unscented gaussian approx)
     # if gaussian -> QuadratureGaussianInference (unscented gaussian approx)
     i2c_solver = PseudoPosteriorSolver(
-        environment.dim_x,
-        environment.dim_u,
+        dim_x,
+        dim_u,
         global_dynamics,
         # environment,
         state_action_cost,
@@ -1100,22 +1154,22 @@ if __name__ == "__main__":
         policy_prior=global_policy,
         approximate_inference_dynamics=ai_dyn,
         approximate_inference_policy=QuadratureGaussianInference(
-            environment.dim_x,
+            dim_x,
             quad_params,
         ),
         approximate_inference_cost=QuadratureImportanceSamplingInnovation(
-            environment.dim_xu,
+            dim_xu,
             gh_params,
         ),
         # approximate_inference_cost=LinearizationInnovation(),
         approximate_inference_smoothing=linear_gaussian_smoothing,
         # update_temperature_strategy=Constant(alpha),
-        # update_temperature_strategy=MaximumLikelihood(QuadratureInference(environment.dim_xu, quad_params)),
-        # update_temperature_strategy=QuadraticModel(QuadratureInference(environment.dim_xu, quad_params)),
-        # update_temperature_strategy=KullbackLeiblerDivergence(QuadratureInference(environment.dim_xu, gh_params), epsilon=kl_bound),
+        # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
+        # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
+        # update_temperature_strategy=KullbackLeiblerDivergence(QuadratureInference(dim_xu, gh_params), epsilon=kl_bound),
         # update_temperature_strategy=Annealing(1e-2, 5e1, 15+1),
         update_temperature_strategy=PolyakStepSize(
-            QuadratureInference(environment.dim_xu, quad_params)
+            QuadratureInference(dim_xu, quad_params)
         ),
     )
 
@@ -1134,22 +1188,29 @@ if __name__ == "__main__":
 
             class ExplorationPolicy:
                 def predict(self, *args):
-                    p = 0.5
+                    # p = 0.5
+                    p = 0.0  # TODO is this okay?
                     if torch.randn(1) > p:
-                        return global_policy.actual().predict(*args)
+                        # return global_policy.actual().predict(*args)
+                        return 1.0 * torch.ones(
+                            global_policy.actual().predict(*args).shape
+                        )
                     else:
                         # gaussian policy (zero mean, 1.5 std)
-                        du = environment.dim_u
+                        du = dim_u
                         return torch.normal(torch.zeros(du), 1.5 * torch.ones(du))
 
-            for _ in tqdm(range(n_rollout_episodes)):
+            for i in tqdm(range(n_rollout_episodes + 1)):  # TODO one more for test
                 state = initial_state_distribution.sample()
                 ss, a = environment.run(
                     state, ExplorationPolicy(), task_horizon
                 )  # rollout with actual
                 # drop last state and action to create next-state
                 s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
-                train_buffer.add(torch.hstack([s, a]), ss)
+                if i == 0:  # TODO add first rollout to test data
+                    test_buffer.add(torch.hstack([s, a]), ss)
+                else:
+                    train_buffer.add(torch.hstack([s, a]), ss)
 
         if dyn_model_type != "env":
             # Learn Dynamics
@@ -1167,8 +1228,13 @@ if __name__ == "__main__":
                     opt_dyn.step()
                     dyn_loss_trace.append(loss.detach().item())
                     wandb.log({"loss_dyn": dyn_loss_trace[-1]})
-            plt.figure()
-            plt.semilogy(dyn_loss_trace)
+            fig_loss, ax_loss = plt.subplots()
+            ax_loss.plot(dyn_loss_trace)
+            if dyn_model_type in ["nlm", "snngp"]:
+                if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
+                    ax_loss.set_yscale("symlog")
+                # elif dyn_loss_trace[0] < 0.1:
+                #     ax_loss.set_yscale("log")
 
             if plot_dyn:
                 ## test dynamics model in rollouts
@@ -1181,29 +1247,37 @@ if __name__ == "__main__":
                     # global_policy = FakePolicy()
 
                     ## plot pointwise & rollout predictions
-                    state = initial_state_distribution.sample()
                     # run environment
-                    ss_env, a_env = environment.run(state, global_policy, task_horizon)
-                    s_env = torch.cat([state.unsqueeze(0), ss_env[:-1, :]])
+                    # ss_env, a_env = environment.run(state, global_policy, task_horizon)
+                    # s_env = torch.cat([state.unsqueeze(0), ss_env[:-1, :]])
+                    # take (first/last) trajectory from replay buffer
+                    sa_env = test_buffer.xs[:task_horizon, :].cpu()  # first
+                    # sa_env = train_buffer.xs[-task_horizon:, :].cpu()  # last
+                    s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
+                    ss_env = test_buffer.ys[:task_horizon, :].cpu()  # first
+                    # ss_env = train_buffer.ys[-task_horizon:, :].cpu()  # last
+                    state = s_env[0, :]
                     # run dynamics model
-                    ss_pred_pw = torch.zeros((task_horizon, environment.dim_x))
-                    s_pred_roll = torch.zeros((task_horizon, environment.dim_x))
-                    ss_pred_roll = torch.zeros((task_horizon, environment.dim_x))
-                    a_pred_roll = torch.zeros((task_horizon, environment.dim_u))
+                    ss_pred_pw = torch.zeros((task_horizon, dim_x))
+                    s_pred_roll = torch.zeros((task_horizon, dim_x))
+                    ss_pred_roll = torch.zeros((task_horizon, dim_x))
                     for t in range(task_horizon):
                         # pointwise
                         xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
-                        ss_pred_pw[t, :], xu = global_dynamics(xu)
-                        # rollout
+                        ss_pred_pw[t, :], var, xu = global_dynamics(xu)
+                        # rollout (replay action)
                         s_pred_roll[t, :] = state
-                        a_pred_roll[t, :] = global_policy.predict(s_pred_roll[t, :], t)
-                        xu = torch.cat((s_pred_roll[t, :], a_pred_roll[t, :]))[None, :]
-                        ss_pred_roll[t, :], xu_ = global_dynamics(xu)  # updated xu?
+                        # a_pred_roll[t, :] = global_policy.predict(s_pred_roll[t, :], t)
+                        # xu = torch.cat((s_pred_roll[t, :], a_pred_roll[t, :]))[None, :]
+                        xu = torch.cat((s_pred_roll[t, :], a_env[t, :]))[None, :]
+                        ss_pred_roll[t, :], var, xu_ = global_dynamics(
+                            xu
+                        )  # updated xu?
                         state = ss_pred_roll[t, :]
                     # plot
-                    fig, axs = plt.subplots(environment.dim_x, 2, figsize=(10, 7))
+                    fig, axs = plt.subplots(dim_x, 2, figsize=(10, 7))
                     x_time = torch.tensor(range(0, task_horizon))
-                    for yi in range(environment.dim_x):
+                    for yi in range(dim_x):
                         # pointwise next state prediction
                         axs[yi, 0].plot(x_time, ss_env[:, yi], color="b", label="data")
                         axs[yi, 0].plot(
@@ -1230,7 +1304,7 @@ if __name__ == "__main__":
         # i2c: find local (optimal) policy
         # TODO why is this faster on CPU?
         with torch.no_grad():
-            local_policy = i2c_solver(n_iteration=n_iterations)
+            local_policy = i2c_solver(n_iteration=n_iterations, plot_posterior=False)
 
         ## plot current i2c optimal controller
         if plot_local_policy:
@@ -1260,30 +1334,31 @@ if __name__ == "__main__":
     ####################################################################################################################
     #### EVALUATION
 
-    # local_policy.plot_metrics()
-    initial_state = torch.Tensor([torch.pi, 0.0])
-    # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
-    with torch.no_grad():
-        if dyn_model_type != "env":
-            global_dynamics.cpu()  # in-place
+    if eval_plot:
+        # local_policy.plot_metrics()
+        initial_state = torch.Tensor([torch.pi, 0.0])
+        # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
+        with torch.no_grad():
+            if dyn_model_type != "env":
+                global_dynamics.cpu()  # in-place
 
-        # ### policy vs env
-        # trajectory = environment.run(initial_state, global_policy, task_horizon)
-        # environment.plot(*trajectory)
+            # ### policy vs env
+            # trajectory = environment.run(initial_state, global_policy, task_horizon)
+            # environment.plot(*trajectory)
 
-        ### policy vs dyn model
-        xs = torch.zeros((task_horizon, environment.dim_x))
-        us = torch.zeros((task_horizon, environment.dim_u))
-        state = initial_state
-        for t in range(task_horizon):
-            action = global_policy.predict(state, t)
-            xu = torch.cat((state, action))[None, :]
-            x_, _ = global_dynamics(xu)
-            xs[t, :] = state
-            us[t, :] = action
-            state = x_[0, :]
-        environment.plot(xs, us)  # env.plot does not use env, it only plots
+            ### policy vs dyn model
+            xs = torch.zeros((task_horizon, dim_x))
+            us = torch.zeros((task_horizon, dim_u))
+            state = initial_state
+            for t in range(task_horizon):
+                action = global_policy.predict(state, t)
+                xu = torch.cat((state, action))[None, :]
+                x_, _ = global_dynamics(xu)
+                xs[t, :] = state
+                us[t, :] = action
+                state = x_[0, :]
+            environment.plot(xs, us)  # env.plot does not use env, it only plots
 
-        # plt.show()
+            # plt.show()
 
     print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
