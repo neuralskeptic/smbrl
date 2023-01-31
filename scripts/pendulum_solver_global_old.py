@@ -1,5 +1,4 @@
 import math
-import os
 import pdb
 import time
 from abc import ABC, abstractmethod
@@ -8,10 +7,7 @@ from functools import partial, partialmethod
 from typing import Callable, Dict, List
 
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
-from experiment_launcher import run_experiment
-from experiment_launcher.utils import save_args
 from pytorch_minimize.optim import MinimizeWrapper
 from torch.autograd.functional import hessian, jacobian
 from tqdm import tqdm
@@ -21,7 +17,6 @@ from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.dnns import DNN3
 from src.models.linear_bayesian_models import NeuralLinearModel
 from src.utils.seeds import fix_random_seed
-from src.utils.time_utils import timestamp
 
 
 @dataclass
@@ -969,107 +964,61 @@ def nearest_spd(covariance):
     return V @ torch.diag(L) @ V.T
 
 
-def experiment(
-    env_type: str = "localPendulum",  # Pendulum
-    horizon: int = 200,
-    n_rollout_episodes: int = 20,
-    batch_size: int = 200 * 10,  # lower if gpu out of memory
-    # plot_data: bool = False,
-    n_iter: int = 2,  # outer loop
-    use_cuda: bool = True,  # for policy/dynamics training (i2c on cpu)
-    log_frequency: float = 0.1,  # every p% epochs of n_epochs
-    model_save_frequency: float = 0.5,  # every n-th of n_epochs
-    ## dynamics ##
-    plot_dyn: bool = True,  # plot pointwise and rollout prediction
-    # #  a) no model
-    dyn_model_type: str = "env",
-    # #  b) dnn model
-    # dyn_model_type: str = "mlp",
-    # n_features_dyn: int = 64,
-    # lr_dyn: float = 3e-4,
-    # n_epochs_dyn: int = 100,
-    # #  c) linear regression w/ dnn features
-    # dyn_model_type: str = "nlm",
-    # n_features_dyn: int = 64,
-    # lr_dyn: float = 1e-4,
-    # n_epochs_dyn: int = 100,
-    ##############
-    ## policy ##
-    plot_policy: bool = False,  # plot pointwise and rollout prediction
-    #  a) no model
-    policy_type: str = "tvlg",  # time-varying linear gaussian controllers (i2c)
-    ############
-    ## i2c solver ##
-    n_iter_solver: int = 1,  # how many i2c solver iterations to do
-    plot_posterior: bool = False,  # TODO describe
-    plot_local_policy: bool = False,  # TODO describe
-    ############
-    ## general ##
-    plotting: bool = True,  # if False overrides all other flags
-    log_wandb: bool = True,  # TODO unused: check SAC_qube100_joao.py for Logger
-    wandb_project: str = "smbrl_i2c",
-    wandb_entity: str = "showmezeplozz",
-    wandb_job_type: str = "train",  # TODO unused
-    seed: int = 0,
-    results_dir: str = "logs/tmp/",
-    debug: bool = True,
-):
-    ####################################################################################################################
-    #### SETUP (saved to yaml)
+if __name__ == "__main__":
+    torch.set_printoptions(precision=7)
+    torch.set_default_dtype(torch.float64)
 
-    if debug:
-        # disable wandb logging and redirect normal logging to ./debug directory
-        print("@@@@@@@@@@@@@@@@@ DEBUG: LOGGING DISABLED @@@@@@@@@@@@@@@@@")
-        os.environ["WANDB_MODE"] = "disabled"
-        results_dir = os.path.join("debug", results_dir)
+    import os
+
+    os.environ["WANDB_MODE"] = "disabled"
+    wandb.init(project="i2c_mlp-dyn")  # do not time, inconsistent & slow!
+    ####################################################################################################################
+    #### SETUP
+    time_begin = time.time()
+
+    use_cuda = True
+    # use_cuda = False  # TODO i2c seems slower on gpu :(
+
+    ### training hyperparams ###
+    seed = 1
+    n_epochs = 10
+    n_rollout_episodes = 20  # rollouts per epoch
+    task_horizon = 200
+    # dynamics model
+    # use_dyn_model = False
+    # dyn_model_type = 'env'
+    # dyn_model_type = 'mlp'
+    dyn_model_type = "nlm"
+    plot_dyn = True
+    n_features_dyn = 64
+    n_epochs_dyn = 100
+    # lr_dyn = 3e-4  # mlp
+    lr_dyn = 1e-4  # nlm
+    batch_size_dyn = 200 * 10  # lower if gpu out of memory
+    # policy model
+    use_policy_model = False
+    # i2c solver
+    n_iterations = 1
+    # i2c local policy
+    plot_local_policy = False
+
+    eval_plot = False
 
     # Fix seed
     fix_random_seed(seed)
 
-    wandb.init(project=wandb_project)
-
-    # Results directory
-    wandb_group: str = f"i2c_{env_type}_{dyn_model_type}_{policy_type}"
-    repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
-    results_dir = os.path.join(
-        repo_dir, results_dir, wandb_group, str(seed), timestamp()
-    )
-    os.makedirs(results_dir, exist_ok=True)
-
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
-    # Save arguments
-    save_args(results_dir, locals(), git_repo_path="./")
     wandb.config = locals()
 
     ####################################################################################################################
     #### EXPERIMENT SETUP
 
-    print(f"Env: {env_type}, Dyn: {dyn_model_type}, Pol: {policy_type}")
-    print(f"Seed: {seed}")
-    print(f"Logs in {results_dir}")
-
-    time_begin = time.time()
-
-    # visialization options
-    torch.set_printoptions(precision=7)
-    torch.set_default_dtype(torch.float64)
-
-    ### mdp, initial state, cost ###
-    if env_type == "localPendulum":
-        environment = Pendulum()  # local seed
+    environment = Pendulum()
     dim_xu = environment.dim_xu
     dim_x = environment.dim_x
     dim_u = environment.dim_u
     initial_state = torch.Tensor([torch.pi, 0.0])
-    initial_state_distribution = MultivariateGaussian(
-        initial_state,
-        1e-6 * torch.eye(dim_x),
-        # 1e-2 * torch.eye(dim_x),  # more exploration
-        None,
-        None,
-        None,
-    )
 
     def state_action_cost(xu):
         # swing-up from \theta = \pi -> 0
@@ -1077,21 +1026,38 @@ def experiment(
             :, 2
         ] ** 2, xu
 
-    train_buffer = ReplayBuffer(
-        dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
-    )
-
-    test_buffer = ReplayBuffer(
-        dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
-    )
-
-    ### approximate inference params ###
     quad_params = CubatureQuadrature(1, 0, 0)
     gh_params = GaussHermiteQuadrature(degree=3)
-    # if deterministic -> QuadratureInference (unscented gaussian approx)
-    # if gaussian -> QuadratureGaussianInference (unscented gaussian approx)
 
-    ### global dynamics model ###
+    initial_state_distribution = MultivariateGaussian(
+        initial_state,
+        1e-6 * torch.eye(dim_x),
+        # 1e-2 * torch.eye(dim_x),  # more exploration
+        None,
+        None,
+        None
+        # initial_state, 0.3 * torch.eye(dim_x), None, None, None  # wider (learn more global, nonlinear, robust)
+    )
+
+    # inputs and outputs of dynamics
+    train_buffer = ReplayBuffer(
+        dim_xu,
+        dim_x,
+        batchsize=batch_size_dyn,
+        device=device,
+        max_size=1e4,
+    )
+
+    # inputs and outputs of dynamics
+    test_buffer = ReplayBuffer(
+        dim_xu,
+        dim_x,
+        batchsize=1e4,  # max size
+        device=device,
+        max_size=1e4,
+    )
+
+    ## global dynamics model ###
     if dyn_model_type == "env":
         global_dynamics = environment
         ai_dyn = QuadratureInference(dim_xu, quad_params)
@@ -1116,9 +1082,10 @@ def experiment(
 
         DNN3.__call__ = patch_call(DNN3.__call__)
         dim_input = dim_xu + 1  # sin,cos of theta
+        # dim_input = dim_xu
         global_dynamics = DNN3(dim_input, dim_x, n_features_dyn)
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
-        loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x)[0], y)
+        loss_fn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x)[0], y)
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
         ai_dyn = QuadratureInference(dim_xu, quad_params)
     elif dyn_model_type == "nlm":
@@ -1146,7 +1113,7 @@ def experiment(
         global_dynamics = NeuralLinearModel(dim_input, dim_x, n_features_dyn)
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
 
-        def loss_fn_dyn(xu, x_next):
+        def loss_fn(xu, x_next):
             xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
             xu_sincos[:, 0] = xu[:, 0].sin()
             xu_sincos[:, 1] = xu[:, 0].cos()
@@ -1155,41 +1122,41 @@ def experiment(
             delta_x = x_next - xu[:, :dim_x]
             return -global_dynamics.elbo(xu_sincos, delta_x)
 
+        # loss_fn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x), y)
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
         ai_dyn = QuadratureGaussianInference(dim_xu, quad_params)
-    elif dyn_model_type == "snngp":
-        pass  # TODO
 
-    ### local (i2c) policy ###
+    ### local policy ###
     local_policy = TimeVaryingLinearGaussian(
-        horizon,
+        task_horizon,
         dim_x,
         dim_u,
         action_covariance=0.2 * torch.eye(dim_u),
     )
 
     ### global policy model ###
-    if policy_type == "tvlg":
-        global_policy = local_policy
-        ai_pol = QuadratureGaussianInference(dim_x, quad_params)
-    elif policy_type == "mlp":
+    if use_policy_model:
         pass  # TODO
-    elif policy_type == "nlm":
-        pass  # TODO
-    elif policy_type == "snngp":
-        pass  # TODO
+    else:
+        global_policy = local_policy  # TODO mlp/nlm/snngp
 
     ### i2c solver ###
+    # if deterministic -> QuadratureInference (unscented gaussian approx)
+    # if gaussian -> QuadratureGaussianInference (unscented gaussian approx)
     i2c_solver = PseudoPosteriorSolver(
         dim_x,
         dim_u,
         global_dynamics,
+        # environment,
         state_action_cost,
-        horizon,
+        task_horizon,
         initial_state_distribution,
         policy_prior=global_policy,
         approximate_inference_dynamics=ai_dyn,
-        approximate_inference_policy=ai_pol,
+        approximate_inference_policy=QuadratureGaussianInference(
+            dim_x,
+            quad_params,
+        ),
         approximate_inference_cost=QuadratureImportanceSamplingInnovation(
             dim_xu,
             gh_params,
@@ -1212,7 +1179,7 @@ def experiment(
     # for alpha in [1e-1, 1, 10, 100, 1000]:
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
     # for _ in [None]:
-    for i_iter in range(n_iter):
+    for i in range(n_epochs):
         if dyn_model_type != "env":
             global_dynamics.cpu()  # in-place
             # Rollout global policy in env -> ReplayBuffer
@@ -1236,7 +1203,7 @@ def experiment(
             for i in tqdm(range(n_rollout_episodes + 1)):  # TODO one more for test
                 state = initial_state_distribution.sample()
                 ss, a = environment.run(
-                    state, ExplorationPolicy(), horizon
+                    state, ExplorationPolicy(), task_horizon
                 )  # rollout with actual
                 # drop last state and action to create next-state
                 s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
@@ -1247,48 +1214,30 @@ def experiment(
 
         if dyn_model_type != "env":
             # Learn Dynamics
-            print("Training Dynamics ...")
+            tqdm.write("Training Dynamics ...")
+            # TODO change to nlm/snngp with ELBO loss
             global_dynamics.to(device)  # in-place
             dyn_loss_trace = []
             # torch.autograd.set_detect_anomaly(True)
-            for i_epoch_dyn in tqdm(range(n_epochs_dyn + 1)):
+            for n in tqdm(range(n_epochs_dyn + 1)):
                 for i_minibatch, minibatch in enumerate(train_buffer):
                     x, y = minibatch
                     opt_dyn.zero_grad()
-                    loss = loss_fn_dyn(x, y)
+                    loss = loss_fn(x, y)
                     loss.backward()
                     opt_dyn.step()
                     dyn_loss_trace.append(loss.detach().item())
-
-                # log metrics
-                if i_epoch_dyn % (n_epochs_dyn * log_frequency) == 0:
-                    with torch.no_grad():
-                        pass  # TODO compute test loss/rmse?
-
-                        logstring = f"DYN: Epoch {i_epoch_dyn} Train: Loss={dyn_loss_trace[-1]:.2}"
-                        # logstring += f", RMSE={rmse:.2f}"
-                        # logstring += f", test loss={test_loss_trace[-1]:.2}"
-                        print(
-                            "\r" + logstring + "\033[K"
-                        )  # \033[K = erase to end of line
-                        with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
-                            f.write(logstring + "\n")
-                        wandb.log({"loss_dyn": dyn_loss_trace[-1]})
-
-                # TODO save model more often than in each global iter?
-                # if n % (n_epochs * model_save_frequency) == 0:
-                #     # Save the agent
-                #     torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}_{i_iter}.pth"))
-
-            # Save the model after training
-            torch.save(
-                global_dynamics.state_dict(),
-                os.path.join(results_dir, "dyn_model_{i_iter}.pth"),
-            )
+                    wandb.log({"loss_dyn": dyn_loss_trace[-1]})
+            fig_loss, ax_loss = plt.subplots()
+            ax_loss.plot(dyn_loss_trace)
+            if dyn_model_type in ["nlm", "snngp"]:
+                if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
+                    ax_loss.set_yscale("symlog")
+                # elif dyn_loss_trace[0] < 0.1:
+                #     ax_loss.set_yscale("log")
 
             if plot_dyn:
                 ## test dynamics model in rollouts
-                # TODO extract?
                 global_dynamics.cpu()  # in-place
                 with torch.no_grad():
                     # class FakePolicy:
@@ -1302,17 +1251,17 @@ def experiment(
                     # ss_env, a_env = environment.run(state, global_policy, task_horizon)
                     # s_env = torch.cat([state.unsqueeze(0), ss_env[:-1, :]])
                     # take (first/last) trajectory from replay buffer
-                    sa_env = test_buffer.xs[:horizon, :].cpu()  # first
+                    sa_env = test_buffer.xs[:task_horizon, :].cpu()  # first
                     # sa_env = train_buffer.xs[-task_horizon:, :].cpu()  # last
                     s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                    ss_env = test_buffer.ys[:horizon, :].cpu()  # first
+                    ss_env = test_buffer.ys[:task_horizon, :].cpu()  # first
                     # ss_env = train_buffer.ys[-task_horizon:, :].cpu()  # last
                     state = s_env[0, :]
                     # run dynamics model
-                    ss_pred_pw = torch.zeros((horizon, dim_x))
-                    s_pred_roll = torch.zeros((horizon, dim_x))
-                    ss_pred_roll = torch.zeros((horizon, dim_x))
-                    for t in range(horizon):
+                    ss_pred_pw = torch.zeros((task_horizon, dim_x))
+                    s_pred_roll = torch.zeros((task_horizon, dim_x))
+                    ss_pred_roll = torch.zeros((task_horizon, dim_x))
+                    for t in range(task_horizon):
                         # pointwise
                         xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
                         ss_pred_pw[t, :], var, xu = global_dynamics(xu)
@@ -1327,7 +1276,7 @@ def experiment(
                         state = ss_pred_roll[t, :]
                     # plot
                     fig, axs = plt.subplots(dim_x, 2, figsize=(10, 7))
-                    x_time = torch.tensor(range(0, horizon))
+                    x_time = torch.tensor(range(0, task_horizon))
                     for yi in range(dim_x):
                         # pointwise next state prediction
                         axs[yi, 0].plot(x_time, ss_env[:, yi], color="b", label="data")
@@ -1349,21 +1298,16 @@ def experiment(
                     axs[yi, 1].set_xlabel("steps")
                     axs[0, 0].set_title("pointwise next state predictions")
                     axs[0, 1].set_title("rollout next state prediction")
-                    # TODO clean up
-                    plt.savefig(
-                        os.path.join(results_dir, "dyn_rollout_{i_iter}.png"), dpi=150
-                    )
+                    plt.pause(0.01)
+            # breakpoint()
 
-        # breakpoint()
-
-        # i2c: find local (optimal) tvlg policy
+        # i2c: find local (optimal) policy
+        # TODO why is this faster on CPU?
         with torch.no_grad():
-            local_policy = i2c_solver(
-                n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
-            )
+            local_policy = i2c_solver(n_iteration=n_iterations, plot_posterior=False)
 
         ## plot current i2c optimal controller
-        if plot_local_policy and plotting:
+        if plot_local_policy:
             with torch.no_grad():
                 fix, axs = plt.subplots(3)
                 for i, (k, v) in enumerate(i2c_solver.metrics.items()):
@@ -1378,23 +1322,19 @@ def experiment(
                         axs[i].set_ylabel(k)
                 for ax in axs:
                     ax.legend()
-                # TODO clean up plot
-                plt.savefig(
-                    os.path.join(results_dir, "i2c_metrics_{i_iter}.png"), dpi=150
-                )
 
         # Fit global policy to local policy
-        if policy_type == "tvlg":
-            global_policy = local_policy
-        else:
-            pass  # TODO
+        if use_policy_model:
             # min KL[mean local_policy || global_policy]
+            pass  # TODO
             # should do: global_policy.predict(x, t)
+        else:
+            global_policy = local_policy
 
     ####################################################################################################################
     #### EVALUATION
 
-    if plotting:
+    if eval_plot:
         # local_policy.plot_metrics()
         initial_state = torch.Tensor([torch.pi, 0.0])
         # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
@@ -1407,49 +1347,18 @@ def experiment(
             # environment.plot(*trajectory)
 
             ### policy vs dyn model
-            xs = torch.zeros((horizon, dim_x))
-            us = torch.zeros((horizon, dim_u))
+            xs = torch.zeros((task_horizon, dim_x))
+            us = torch.zeros((task_horizon, dim_u))
             state = initial_state
-            for t in range(horizon):
+            for t in range(task_horizon):
                 action = global_policy.predict(state, t)
                 xu = torch.cat((state, action))[None, :]
-                x_, *_ = global_dynamics(xu)
+                x_, _ = global_dynamics(xu)
                 xs[t, :] = state
                 us[t, :] = action
                 state = x_[0, :]
             environment.plot(xs, us)  # env.plot does not use env, it only plots
-            # TODO save plot
 
-        # plot training loss
-        def scaled_xaxis(y_points, n_on_axis):
-            return np.arange(len(y_points)) / len(y_points) * n_on_axis
+            # plt.show()
 
-        fig_loss_dyn, ax_loss_dyn = plt.subplots()
-        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_epochs_dyn)
-        ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
-        # TODO test loss trace
-        # x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
-        # ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
-        if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
-            ax_loss_dyn.set_yscale("symlog")
-        ax_loss_dyn.set_xlabel("epochs")
-        ax_loss_dyn.set_ylabel("loss")
-        ax_loss_dyn.set_title(
-            f"DYN {dyn_model_type} loss (n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
-        )
-        fig_loss_dyn.legend()
-        plt.savefig(os.path.join(results_dir, "dyn_loss.png"), dpi=150)
-        # TODO plot policy train loss
-
-        if plotting:
-            plt.show()
-
-        print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
-        print(f"Logs in {results_dir}")
-
-        torch.cuda.empty_cache()
-
-
-if __name__ == "__main__":
-    # Leave unchanged
-    run_experiment(experiment)
+    print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
