@@ -33,3 +33,41 @@ class TwoLayerNetwork(nn.Module):
 
     def forward(self, x):
         return self.act(self.l2(self.act(self.l1(x))))
+
+
+class NeuralNetwork(nn.Module):
+    def __init__(
+        self, d_in, d_out, d_hidden, n_hidden_layers=1, activation="leakyrelu"
+    ):
+        assert activation in ACTIVATIONS
+        super().__init__()
+        self.layers = nn.ModuleList([nn.Linear(d_in, d_hidden)])
+        for i in range(n_hidden_layers - 1):
+            self.layers.append(nn.Linear(d_hidden, d_hidden))
+        self.layers.append(nn.Linear(d_hidden, d_out))
+        self.act = ACTIVATIONS[activation]
+
+    def forward(self, x):
+        for l in self.layers:
+            x = self.act(l(x))
+        return x
+
+
+class NormalizedResidualNetwork(nn.Module):
+    def __init__(
+        self, d_in, d_out, d_hidden, n_hidden_layers=1, activation="leakyrelu"
+    ):
+        assert activation in ACTIVATIONS
+        super().__init__()
+        # Note: spectral_norm sets norm to 1, do we need it to be configurable?
+        self.layers = nn.ModuleList([spectral_norm(nn.Linear(d_in, d_hidden))])
+        for i in range(n_hidden_layers - 1):
+            self.layers.append(spectral_norm(nn.Linear(d_hidden, d_hidden)))
+        self.act = ACTIVATIONS[activation]
+        self.register_buffer("W", torch.randn(d_hidden, d_out // 2))
+
+    def forward(self, x):
+        for l in self.layers:
+            lx = l(x)
+            x = lx + self.act(lx)
+        return torch.cat([torch.cos(x @ self.W), torch.sin(x @ self.W)], -1)
