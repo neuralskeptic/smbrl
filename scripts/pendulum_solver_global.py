@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
+from mushroom_rl.core.logger.logger import Logger
 from pytorch_minimize.optim import MinimizeWrapper
 from torch.autograd.functional import hessian, jacobian
 from tqdm import tqdm
@@ -249,7 +250,7 @@ class QuadratureInference(object):
     def forward_pts(
         self, f: Callable, mu_x: torch.Tensor, x_pts: torch.Tensor
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
-        y_pts, var_, x_pts = f(x_pts)  # return updated arg, because env clips u
+        y_pts, x_pts = f(x_pts)  # return updated arg, because env clips u
         mu_y = torch.einsum("b,bi->i", self.weights_mu, y_pts)
         diff_x = x_pts - mu_x[None, :]
         diff_y = y_pts - mu_y[None, :]
@@ -424,14 +425,14 @@ class TimeVaryingLinearGaussian(Policy):
         else:
             raise ValueError("Cannot update from this distribution!")
 
-    def to(self, device):
-        self.k_actual = self.k_actual.to(device)
-        self.K_actual = self.K_actual.to(device)
-        self.k_opt = self.k_opt.to(device)
-        self.K_opt = self.K_opt.to(device)
-        self.sigma = self.sigma.to(device)
-        self.chol = self.chol.to(device)
-        return self
+    # def to(self, device):
+    #     self.k_actual = self.k_actual.to(device)
+    #     self.K_actual = self.K_actual.to(device)
+    #     self.k_opt = self.k_opt.to(device)
+    #     self.K_opt = self.K_opt.to(device)
+    #     self.sigma = self.sigma.to(device)
+    #     self.chol = self.chol.to(device)
+    #     return self
 
 
 class Pendulum(object):
@@ -602,7 +603,6 @@ class PseudoPosteriorSolver(object):
             reversed(predicted_state_distribution),
         ):
             # breakpoint()
-            # breakpoint()  # TODO check if next statement explodes cov?
             state_action_posterior = self.approximate_inference_smoothing(
                 current_state_action_prior,
                 predicted_state_prior,
@@ -972,27 +972,28 @@ def nearest_spd(covariance):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_rollout_episodes: int = 20,
+    n_rollout_episodes: int = 5,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     # plot_data: bool = False,
-    n_iter: int = 2,  # outer loop
+    n_iter: int = 1,  # outer loop
     use_cuda: bool = True,  # for policy/dynamics training (i2c on cpu)
     log_frequency: float = 0.1,  # every p% epochs of n_epochs
     model_save_frequency: float = 0.5,  # every n-th of n_epochs
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
     # #  a) no model
-    dyn_model_type: str = "env",
+    # dyn_model_type: str = "env",
     # #  b) dnn model
     # dyn_model_type: str = "mlp",
     # n_features_dyn: int = 64,
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 100,
-    # #  c) linear regression w/ dnn features
-    # dyn_model_type: str = "nlm",
-    # n_features_dyn: int = 64,
-    # lr_dyn: float = 1e-4,
-    # n_epochs_dyn: int = 100,
+    # c) linear regression w/ dnn features
+    dyn_model_type: str = "nlm",
+    n_features_dyn: int = 256,
+    n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    lr_dyn: float = 1e-4,
+    n_epochs_dyn: int = 100,
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
@@ -1001,18 +1002,19 @@ def experiment(
     ############
     ## i2c solver ##
     n_iter_solver: int = 1,  # how many i2c solver iterations to do
-    plot_posterior: bool = False,  # TODO describe
-    plot_local_policy: bool = False,  # TODO describe
+    plot_posterior: bool = False,  # plot state-action-posterior over time
+    plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
     ## general ##
     plotting: bool = True,  # if False overrides all other flags
-    log_wandb: bool = True,  # TODO unused: check SAC_qube100_joao.py for Logger
+    log_console: bool = False,  # also log to console (not just log file); FORCE on if debug
+    log_wandb: bool = True,  # off if debug
     wandb_project: str = "smbrl_i2c",
     wandb_entity: str = "showmezeplozz",
-    wandb_job_type: str = "train",  # TODO unused
+    wandb_job_type: str = "train",
     seed: int = 0,
     results_dir: str = "logs/tmp/",
-    debug: bool = True,
+    debug: bool = True,  # prepends logdir with 'debug/', disables wandb, enables console logging
 ):
     ####################################################################################################################
     #### SETUP (saved to yaml)
@@ -1021,12 +1023,12 @@ def experiment(
         # disable wandb logging and redirect normal logging to ./debug directory
         print("@@@@@@@@@@@@@@@@@ DEBUG: LOGGING DISABLED @@@@@@@@@@@@@@@@@")
         os.environ["WANDB_MODE"] = "disabled"
+        log_console = True
+        log_wandb = False
         results_dir = os.path.join("debug", results_dir)
 
     # Fix seed
     fix_random_seed(seed)
-
-    wandb.init(project=wandb_project)
 
     # Results directory
     wandb_group: str = f"i2c_{env_type}_{dyn_model_type}_{policy_type}"
@@ -1040,14 +1042,25 @@ def experiment(
 
     # Save arguments
     save_args(results_dir, locals(), git_repo_path="./")
-    wandb.config = locals()
+
+    # logger
+    logger = Logger(
+        config=locals(),
+        log_name=seed,
+        results_dir=results_dir,
+        project=wandb_project,
+        entity=wandb_entity,
+        wandb_kwargs={"group": wandb_group, "job_type": wandb_job_type},
+        tags=["dyn_model_type", "policy_type", "env_type"],
+        log_console=log_console,
+        log_wandb=log_wandb,
+    )
 
     ####################################################################################################################
     #### EXPERIMENT SETUP
 
     print(f"Env: {env_type}, Dyn: {dyn_model_type}, Pol: {policy_type}")
     print(f"Seed: {seed}")
-    print(f"Logs in {results_dir}")
 
     time_begin = time.time()
 
@@ -1109,8 +1122,8 @@ def experiment(
                 xu_sincos[:, 3] = xu[:, 2]
                 delta_x = fn(self, xu_sincos)
                 # delta_x = fn(self, xu)
-                var = 0.01  # fake variance
-                return xu[:, :dim_x].detach() + delta_x, var, xu
+                # var = 0.01  # fake variance
+                return xu[:, :dim_x].detach() + delta_x, xu
 
             return wrap
 
@@ -1143,7 +1156,9 @@ def experiment(
 
         dim_input = dim_xu + 1  # sin,cos of theta
         NeuralLinearModel.__call__ = patch_call(NeuralLinearModel.__call__)
-        global_dynamics = NeuralLinearModel(dim_input, dim_x, n_features_dyn)
+        global_dynamics = NeuralLinearModel(
+            dim_input, dim_x, n_features_dyn, n_hidden_layers_dyn
+        )
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
 
         def loss_fn_dyn(xu, x_next):
@@ -1178,6 +1193,13 @@ def experiment(
         pass  # TODO
     elif policy_type == "snngp":
         pass  # TODO
+
+    ### rollout policy (mock object) ###
+    class MockPolicy:
+        def predict(self, *args):
+            pass  # fill/override before use
+
+    exploration_policy = MockPolicy()
 
     ### i2c solver ###
     i2c_solver = PseudoPosteriorSolver(
@@ -1215,35 +1237,35 @@ def experiment(
     for i_iter in range(n_iter):
         if dyn_model_type != "env":
             global_dynamics.cpu()  # in-place
-            # Rollout global policy in env -> ReplayBuffer
-            # (faster on CPU) ->  why????
-            tqdm.write("Collecting rollouts ...")
 
-            class ExplorationPolicy:
-                def predict(self, *args):
-                    # p = 0.5
-                    p = 0.0  # TODO is this okay?
-                    if torch.randn(1) > p:
-                        # return global_policy.actual().predict(*args)
-                        return 1.0 * torch.ones(
-                            global_policy.actual().predict(*args).shape
-                        )
-                    else:
-                        # gaussian policy (zero mean, 1.5 std)
-                        du = dim_u
-                        return torch.normal(torch.zeros(du), 1.5 * torch.ones(du))
+        # # tvlg with feedback
+        # exploration_policy = global_policy.actual()
 
-            for i in tqdm(range(n_rollout_episodes + 1)):  # TODO one more for test
-                state = initial_state_distribution.sample()
-                ss, a = environment.run(
-                    state, ExplorationPolicy(), horizon
-                )  # rollout with actual
-                # drop last state and action to create next-state
-                s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
-                if i == 0:  # TODO add first rollout to test data
-                    test_buffer.add(torch.hstack([s, a]), ss)
-                else:
-                    train_buffer.add(torch.hstack([s, a]), ss)
+        # constant a=1
+        exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
+
+        # # 50-50 %: tvgl-fb or N(0, 1.5) noise
+        # def noise_pred(*args):
+        #     if torch.randn(1) > 0.5:
+        #         return global_policy.actual().predict(*args)
+        #     else:
+        #         return torch.normal(torch.zeros(dim_u), 1.5 * torch.ones(dim_u))
+        # exploration_policy.predict = noise_pred
+
+        # train and test rollouts (env & exploration policy)
+        print("Collecting Rollouts ...")
+        for i in tqdm(range(n_rollout_episodes)):  # 80 % train
+            state = initial_state_distribution.sample()
+            ss, a = environment.run(state, exploration_policy, horizon)
+            # drop last state and action to create next-state
+            s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
+            train_buffer.add(torch.hstack([s, a]), ss)
+        for i in tqdm(range(int(n_rollout_episodes / 4))):  # 20 % test
+            state = initial_state_distribution.sample()
+            ss, a = environment.run(state, exploration_policy, horizon)
+            # drop last state and action to create next-state
+            s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
+            test_buffer.add(torch.hstack([s, a]), ss)
 
         if dyn_model_type != "env":
             # Learn Dynamics
@@ -1265,15 +1287,22 @@ def experiment(
                     with torch.no_grad():
                         pass  # TODO compute test loss/rmse?
 
-                        logstring = f"DYN: Epoch {i_epoch_dyn} Train: Loss={dyn_loss_trace[-1]:.2}"
+                        logger.log_data(
+                            {
+                                "iter": i_iter,
+                                "epoch_dyn": i_epoch_dyn,
+                                "dyn_loss": dyn_loss_trace[-1],
+                            }
+                        )
+                        # logstring = f"DYN: Epoch {i_epoch_dyn} Train: Loss={dyn_loss_trace[-1]:.2}"
                         # logstring += f", RMSE={rmse:.2f}"
                         # logstring += f", test loss={test_loss_trace[-1]:.2}"
-                        print(
-                            "\r" + logstring + "\033[K"
-                        )  # \033[K = erase to end of line
-                        with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
-                            f.write(logstring + "\n")
-                        wandb.log({"loss_dyn": dyn_loss_trace[-1]})
+                        # print(
+                        #     "\r" + logstring + "\033[K"
+                        # )  # \033[K = erase to end of line
+                        # with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
+                        #     f.write(logstring + "\n")
+                        # wandb.log({"loss_dyn": dyn_loss_trace[-1]})
 
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
@@ -1315,15 +1344,19 @@ def experiment(
                     for t in range(horizon):
                         # pointwise
                         xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
-                        ss_pred_pw[t, :], var, xu = global_dynamics(xu)
+                        if dyn_model_type in ["nlm", "snngp"]:
+                            ss_pred_pw[t, :], var, xu = global_dynamics(xu)
+                        else:
+                            ss_pred_pw[t, :], xu = global_dynamics(xu)
                         # rollout (replay action)
                         s_pred_roll[t, :] = state
                         # a_pred_roll[t, :] = global_policy.predict(s_pred_roll[t, :], t)
                         # xu = torch.cat((s_pred_roll[t, :], a_pred_roll[t, :]))[None, :]
                         xu = torch.cat((s_pred_roll[t, :], a_env[t, :]))[None, :]
-                        ss_pred_roll[t, :], var, xu_ = global_dynamics(
-                            xu
-                        )  # updated xu?
+                        if dyn_model_type in ["nlm", "snngp"]:
+                            ss_pred_roll[t, :], var, xu = global_dynamics(xu)
+                        else:
+                            ss_pred_roll[t, :], xu = global_dynamics(xu)
                         state = ss_pred_roll[t, :]
                     # plot
                     fig, axs = plt.subplots(dim_x, 2, figsize=(10, 7))
@@ -1361,9 +1394,15 @@ def experiment(
             local_policy = i2c_solver(
                 n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
             )
+        # log i2c metrics
+        for i_ in range(n_iter_solver):
+            log_dict = {"iter": i_iter, "i2c_iter": i_}
+            for (k, v) in i2c_solver.metrics.items():
+                log_dict[k] = v[i_]  # one key, n_iter_solver values
+            logger.log_data(log_dict)
 
         ## plot current i2c optimal controller
-        if plot_local_policy and plotting:
+        if plot_local_policy_metrics and plotting:
             with torch.no_grad():
                 fix, axs = plt.subplots(3)
                 for i, (k, v) in enumerate(i2c_solver.metrics.items()):
@@ -1424,25 +1463,30 @@ def experiment(
         def scaled_xaxis(y_points, n_on_axis):
             return np.arange(len(y_points)) / len(y_points) * n_on_axis
 
-        fig_loss_dyn, ax_loss_dyn = plt.subplots()
-        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_epochs_dyn)
-        ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
-        # TODO test loss trace
-        # x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
-        # ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
-        if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
-            ax_loss_dyn.set_yscale("symlog")
-        ax_loss_dyn.set_xlabel("epochs")
-        ax_loss_dyn.set_ylabel("loss")
-        ax_loss_dyn.set_title(
-            f"DYN {dyn_model_type} loss (n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
-        )
-        fig_loss_dyn.legend()
-        plt.savefig(os.path.join(results_dir, "dyn_loss.png"), dpi=150)
+        if dyn_model_type != "env":
+            fig_loss_dyn, ax_loss_dyn = plt.subplots()
+            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_epochs_dyn)
+            ax_loss_dyn.plot(
+                x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
+            )
+            # TODO test loss trace
+            # x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
+            # ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
+            if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
+                ax_loss_dyn.set_yscale("symlog")
+            ax_loss_dyn.set_xlabel("epochs")
+            ax_loss_dyn.set_ylabel("loss")
+            ax_loss_dyn.set_title(
+                f"DYN {dyn_model_type} loss (n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
+            )
+            fig_loss_dyn.legend()
+            plt.savefig(os.path.join(results_dir, "dyn_loss.png"), dpi=150)
         # TODO plot policy train loss
 
         if plotting:
             plt.show()
+
+        logger.finish()
 
         print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
         print(f"Logs in {results_dir}")
