@@ -465,15 +465,16 @@ class Pendulum(object):
     def run(self, initial_state, policy, horizon):
         xs = torch.zeros((horizon, self.dim_x))
         us = torch.zeros((horizon, self.dim_u))
+        xxs = torch.zeros((horizon, self.dim_x))
         state = initial_state
         for t in range(horizon):
             action = policy.predict(state, t)
             xu = torch.cat((state, action))[None, :]
-            x_, _ = self.__call__(xu)
+            xxs[t, :], _ = self.__call__(xu)
             xs[t, :] = state
             us[t, :] = action
-            state = x_[0, :]
-        return xs, us
+            state = xxs[t, :]
+        return xs, us, xxs
 
     def plot(self, xs, us):
         fig, axs = plt.subplots(self.dim_x + self.dim_u, figsize=(12, 9))
@@ -970,7 +971,7 @@ def nearest_spd(covariance):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_rollout_episodes: int = 5,
+    n_rollout_episodes: int = 100,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     # plot_data: bool = False,
     n_iter: int = 1,  # outer loop
@@ -983,12 +984,12 @@ def experiment(
     # dyn_model_type: str = "env",
     # #  b) dnn model
     # dyn_model_type: str = "mlp",
-    # n_features_dyn: int = 64,
+    # n_features_dyn: int = 256,
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 100,
     # c) linear regression w/ dnn features
     dyn_model_type: str = "nlm",
-    n_features_dyn: int = 256,
+    n_features_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
     n_epochs_dyn: int = 100,
@@ -1245,28 +1246,29 @@ def experiment(
         # exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
 
         # 50-50 %: tvgl-fb or N(0, 1.5) noise
-        def noise_pred(*args):
-            # if torch.randn(1) > 0.5:
-            #     return global_policy.actual().predict(*args)
-            # else:
-            #     return torch.normal(torch.zeros(dim_u), 1.5 * torch.ones(dim_u))
-            return torch.normal(0.0 * torch.ones(dim_u), 1e-1 * torch.ones(dim_u))
+        # def noise_pred(*args):
+        #     # if torch.randn(1) > 0.5:
+        #     #     return global_policy.actual().predict(*args)
+        #     # else:
+        #     #     return torch.normal(torch.zeros(dim_u), 1.5 * torch.ones(dim_u))
+        #     return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
-        exploration_policy.predict = noise_pred
+        # exploration_policy.predict = noise_pred
+
+        # random N(0,1)
+        exploration_policy.predict = lambda *_: torch.randn(dim_u)
 
         # train and test rollouts (env & exploration policy)
         print("Collecting Rollouts ...")
         for i in tqdm(range(n_rollout_episodes)):  # 80 % train
+
             state = initial_state_distribution.sample()
-            ss, a = environment.run(state, exploration_policy, horizon)
-            # drop last state and action to create next-state
-            s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
+            s, a, ss = environment.run(state, exploration_policy, horizon)
             train_buffer.add(torch.hstack([s, a]), ss)
+
         for i in tqdm(range(int(n_rollout_episodes / 4))):  # 20 % test
             state = initial_state_distribution.sample()
-            ss, a = environment.run(state, exploration_policy, horizon)
-            # drop last state and action to create next-state
-            s = torch.cat([state.unsqueeze(0), ss[:-1, :]])
+            s, a, ss = environment.run(state, exploration_policy, horizon)
             test_buffer.add(torch.hstack([s, a]), ss)
 
         if dyn_model_type != "env":
