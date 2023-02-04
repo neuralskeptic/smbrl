@@ -1001,7 +1001,9 @@ def experiment(
     ## i2c solver ##
     n_iter_solver: int = 1,  # how many i2c solver iterations to do
     plot_posterior: bool = False,  # plot state-action-posterior over time
+    # plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
+    # plot_local_policy_metrics: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
     ## general ##
     plotting: bool = True,  # if False overrides all other flags
@@ -1239,16 +1241,18 @@ def experiment(
         # # tvlg with feedback
         # exploration_policy = global_policy.actual()
 
-        # constant a=1
-        exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
+        # # constant
+        # exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
 
-        # # 50-50 %: tvgl-fb or N(0, 1.5) noise
-        # def noise_pred(*args):
-        #     if torch.randn(1) > 0.5:
-        #         return global_policy.actual().predict(*args)
-        #     else:
-        #         return torch.normal(torch.zeros(dim_u), 1.5 * torch.ones(dim_u))
-        # exploration_policy.predict = noise_pred
+        # 50-50 %: tvgl-fb or N(0, 1.5) noise
+        def noise_pred(*args):
+            # if torch.randn(1) > 0.5:
+            #     return global_policy.actual().predict(*args)
+            # else:
+            #     return torch.normal(torch.zeros(dim_u), 1.5 * torch.ones(dim_u))
+            return torch.normal(0.0 * torch.ones(dim_u), 1e-1 * torch.ones(dim_u))
+
+        exploration_policy.predict = noise_pred
 
         # train and test rollouts (env & exploration policy)
         print("Collecting Rollouts ...")
