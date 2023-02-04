@@ -463,9 +463,8 @@ class Pendulum(object):
         return x2, xu
 
     def run(self, initial_state, policy, horizon):
-        device = initial_state.device
-        xs = torch.zeros((horizon, self.dim_x)).to(device)
-        us = torch.zeros((horizon, self.dim_u)).to(device)
+        xs = torch.zeros((horizon, self.dim_x))
+        us = torch.zeros((horizon, self.dim_u))
         state = initial_state
         for t in range(horizon):
             action = policy.predict(state, t)
@@ -477,7 +476,6 @@ class Pendulum(object):
         return xs, us
 
     def plot(self, xs, us):
-        xs, us = xs.cpu(), us.cpu()
         fig, axs = plt.subplots(self.dim_x + self.dim_u, figsize=(12, 9))
         for i in range(self.dim_x):
             axs[i].plot(xs[:, i])
@@ -1331,11 +1329,11 @@ def experiment(
                     # ss_env, a_env = environment.run(state, global_policy, task_horizon)
                     # s_env = torch.cat([state.unsqueeze(0), ss_env[:-1, :]])
                     # take (first/last) trajectory from replay buffer
-                    sa_env = test_buffer.xs[:horizon, :].cpu()  # first
-                    # sa_env = train_buffer.xs[-task_horizon:, :].cpu()  # last
+                    # sa_env = test_buffer.xs[:horizon, :].cpu()  # first
+                    sa_env = train_buffer.xs[-horizon:, :].cpu()  # last
                     s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                    ss_env = test_buffer.ys[:horizon, :].cpu()  # first
-                    # ss_env = train_buffer.ys[-task_horizon:, :].cpu()  # last
+                    # ss_env = test_buffer.ys[:horizon, :].cpu()  # first
+                    ss_env = train_buffer.ys[-horizon:, :].cpu()  # last
                     state = s_env[0, :]
                     # run dynamics model
                     ss_pred_pw = torch.zeros((horizon, dim_x))
@@ -1445,19 +1443,19 @@ def experiment(
             # trajectory = environment.run(initial_state, global_policy, task_horizon)
             # environment.plot(*trajectory)
 
-            ### policy vs dyn model
-            xs = torch.zeros((horizon, dim_x))
-            us = torch.zeros((horizon, dim_u))
-            state = initial_state
-            for t in range(horizon):
-                action = global_policy.predict(state, t)
-                xu = torch.cat((state, action))[None, :]
-                x_, *_ = global_dynamics(xu)
-                xs[t, :] = state
-                us[t, :] = action
-                state = x_[0, :]
-            environment.plot(xs, us)  # env.plot does not use env, it only plots
-            # TODO save plot
+            # ### policy vs dyn model
+            # xs = torch.zeros((horizon, dim_x))
+            # us = torch.zeros((horizon, dim_u))
+            # state = initial_state
+            # for t in range(horizon):
+            #     action = global_policy.predict(state, t)
+            #     xu = torch.cat((state, action))[None, :]
+            #     x_, *_ = global_dynamics(xu)
+            #     xs[t, :] = state
+            #     us[t, :] = action
+            #     state = x_[0, :]
+            # environment.plot(xs, us)  # env.plot does not use env, it only plots
+            # # TODO save plot
 
         # plot training loss
         def scaled_xaxis(y_points, n_on_axis):
