@@ -1273,6 +1273,7 @@ def experiment(
             print("Training Dynamics ...")
             global_dynamics.to(device)  # in-place
             dyn_loss_trace = []
+            dyn_test_loss_trace = []
             # torch.autograd.set_detect_anomaly(True)
             for i_epoch_dyn in trange(n_epochs_dyn + 1):
                 for i_minibatch, minibatch in enumerate(train_buffer):
@@ -1282,28 +1283,35 @@ def experiment(
                     loss.backward()
                     opt_dyn.step()
                     dyn_loss_trace.append(loss.detach().item())
+                    logger.log_data(
+                        **{
+                            # "dynamics/train/epoch": i_epoch_dyn,
+                            "dynamics/train/loss": dyn_loss_trace[-1],
+                        },
+                    )
 
-                # log metrics
+                # save logs & test
+                logger.save_logs()
                 if i_epoch_dyn % (n_epochs_dyn * log_frequency) == 0:
                     with torch.no_grad():
-                        pass  # TODO compute test loss/rmse?
-
+                        # test loss
+                        test_buffer.shuffling = False
+                        test_losses = []
+                        for minibatch in test_buffer:  # TODO not whole buffer!
+                            _x_test, _y_test = minibatch
+                            _test_loss = loss_fn_dyn(_x_test, _y_test)
+                            test_losses.append(_test_loss.item())
+                        dyn_test_loss_trace.append(np.mean(test_losses))
                         logger.log_data(
-                            {
-                                "iter": i_iter,
-                                "epoch_dyn": i_epoch_dyn,
-                                "dyn_loss": dyn_loss_trace[-1],
-                            }
+                            step=logger._step,  # in sync with training loss
+                            **{
+                                "dynamics/eval/loss": dyn_test_loss_trace[-1],
+                            },
                         )
-                        # logstring = f"DYN: Epoch {i_epoch_dyn} Train: Loss={dyn_loss_trace[-1]:.2}"
-                        # logstring += f", RMSE={rmse:.2f}"
-                        # logstring += f", test loss={test_loss_trace[-1]:.2}"
-                        # print(
-                        #     "\r" + logstring + "\033[K"
-                        # )  # \033[K = erase to end of line
-                        # with open(os.path.join(results_dir, "metrics.txt"), "a") as f:
-                        #     f.write(logstring + "\n")
-                        # wandb.log({"loss_dyn": dyn_loss_trace[-1]})
+
+                        logstring = f"DYN: Epoch {i_epoch_dyn}, Train Loss={dyn_loss_trace[-1]:.2}"
+                        logstring += f", Eval Loss={dyn_test_loss_trace[-1]:.2}"
+                        logger.info(logstring)
 
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
