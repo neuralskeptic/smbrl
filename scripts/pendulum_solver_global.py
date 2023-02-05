@@ -5,6 +5,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import partial, partialmethod
+from pathlib import Path
 from typing import Callable, Dict, List
 
 import matplotlib.pyplot as plt
@@ -15,7 +16,7 @@ from experiment_launcher.utils import save_args
 from mushroom_rl.core.logger.logger import Logger
 from pytorch_minimize.optim import MinimizeWrapper
 from torch.autograd.functional import hessian, jacobian
-from tqdm import tqdm
+from tqdm import trange
 
 import wandb
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
@@ -1033,11 +1034,9 @@ def experiment(
 
     # Results directory
     wandb_group: str = f"i2c_{env_type}_{dyn_model_type}_{policy_type}"
-    repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
-    results_dir = os.path.join(
-        repo_dir, results_dir, wandb_group, str(seed), timestamp()
-    )
-    os.makedirs(results_dir, exist_ok=True)
+    repo_dir = Path.cwd().parent
+    results_dir = repo_dir / results_dir / wandb_group / str(seed) / timestamp()
+    results_dir.mkdir(exist_ok=True)
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
@@ -1260,13 +1259,11 @@ def experiment(
 
         # train and test rollouts (env & exploration policy)
         print("Collecting Rollouts ...")
-        for i in tqdm(range(n_rollout_episodes)):  # 80 % train
-
+        for i in trange(n_rollout_episodes):  # 80 % train
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
             train_buffer.add(torch.hstack([s, a]), ss)
-
-        for i in tqdm(range(int(n_rollout_episodes / 4))):  # 20 % test
+        for i in trange(int(n_rollout_episodes / 4)):  # 20 % test
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
             test_buffer.add(torch.hstack([s, a]), ss)
@@ -1277,7 +1274,7 @@ def experiment(
             global_dynamics.to(device)  # in-place
             dyn_loss_trace = []
             # torch.autograd.set_detect_anomaly(True)
-            for i_epoch_dyn in tqdm(range(n_epochs_dyn + 1)):
+            for i_epoch_dyn in trange(n_epochs_dyn + 1):
                 for i_minibatch, minibatch in enumerate(train_buffer):
                     x, y = minibatch
                     opt_dyn.zero_grad()
@@ -1311,12 +1308,12 @@ def experiment(
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
                 #     # Save the agent
-                #     torch.save(model.state_dict(), os.path.join(results_dir, f"agent_{n}_{i_iter}.pth"))
+                #     torch.save(model.state_dict(), results_dir / f"agent_{n}_{i_iter}.pth")
 
             # Save the model after training
             torch.save(
                 global_dynamics.state_dict(),
-                os.path.join(results_dir, "dyn_model_{i_iter}.pth"),
+                results_dir / "dyn_model_{i_iter}.pth",
             )
 
             if plot_dyn:
@@ -1387,11 +1384,7 @@ def experiment(
                     axs[0, 0].set_title("pointwise next state predictions")
                     axs[0, 1].set_title("rollout next state prediction")
                     # TODO clean up
-                    plt.savefig(
-                        os.path.join(results_dir, "dyn_rollout_{i_iter}.png"), dpi=150
-                    )
-
-        # breakpoint()
+                    plt.savefig(results_dir / "dyn_rollout_{i_iter}.png", dpi=150)
 
         # i2c: find local (optimal) tvlg policy
         with torch.no_grad():
@@ -1422,9 +1415,7 @@ def experiment(
                 for ax in axs:
                     ax.legend()
                 # TODO clean up plot
-                plt.savefig(
-                    os.path.join(results_dir, "i2c_metrics_{i_iter}.png"), dpi=150
-                )
+                plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
 
         # Fit global policy to local policy
         if policy_type == "tvlg":
@@ -1484,7 +1475,7 @@ def experiment(
                 f"DYN {dyn_model_type} loss (n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
             )
             fig_loss_dyn.legend()
-            plt.savefig(os.path.join(results_dir, "dyn_loss.png"), dpi=150)
+            plt.savefig(results_dir / "dyn_loss.png", dpi=150)
         # TODO plot policy train loss
 
         if plotting:
