@@ -1025,8 +1025,8 @@ def experiment(
         # disable wandb logging and redirect normal logging to ./debug directory
         print("@@@@@@@@@@@@@@@@@ DEBUG: LOGGING DISABLED @@@@@@@@@@@@@@@@@")
         os.environ["WANDB_MODE"] = "disabled"
-        log_console = True
         log_wandb = False
+        log_console = True
         results_dir = "debug" / Path(results_dir)
 
     # Fix seed
@@ -1333,27 +1333,15 @@ def experiment(
                 # TODO extract?
                 global_dynamics.cpu()  # in-place
                 with torch.no_grad():
-                    # class FakePolicy:
-                    #     def predict(*args):
-                    #         return torch.tensor([1])  # always u=1
-
-                    # global_policy = FakePolicy()
-
-                    ## plot pointwise & rollout predictions
-                    # run environment
-                    # ss_env, a_env = environment.run(state, global_policy, task_horizon)
-                    # s_env = torch.cat([state.unsqueeze(0), ss_env[:-1, :]])
-                    # take (first/last) trajectory from replay buffer
-                    # sa_env = test_buffer.xs[:horizon, :].cpu()  # first
-                    sa_env = train_buffer.xs[-horizon:, :].cpu()  # last
+                    ## data traj (from buffer)
+                    sa_env = test_buffer.xs[:horizon, :].cpu()  # first
+                    # sa_env = train_buffer.xs[-horizon:, :].cpu()  # last
                     s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                    # ss_env = test_buffer.ys[:horizon, :].cpu()  # first
-                    ss_env = train_buffer.ys[-horizon:, :].cpu()  # last
-                    state = s_env[0, :]
-                    # run dynamics model
+                    ss_env = test_buffer.ys[:horizon, :].cpu()  # first
+                    # ss_env = train_buffer.ys[-horizon:, :].cpu()  # last
                     ss_pred_pw = torch.zeros((horizon, dim_x))
-                    s_pred_roll = torch.zeros((horizon, dim_x))
                     ss_pred_roll = torch.zeros((horizon, dim_x))
+                    state = s_env[0, :]  # for rollouts: data init state
                     for t in range(horizon):
                         # pointwise
                         xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
@@ -1362,41 +1350,59 @@ def experiment(
                         else:
                             ss_pred_pw[t, :], xu = global_dynamics(xu)
                         # rollout (replay action)
-                        s_pred_roll[t, :] = state
-                        # a_pred_roll[t, :] = global_policy.predict(s_pred_roll[t, :], t)
-                        # xu = torch.cat((s_pred_roll[t, :], a_pred_roll[t, :]))[None, :]
-                        xu = torch.cat((s_pred_roll[t, :], a_env[t, :]))[None, :]
+                        xu = torch.cat((state, a_env[t, :]))[None, :]
                         if dyn_model_type in ["nlm", "snngp"]:
                             ss_pred_roll[t, :], var, xu = global_dynamics(xu)
                         else:
                             ss_pred_roll[t, :], xu = global_dynamics(xu)
                         state = ss_pred_roll[t, :]
-                    # plot
-                    fig, axs = plt.subplots(dim_x, 2, figsize=(10, 7))
-                    x_time = torch.tensor(range(0, horizon))
-                    for yi in range(dim_x):
-                        # pointwise next state prediction
-                        axs[yi, 0].plot(x_time, ss_env[:, yi], color="b", label="data")
-                        axs[yi, 0].plot(
-                            x_time, ss_pred_pw[:, yi], color="r", label="dyn model"
-                        )
-                        axs[yi, 0].set_ylabel(f"ss[{yi}]")
-                        # rollout next state prediction
-                        axs[yi, 1].plot(x_time, ss_env[:, yi], color="b", label="data")
-                        axs[yi, 1].plot(
-                            x_time,
-                            ss_pred_roll[:, yi],
-                            color="r",
-                            label="dyn model",
-                        )
-                        axs[yi, 1].set_ylabel(f"ss[{yi}]")
-                    axs[0, 1].legend()
-                    axs[yi, 0].set_xlabel("steps")
-                    axs[yi, 1].set_xlabel("steps")
-                    axs[0, 0].set_title("pointwise next state predictions")
-                    axs[0, 1].set_title("rollout next state prediction")
-                    # TODO clean up
-                    plt.savefig(results_dir / "dyn_rollout_{i_iter}.png", dpi=150)
+                    # compute rewards (except init state use pred next state)
+                    r_env, _ = state_action_cost(sa_env)
+                    s_pred_pw = torch.cat([s_env[:1, :], ss_pred_pw[:-1, :]])
+                    sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=1)
+                    r_pw, _ = state_action_cost(sa_pred_pw)
+                    s_pred_roll = torch.cat([s_env[:1, :], ss_pred_roll[:-1, :]])
+                    sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=1)
+                    r_roll, _ = state_action_cost(sa_pred_roll)
+
+                    ### plot pointwise and rollout predictions (1 episode) ###
+                    fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
+                    steps = torch.tensor(range(0, horizon))
+                    axs[0, 0].set_title("pointwise predictions")
+                    axs[0, 1].set_title("rollout predictions")
+                    # plot actions (twice: left & right)
+                    for ui in range(dim_u):
+                        axs[ui, 0].plot(steps, a_env[:, ui], color="b")
+                        axs[ui, 0].set_ylabel("action")
+                        axs[ui, 1].plot(steps, a_env[:, ui], color="b")
+                        axs[ui, 1].set_ylabel("action")
+                    # plot reward
+                    ri = dim_u
+                    axs[ri, 0].plot(steps, r_env, color="b", label="data")
+                    axs[ri, 0].plot(steps, r_pw, color="r", label=dyn_model_type)
+                    axs[ri, 0].set_ylabel("reward")
+                    axs[ri, 1].plot(steps, r_env, color="b", label="data")
+                    axs[ri, 1].plot(steps, r_roll, color="r", label=dyn_model_type)
+                    axs[ri, 1].set_ylabel("reward")
+                    for xi in range(dim_x):
+                        xi_ = xi + dim_u + 1  # plotting offset
+                        # plot pointwise state predictions
+                        axs[xi_, 0].plot(steps, ss_env[:, xi], color="b")
+                        axs[xi_, 0].plot(steps, ss_pred_pw[:, xi], color="r")
+                        axs[xi_, 0].set_ylabel(f"ss[{xi}]")
+                        # plot rollout state predictions
+                        axs[xi_, 1].plot(steps, ss_env[:, xi], color="b")
+                        axs[xi_, 1].plot(steps, ss_pred_roll[:, xi], color="r")
+                        axs[xi_, 1].set_ylabel(f"ss[{xi}]")
+                    axs[-1, 0].set_xlabel("steps")
+                    axs[-1, 1].set_xlabel("steps")
+                    handles, labels = axs[ri, 0].get_legend_handles_labels()
+                    fig.legend(handles, labels, loc="lower center", ncol=2)
+                    fig.suptitle(
+                        f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
+                        f"({n_epochs_dyn} episodes, {test_buffer.size} epochs, lr={lr_dyn})"
+                    )
+                    plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
 
         # i2c: find local (optimal) tvlg policy
         with torch.no_grad():
