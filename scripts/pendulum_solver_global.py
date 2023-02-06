@@ -1324,7 +1324,7 @@ def experiment(
                 if i_epoch_dyn % (n_epochs_dyn * log_frequency) == 0:
                     with torch.no_grad():
                         # test loss
-                        test_buffer.shuffling = False
+                        test_buffer.shuffling = False  # TODO only for plotting?
                         test_losses = []
                         for minibatch in test_buffer:  # TODO not whole buffer!
                             _x_test, _y_test = minibatch
