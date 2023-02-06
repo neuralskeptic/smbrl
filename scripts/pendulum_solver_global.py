@@ -1059,8 +1059,8 @@ def experiment(
     ####################################################################################################################
     #### EXPERIMENT SETUP
 
-    print(f"Env: {env_type}, Dyn: {dyn_model_type}, Pol: {policy_type}")
-    print(f"Seed: {seed}")
+    logger.info(f"Env: {env_type}, Dyn: {dyn_model_type}, Pol: {policy_type}")
+    logger.info(f"Seed: {seed}")
 
     time_begin = time.time()
 
@@ -1258,7 +1258,8 @@ def experiment(
         exploration_policy.predict = lambda *_: torch.randn(dim_u)
 
         # train and test rollouts (env & exploration policy)
-        print("Collecting Rollouts ...")
+        logger.weak_line()
+        logger.info("START Collecting Rollouts")
         for i in trange(n_rollout_episodes):  # 80 % train
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
@@ -1267,10 +1268,12 @@ def experiment(
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
             test_buffer.add(torch.hstack([s, a]), ss)
+        logger.info("END Collecting Rollouts")
 
         if dyn_model_type != "env":
             # Learn Dynamics
-            print("Training Dynamics ...")
+            logger.weak_line()
+            logger.info("START Training Dynamics")
             global_dynamics.to(device)  # in-place
             dyn_loss_trace = []
             dyn_test_loss_trace = []
@@ -1323,6 +1326,7 @@ def experiment(
                 global_dynamics.state_dict(),
                 results_dir / "dyn_model_{i_iter}.pth",
             )
+            logger.info("END Training Dynamics")
 
             if plot_dyn:
                 ## test dynamics model in rollouts
@@ -1396,9 +1400,12 @@ def experiment(
 
         # i2c: find local (optimal) tvlg policy
         with torch.no_grad():
+            logger.weak_line()
+            logger.info(f"START i2c [{n_iter_solver} iters]")
             local_policy = i2c_solver(
                 n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
             )
+            logger.info("END i2c")
         # log i2c metrics
         for i_ in range(n_iter_solver):
             log_dict = {"iter": i_iter, "i2c_iter": i_}
@@ -1489,10 +1496,10 @@ def experiment(
         if plotting:
             plt.show()
 
+        logger.weak_line()
+        logger.info(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
+        logger.info(f"Logs in {results_dir}")
         logger.finish()
-
-        print(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
-        print(f"Logs in {results_dir}")
 
         torch.cuda.empty_cache()
 
