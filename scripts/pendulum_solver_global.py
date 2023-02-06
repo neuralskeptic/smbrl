@@ -1036,7 +1036,7 @@ def experiment(
     wandb_group: str = f"i2c_{env_type}_{dyn_model_type}_{policy_type}"
     repo_dir = Path.cwd().parent
     results_dir = repo_dir / results_dir / wandb_group / str(seed) / timestamp()
-    results_dir.mkdir(exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
