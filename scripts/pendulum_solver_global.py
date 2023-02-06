@@ -1313,7 +1313,7 @@ def experiment(
                         )
 
                         logstring = f"DYN: Epoch {i_epoch_dyn}, Train Loss={dyn_loss_trace[-1]:.2}"
-                        logstring += f", Eval Loss={dyn_test_loss_trace[-1]:.2}"
+                        logstring += f", Test Loss={dyn_test_loss_trace[-1]:.2}"
                         logger.info(logstring)
 
                 # TODO save model more often than in each global iter?
