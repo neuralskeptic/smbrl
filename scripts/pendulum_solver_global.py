@@ -1027,7 +1027,7 @@ def experiment(
         os.environ["WANDB_MODE"] = "disabled"
         log_console = True
         log_wandb = False
-        results_dir = os.path.join("debug", results_dir)
+        results_dir = "debug" / Path(results_dir)
 
     # Fix seed
     fix_random_seed(seed)
