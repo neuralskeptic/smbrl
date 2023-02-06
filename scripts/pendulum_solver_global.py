@@ -373,13 +373,13 @@ class TimeVaryingLinearGaussian(Policy):
     def actual(self):
         from copy import deepcopy
 
-        # copy = deepcopy(self)  # crashes: only leaf tensors deepcopy-able
-        copy = TimeVaryingLinearGaussian(
-            self.horizon,
-            self.dim_x,
-            self.dim_u,
-            self.sigma[0, :, :].detach(),
-        )
+        copy = deepcopy(self)  # crashes: only leaf tensors deepcopy-able
+        # copy = TimeVaryingLinearGaussian(
+        #     self.horizon,
+        #     self.dim_x,
+        #     self.dim_u,
+        #     self.sigma[0, :, :].detach(),
+        # )
         copy.k_opt = self.k_actual.detach()
         copy.K_opt = self.K_actual.detach()
         # TODO skip k/K_actual ?
