@@ -1485,17 +1485,19 @@ def experiment(
             ax_loss_dyn.plot(
                 x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
             )
-            # TODO test loss trace
-            # x_test_loss = scaled_xaxis(test_loss_trace, n_epochs)
-            # ax_trace.plot(x_test_loss, test_loss_trace, c="g", label="test loss")
+            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, n_epochs_dyn)
+            ax_loss_dyn.plot(
+                x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss"
+            )
             if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
                 ax_loss_dyn.set_yscale("symlog")
             ax_loss_dyn.set_xlabel("epochs")
             ax_loss_dyn.set_ylabel("loss")
             ax_loss_dyn.set_title(
-                f"DYN {dyn_model_type} loss (n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
+                f"DYN {dyn_model_type} loss "
+                f"(n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
             )
-            fig_loss_dyn.legend()
+            ax_loss_dyn.legend()
             plt.savefig(results_dir / "dyn_loss.png", dpi=150)
         # TODO plot policy train loss
 
