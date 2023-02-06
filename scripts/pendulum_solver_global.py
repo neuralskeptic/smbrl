@@ -1234,6 +1234,8 @@ def experiment(
     # for alpha in [1e-1, 1, 10, 100, 1000]:
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
     # for _ in [None]:
+    dyn_loss_trace = []
+    dyn_test_loss_trace = []
     for i_iter in range(n_iter):
         logger.strong_line()
         logger.info(f"ITERATION {i_iter}/{n_iter}")
@@ -1277,8 +1279,30 @@ def experiment(
             logger.weak_line()
             logger.info("START Training Dynamics")
             global_dynamics.to(device)  # in-place
-            dyn_loss_trace = []
-            dyn_test_loss_trace = []
+
+            ## initial loss
+            # for minibatch in train_buffer:  # TODO not whole buffer!
+            #     _x, _y = minibatch
+            #     _loss = loss_fn_dyn(_x, _y)
+            #     dyn_loss_trace.append(_loss.detach().item())
+            #     logger.log_data(
+            #         **{
+            #             "dynamics/train/loss": dyn_loss_trace[-1],
+            #         },
+            #     )
+            # test_losses = []
+            # for minibatch in test_buffer:  # TODO not whole buffer!
+            #     _x_test, _y_test = minibatch
+            #     _test_loss = loss_fn_dyn(_x_test, _y_test)
+            #     test_losses.append(_test_loss.detach().item())
+            # dyn_test_loss_trace.append(np.mean(test_losses))
+            # logger.log_data(
+            #     step=logger._step,  # in sync with training loss
+            #     **{
+            #         "dynamics/eval/loss": dyn_test_loss_trace[-1],
+            #     },
+            # )
+
             # torch.autograd.set_detect_anomaly(True)
             for i_epoch_dyn in trange(n_epochs_dyn + 1):
                 for i_minibatch, minibatch in enumerate(train_buffer):
@@ -1402,7 +1426,8 @@ def experiment(
                     fig.legend(handles, labels, loc="lower center", ncol=2)
                     fig.suptitle(
                         f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
-                        f"({n_epochs_dyn} episodes, {test_buffer.size} epochs, lr={lr_dyn})"
+                        f"({int(test_buffer.size/horizon)} "
+                        f"episodes, {n_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
                     )
                     plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
 
@@ -1491,11 +1516,11 @@ def experiment(
 
         if dyn_model_type != "env":
             fig_loss_dyn, ax_loss_dyn = plt.subplots()
-            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_epochs_dyn)
+            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_iter * n_epochs_dyn)
             ax_loss_dyn.plot(
                 x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
             )
-            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, n_epochs_dyn)
+            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, n_iter * n_epochs_dyn)
             ax_loss_dyn.plot(
                 x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss"
             )
@@ -1505,7 +1530,7 @@ def experiment(
             ax_loss_dyn.set_ylabel("loss")
             ax_loss_dyn.set_title(
                 f"DYN {dyn_model_type} loss "
-                f"(n_trajs={train_buffer.size/horizon}, lr={lr_dyn:.0e})"
+                f"({int(train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
             )
             ax_loss_dyn.legend()
             plt.savefig(results_dir / "dyn_loss.png", dpi=150)
