@@ -1336,11 +1336,11 @@ def experiment(
                 global_dynamics.cpu()  # in-place
                 with torch.no_grad():
                     ## data traj (from buffer)
-                    sa_env = test_buffer.xs[:horizon, :].cpu()  # first
-                    # sa_env = train_buffer.xs[-horizon:, :].cpu()  # last
+                    # sa_env = test_buffer.xs[:horizon, :].cpu()  # first
+                    sa_env = test_buffer.xs[-horizon:, :].cpu()  # last
                     s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                    ss_env = test_buffer.ys[:horizon, :].cpu()  # first
-                    # ss_env = train_buffer.ys[-horizon:, :].cpu()  # last
+                    # ss_env = test_buffer.ys[:horizon, :].cpu()  # first
+                    ss_env = test_buffer.ys[-horizon:, :].cpu()  # last
                     ss_pred_pw = torch.zeros((horizon, dim_x))
                     ss_pred_roll = torch.zeros((horizon, dim_x))
                     state = s_env[0, :]  # for rollouts: data init state
