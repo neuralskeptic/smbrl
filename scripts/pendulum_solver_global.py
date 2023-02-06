@@ -972,10 +972,10 @@ def nearest_spd(covariance):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_rollout_episodes: int = 100,
+    n_rollout_episodes: int = 10,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     # plot_data: bool = False,
-    n_iter: int = 1,  # outer loop
+    n_iter: int = 5,  # outer loop
     use_cuda: bool = True,  # for policy/dynamics training (i2c on cpu)
     log_frequency: float = 0.1,  # every p% epochs of n_epochs
     model_save_frequency: float = 0.5,  # every n-th of n_epochs
@@ -1001,9 +1001,9 @@ def experiment(
     policy_type: str = "tvlg",  # time-varying linear gaussian controllers (i2c)
     ############
     ## i2c solver ##
-    n_iter_solver: int = 1,  # how many i2c solver iterations to do
-    plot_posterior: bool = False,  # plot state-action-posterior over time
-    # plot_posterior: bool = True,  # plot state-action-posterior over time
+    n_iter_solver: int = 10,  # how many i2c solver iterations to do
+    # plot_posterior: bool = False,  # plot state-action-posterior over time
+    plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     # plot_local_policy_metrics: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
@@ -1235,6 +1235,8 @@ def experiment(
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
     # for _ in [None]:
     for i_iter in range(n_iter):
+        logger.strong_line()
+        logger.info(f"ITERATION {i_iter}/{n_iter}")
         if dyn_model_type != "env":
             global_dynamics.cpu()  # in-place
 
@@ -1456,24 +1458,32 @@ def experiment(
         with torch.no_grad():
             if dyn_model_type != "env":
                 global_dynamics.cpu()  # in-place
+            if policy_type == "tvlg":
+                global_policy = global_policy.actual()
 
-            # ### policy vs env
-            # trajectory = environment.run(initial_state, global_policy, task_horizon)
-            # environment.plot(*trajectory)
+            ### policy vs env
+            # TODO label plot
+            xs, us, xxs = environment.run(initial_state, global_policy, horizon)
+            environment.plot(xs, us)
+            plt.suptitle(f"{policy_type} policy vs env")
+            plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
 
-            # ### policy vs dyn model
-            # xs = torch.zeros((horizon, dim_x))
-            # us = torch.zeros((horizon, dim_u))
-            # state = initial_state
-            # for t in range(horizon):
-            #     action = global_policy.predict(state, t)
-            #     xu = torch.cat((state, action))[None, :]
-            #     x_, *_ = global_dynamics(xu)
-            #     xs[t, :] = state
-            #     us[t, :] = action
-            #     state = x_[0, :]
-            # environment.plot(xs, us)  # env.plot does not use env, it only plots
-            # # TODO save plot
+            ### policy vs dyn model
+            xs = torch.zeros((horizon, dim_x))
+            us = torch.zeros((horizon, dim_u))
+            state = initial_state
+            for t in range(horizon):
+                action = global_policy.predict(state, t)
+                xu = torch.cat((state, action))[None, :]
+                x_, *_ = global_dynamics(xu)
+                xs[t, :] = state
+                us[t, :] = action
+                state = x_[0, :]
+            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+            plt.savefig(
+                results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
+            )
 
         # plot training loss
         def scaled_xaxis(y_points, n_on_axis):
@@ -1504,7 +1514,7 @@ def experiment(
         if plotting:
             plt.show()
 
-        logger.weak_line()
+        logger.strong_line()
         logger.info(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
         logger.info(f"Logs in {results_dir}")
         logger.finish()
