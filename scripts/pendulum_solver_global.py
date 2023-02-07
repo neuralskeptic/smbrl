@@ -998,7 +998,7 @@ def experiment(
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 100,
     # D4) linear regression w/ sn-dnn & rf features
-    dyn_model_type: str = "snngp",
+    dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
     n_features_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
@@ -1018,7 +1018,7 @@ def experiment(
     ############
     ## general ##
     plotting: bool = True,  # if False overrides all other flags
-    log_console: bool = False,  # also log to console (not just log file); FORCE on if debug
+    log_console: bool = True,  # also log to console (not just log file); FORCE on if debug
     log_wandb: bool = True,  # off if debug
     wandb_project: str = "smbrl_i2c",
     wandb_entity: str = "showmezeplozz",
@@ -1026,6 +1026,7 @@ def experiment(
     seed: int = 0,
     results_dir: str = "logs/tmp/",
     debug: bool = True,  # prepends logdir with 'debug/', disables wandb, enables console logging
+    # debug: bool = False,  # prepends logdir with 'debug/', disables wandb, enables console logging
 ):
     ####################################################################################################################
     #### SETUP (saved to yaml)
@@ -1033,7 +1034,7 @@ def experiment(
     if debug:
         # disable wandb logging and redirect normal logging to ./debug directory
         print("@@@@@@@@@@@@@@@@@ DEBUG: LOGGING DISABLED @@@@@@@@@@@@@@@@@")
-        os.environ["WANDB_MODE"] = "disabled"
+        os.environ["WANDB_MODE"] = "disabled"  # close terminal to reset
         log_wandb = False
         log_console = True
         results_dir = "debug" / Path(results_dir)
@@ -1462,6 +1463,7 @@ def experiment(
                         f"episodes, {n_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
                     )
                     plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
+                    plt.show()
 
         # i2c: find local (optimal) tvlg policy
         with torch.no_grad():
@@ -1496,6 +1498,7 @@ def experiment(
                     ax.legend()
                 # TODO clean up plot
                 plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
+                plt.show()
 
         # Fit global policy to local policy
         if policy_type == "tvlg":
