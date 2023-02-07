@@ -1384,9 +1384,9 @@ def experiment(
                         logger.info(logstring)
 
                 # stop condition
-                # if i_epoch_dyn > 0.1 * n_epochs_dyn:  # do at least 10% of epochs
-                if dyn_test_loss_trace[-1] < -5e3:  # stop if test loss good
-                    break
+                if i_epoch_dyn > 0.01 * n_epochs_dyn:  # do at least 1% of epochs
+                    if dyn_test_loss_trace[-1] < -3e3:  # stop if test loss good
+                        break
 
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
