@@ -10,6 +10,8 @@ from typing import Callable, Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
 import torch
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
@@ -1014,6 +1016,7 @@ def experiment(
     ############
     ## general ##
     plotting: bool = True,  # if False overrides all other flags
+    plot_data: bool = True,  # visualize data trajectories (sns => very slow!)
     log_console: bool = True,  # also log to console (not just log file); FORCE on if debug
     log_wandb: bool = True,  # off if debug
     wandb_project: str = "smbrl_i2c",
@@ -1539,6 +1542,32 @@ def experiment(
     plt.savefig(
         results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
     )
+
+    ### plot data space coverage ###
+    if plot_data:
+        cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
+        # train data
+        xs = train_buffer.xs[:, :dim_x]  # only states
+        df = pd.DataFrame()
+        df[cols] = np.array(xs.cpu())
+        df["traj_id"] = df.index // horizon
+        g = sns.PairGrid(df, hue="traj_id")
+        # g = sns.PairGrid(df)
+        g.map_diag(sns.histplot, hue=None)
+        g.map_offdiag(plt.plot)
+        g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
+        g.savefig(results_dir / "train_data.png", dpi=150)
+        # test data
+        xs = test_buffer.xs[:, :dim_x]  # only states
+        df = pd.DataFrame()
+        df[cols] = np.array(xs.cpu())
+        df["traj_id"] = df.index // horizon
+        g = sns.PairGrid(df, hue="traj_id")
+        # g = sns.PairGrid(df)
+        g.map_diag(sns.histplot, hue=None)
+        g.map_offdiag(plt.plot)
+        g.fig.suptitle(f"test data ({df.shape[0] // horizon} episodes)", y=1.01)
+        g.savefig(results_dir / "test_data.png", dpi=150)
 
     # plot training loss
     def scaled_xaxis(y_points, n_on_axis):
