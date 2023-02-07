@@ -974,7 +974,7 @@ def experiment(
     n_rollout_episodes: int = 10,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     # plot_data: bool = False,
-    n_iter: int = 5,  # outer loop
+    n_iter: int = 10,  # outer loop
     use_cuda: bool = True,  # for policy/dynamics training (i2c on cpu)
     log_frequency: float = 0.1,  # every p% epochs of n_epochs
     model_save_frequency: float = 0.5,  # every n-th of n_epochs
@@ -987,18 +987,18 @@ def experiment(
     # n_features_dyn: int = 256,
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 100,
-    # # D3) linear regression w/ dnn features
-    # dyn_model_type: str = "nlm",
-    # n_features_dyn: int = 128,
-    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
-    # lr_dyn: float = 1e-4,
-    # n_epochs_dyn: int = 100,
-    # D4) linear regression w/ sn-dnn & rf features
-    dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
+    # D3) linear regression w/ dnn features
+    dyn_model_type: str = "nlm",
     n_features_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
-    n_epochs_dyn: int = 50,
+    n_epochs_dyn: int = 100,
+    # # D4) linear regression w/ sn-dnn & rf features
+    # dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
+    # n_features_dyn: int = 128,
+    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_dyn: float = 1e-4,
+    # n_epochs_dyn: int = 50,
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
@@ -1006,7 +1006,7 @@ def experiment(
     policy_type: str = "tvlg",  # time-varying linear gaussian controllers (i2c)
     ############
     ## i2c solver ##
-    n_iter_solver: int = 10,  # how many i2c solver iterations to do
+    n_iter_solver: int = 5,  # how many i2c solver iterations to do
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
@@ -1277,21 +1277,28 @@ def experiment(
         # # tvlg with feedback
         # exploration_policy = global_policy.actual()
 
+        # # tvlg without feedback
+        # exploration_policy = global_policy
+
         # # constant
         # exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
 
-        # 50-50 %: tvgl-fb or N(0, 1.5) noise
+        # # 50-50 %: tvgl-fb or N(0, var) noise
         # def noise_pred(*args):
-        #     # if torch.randn(1) > 0.5:
-        #     #     return global_policy.actual().predict(*args)
-        #     # else:
-        #     #     return torch.normal(torch.zeros(dim_u), 1.5 * torch.ones(dim_u))
-        #     return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
+        #     if torch.randn(1) > 0.5:
+        #         return global_policy.predict(*args)
+        #         # return global_policy.actual().predict(*args)
+        #     else:
+        #         return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
+        #     # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
         # exploration_policy.predict = noise_pred
 
-        # random N(0,1)
-        exploration_policy.predict = lambda *_: torch.randn(dim_u)
+        # # random gaussian
+        # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
+        exploration_policy.predict = lambda *_: torch.normal(
+            torch.zeros(dim_u), 3 * torch.ones(dim_u)
+        )
 
         # train and test rollouts (env & exploration policy)
         logger.weak_line()
