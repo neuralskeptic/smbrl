@@ -1469,7 +1469,7 @@ def experiment(
                 fig.suptitle(
                     f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
                     f"({int(test_buffer.size/horizon)} "
-                    f"episodes, {n_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
+                    f"episodes, {i_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
                 )
                 plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
                 if plotting:
