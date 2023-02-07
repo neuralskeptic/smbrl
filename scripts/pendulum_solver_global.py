@@ -1429,14 +1429,14 @@ def experiment(
                     else:
                         ss_pred_roll[t, :], xu = global_dynamics(xu)
                     state = ss_pred_roll[t, :]
-                # compute rewards (except init state use pred next state)
-                r_env, _ = state_action_cost(sa_env)
+                # compute costs (except init state use pred next state)
+                c_env, _ = state_action_cost(sa_env)
                 s_pred_pw = torch.cat([s_env[:1, :], ss_pred_pw[:-1, :]])
                 sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=1)
-                r_pw, _ = state_action_cost(sa_pred_pw)
+                c_pw, _ = state_action_cost(sa_pred_pw)
                 s_pred_roll = torch.cat([s_env[:1, :], ss_pred_roll[:-1, :]])
                 sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=1)
-                r_roll, _ = state_action_cost(sa_pred_roll)
+                c_roll, _ = state_action_cost(sa_pred_roll)
 
                 ### plot pointwise and rollout predictions (1 episode) ###
                 fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
@@ -1449,14 +1449,14 @@ def experiment(
                     axs[ui, 0].set_ylabel("action")
                     axs[ui, 1].plot(steps, a_env[:, ui], color="b")
                     axs[ui, 1].set_ylabel("action")
-                # plot reward
+                # plot cost
                 ri = dim_u
-                axs[ri, 0].plot(steps, r_env, color="b", label="data")
-                axs[ri, 0].plot(steps, r_pw, color="r", label=dyn_model_type)
-                axs[ri, 0].set_ylabel("reward")
-                axs[ri, 1].plot(steps, r_env, color="b", label="data")
-                axs[ri, 1].plot(steps, r_roll, color="r", label=dyn_model_type)
-                axs[ri, 1].set_ylabel("reward")
+                axs[ri, 0].plot(steps, c_env, color="b", label="data")
+                axs[ri, 0].plot(steps, c_pw, color="r", label=dyn_model_type)
+                axs[ri, 0].set_ylabel("cost")
+                axs[ri, 1].plot(steps, c_env, color="b", label="data")
+                axs[ri, 1].plot(steps, c_roll, color="r", label=dyn_model_type)
+                axs[ri, 1].set_ylabel("cost")
                 for xi in range(dim_x):
                     xi_ = xi + dim_u + 1  # plotting offset
                     # plot pointwise state predictions
