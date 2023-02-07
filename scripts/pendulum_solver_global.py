@@ -21,7 +21,10 @@ from tqdm import trange
 import wandb
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.models.dnns import DNN3
-from src.models.linear_bayesian_models import NeuralLinearModel
+from src.models.linear_bayesian_models import (
+    NeuralLinearModel,
+    SpectralNormalizedNeuralGaussianProcess,
+)
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
 
@@ -981,19 +984,25 @@ def experiment(
     model_save_frequency: float = 0.5,  # every n-th of n_epochs
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
-    # #  a) no model
+    # #  D1) true dynamics
     # dyn_model_type: str = "env",
-    # #  b) dnn model
+    # #  D2) dnn model
     # dyn_model_type: str = "mlp",
     # n_features_dyn: int = 256,
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 100,
-    # c) linear regression w/ dnn features
-    dyn_model_type: str = "nlm",
+    # # D3) linear regression w/ dnn features
+    # dyn_model_type: str = "nlm",
+    # n_features_dyn: int = 128,
+    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_dyn: float = 1e-4,
+    # n_epochs_dyn: int = 100,
+    # D4) linear regression w/ sn-dnn & rf features
+    dyn_model_type: str = "snngp",
     n_features_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
-    n_epochs_dyn: int = 100,
+    n_epochs_dyn: int = 50,
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
@@ -1105,6 +1114,19 @@ def experiment(
     # if gaussian -> QuadratureGaussianInference (unscented gaussian approx)
 
     ### global dynamics model ###
+    def clamp_u(xu):
+        xu[:, 2] = torch.clamp(xu[:, 2], -environment.u_mx, +environment.u_mx)
+        return xu
+
+    def sincos_angle(xu):
+        # input angles get split sin/cos
+        xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
+        xu_sincos[:, 0] = xu[:, 0].sin()
+        xu_sincos[:, 1] = xu[:, 0].cos()
+        xu_sincos[:, 2] = xu[:, 1]
+        xu_sincos[:, 3] = xu[:, 2]
+        return xu_sincos
+
     if dyn_model_type == "env":
         global_dynamics = environment
         ai_dyn = QuadratureInference(dim_xu, quad_params)
@@ -1112,17 +1134,9 @@ def experiment(
 
         def patch_call(fn):
             def wrap(self, xu):
-                xu[:, 2] = torch.clamp(xu[:, 2], -environment.u_mx, +environment.u_mx)
-                # input angles get split sin/cos
+                xu_sincos = sincos_angle(clamp_u(xu))
                 # output states are deltas
-                xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
-                xu_sincos[:, 0] = xu[:, 0].sin()
-                xu_sincos[:, 1] = xu[:, 0].cos()
-                xu_sincos[:, 2] = xu[:, 1]
-                xu_sincos[:, 3] = xu[:, 2]
                 delta_x = fn(self, xu_sincos)
-                # delta_x = fn(self, xu)
-                # var = 0.01  # fake variance
                 return xu[:, :dim_x].detach() + delta_x, xu
 
             return wrap
@@ -1138,14 +1152,8 @@ def experiment(
 
         def patch_call(fn):
             def wrap(self, xu):
-                xu[:, 2] = torch.clamp(xu[:, 2], -environment.u_mx, +environment.u_mx)
-                # input angles get split sin/cos
+                xu_sincos = sincos_angle(clamp_u(xu))
                 # output states are deltas
-                xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
-                xu_sincos[:, 0] = xu[:, 0].sin()
-                xu_sincos[:, 1] = xu[:, 0].cos()
-                xu_sincos[:, 2] = xu[:, 1]
-                xu_sincos[:, 3] = xu[:, 2]
                 delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
                 # cov_bii = torch.einsum('n,ij->nij', cov_out.diag(), cov_in)
                 cov_bij = torch.einsum("ij,n->nij", cov_out, cov_in.diag())
@@ -1162,18 +1170,42 @@ def experiment(
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
 
         def loss_fn_dyn(xu, x_next):
-            xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
-            xu_sincos[:, 0] = xu[:, 0].sin()
-            xu_sincos[:, 1] = xu[:, 0].cos()
-            xu_sincos[:, 2] = xu[:, 1]
-            xu_sincos[:, 3] = xu[:, 2]
+            xu_sincos = sincos_angle(clamp_u(xu))
             delta_x = x_next - xu[:, :dim_x]
             return -global_dynamics.elbo(xu_sincos, delta_x)
 
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
         ai_dyn = QuadratureGaussianInference(dim_xu, quad_params)
     elif dyn_model_type == "snngp":
-        pass  # TODO
+
+        def patch_call(fn):
+            def wrap(self, xu):
+                xu_sincos = sincos_angle(clamp_u(xu))
+                # output states are deltas
+                delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
+                # cov_bii = torch.einsum('n,ij->nij', cov_out.diag(), cov_in)
+                cov_bij = torch.einsum("ij,n->nij", cov_out, cov_in.diag())
+                mu = xu[:, :dim_x].detach() + delta_mu
+                return mu, cov_bij, xu
+
+            return wrap
+
+        dim_input = dim_xu + 1  # sin,cos of theta
+        SpectralNormalizedNeuralGaussianProcess.__call__ = patch_call(
+            SpectralNormalizedNeuralGaussianProcess.__call__
+        )
+        global_dynamics = SpectralNormalizedNeuralGaussianProcess(
+            dim_input, dim_x, n_features_dyn, n_hidden_layers_dyn
+        )
+        # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
+
+        def loss_fn_dyn(xu, x_next):
+            xu_sincos = sincos_angle(clamp_u(xu))
+            delta_x = x_next - xu[:, :dim_x]
+            return -global_dynamics.elbo(xu_sincos, delta_x)
+
+        opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
+        ai_dyn = QuadratureGaussianInference(dim_xu, quad_params)
 
     ### local (i2c) policy ###
     local_policy = TimeVaryingLinearGaussian(
