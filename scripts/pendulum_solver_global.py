@@ -506,18 +506,14 @@ def plot_gp(axis, mean, variance):
 
 
 def plot_trajectory_distribution(list_of_distributions, title=""):
-    with torch.no_grad():
-        means = torch.stack(tuple(d.mean for d in list_of_distributions), dim=0)
-        covariances = torch.stack(
-            tuple(d.covariance for d in list_of_distributions), dim=0
-        )
-        n_plots = means.shape[1]
-        fig, axs = plt.subplots(n_plots)
-        axs[0].set_title(title)
-        for i, ax in enumerate(axs):
-            plot_gp(ax, means[:, i].cpu(), covariances[:, i, i].cpu())
-        return fig, axs
-        # plt.show()  # turn on debugging
+    means = torch.stack(tuple(d.mean for d in list_of_distributions), dim=0)
+    covariances = torch.stack(tuple(d.covariance for d in list_of_distributions), dim=0)
+    n_plots = means.shape[1]
+    fig, axs = plt.subplots(n_plots)
+    axs[0].set_title(title)
+    for i, ax in enumerate(axs):
+        plot_gp(ax, means[:, i].cpu(), covariances[:, i, i].cpu())
+    return fig, axs
 
 
 class PseudoPosteriorSolver(object):
@@ -654,7 +650,6 @@ class PseudoPosteriorSolver(object):
         self.compute_metrics(
             forward_state_action_prior, forward_state_action_prior, initial_alpha
         )
-        print(self.alpha)
         for i in range(n_iteration):
             print(f"{i} {self.alpha:.2f}")
             (
@@ -692,9 +687,10 @@ class PseudoPosteriorSolver(object):
             # plt.show()
             # if converged(metrics):
             #   break
-        if plot_posterior:
-            # plot_trajectory_distribution(forward_state_action_prior, f"filter{i}")
-            plot_trajectory_distribution(state_action_posterior, "posterior")
+            if plot_posterior:
+                # plot_trajectory_distribution(forward_state_action_prior, f"filter {i}")
+                plot_trajectory_distribution(state_action_posterior, f"posterior {i}")
+                plt.show()
         return policy
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
@@ -1271,9 +1267,11 @@ def experiment(
     dyn_test_loss_trace = []
     for i_iter in range(n_iter):
         logger.strong_line()
-        logger.info(f"ITERATION {i_iter}/{n_iter}")
+        logger.info(f"ITERATION {i_iter + 1}/{n_iter}")
         if dyn_model_type != "env":
             global_dynamics.cpu()  # in-place
+            global_dynamics.eval()
+            torch.set_grad_enabled(False)
 
         # # tvlg with feedback
         # exploration_policy = global_policy.actual()
@@ -1312,6 +1310,8 @@ def experiment(
             logger.weak_line()
             logger.info("START Training Dynamics")
             global_dynamics.to(device)  # in-place
+            global_dynamics.train()
+            torch.set_grad_enabled(True)
 
             ## initial loss
             # for minibatch in train_buffer:  # TODO not whole buffer!
@@ -1381,6 +1381,9 @@ def experiment(
                 #     torch.save(model.state_dict(), results_dir / f"agent_{n}_{i_iter}.pth")
 
             # Save the model after training
+            global_dynamics.cpu()  # in-place
+            global_dynamics.eval()
+            torch.set_grad_enabled(False)
             torch.save(
                 global_dynamics.state_dict(),
                 results_dir / "dyn_model_{i_iter}.pth",
@@ -1390,89 +1393,87 @@ def experiment(
             if plot_dyn:
                 ## test dynamics model in rollouts
                 # TODO extract?
-                global_dynamics.cpu()  # in-place
-                with torch.no_grad():
-                    ## data traj (from buffer)
-                    # sa_env = test_buffer.xs[:horizon, :].cpu()  # first
-                    sa_env = test_buffer.xs[-horizon:, :].cpu()  # last
-                    s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                    # ss_env = test_buffer.ys[:horizon, :].cpu()  # first
-                    ss_env = test_buffer.ys[-horizon:, :].cpu()  # last
-                    ss_pred_pw = torch.zeros((horizon, dim_x))
-                    ss_pred_roll = torch.zeros((horizon, dim_x))
-                    state = s_env[0, :]  # for rollouts: data init state
-                    for t in range(horizon):
-                        # pointwise
-                        xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
-                        if dyn_model_type in ["nlm", "snngp"]:
-                            ss_pred_pw[t, :], var, xu = global_dynamics(xu)
-                        else:
-                            ss_pred_pw[t, :], xu = global_dynamics(xu)
-                        # rollout (replay action)
-                        xu = torch.cat((state, a_env[t, :]))[None, :]
-                        if dyn_model_type in ["nlm", "snngp"]:
-                            ss_pred_roll[t, :], var, xu = global_dynamics(xu)
-                        else:
-                            ss_pred_roll[t, :], xu = global_dynamics(xu)
-                        state = ss_pred_roll[t, :]
-                    # compute rewards (except init state use pred next state)
-                    r_env, _ = state_action_cost(sa_env)
-                    s_pred_pw = torch.cat([s_env[:1, :], ss_pred_pw[:-1, :]])
-                    sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=1)
-                    r_pw, _ = state_action_cost(sa_pred_pw)
-                    s_pred_roll = torch.cat([s_env[:1, :], ss_pred_roll[:-1, :]])
-                    sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=1)
-                    r_roll, _ = state_action_cost(sa_pred_roll)
+                ## data traj (from buffer)
+                # sa_env = test_buffer.xs[:horizon, :].cpu()  # first
+                sa_env = test_buffer.xs[-horizon:, :].cpu()  # last
+                s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
+                # ss_env = test_buffer.ys[:horizon, :].cpu()  # first
+                ss_env = test_buffer.ys[-horizon:, :].cpu()  # last
+                ss_pred_pw = torch.zeros((horizon, dim_x))
+                ss_pred_roll = torch.zeros((horizon, dim_x))
+                state = s_env[0, :]  # for rollouts: data init state
+                for t in range(horizon):
+                    # pointwise
+                    xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
+                    if dyn_model_type in ["nlm", "snngp"]:
+                        ss_pred_pw[t, :], var, xu = global_dynamics(xu)
+                    else:
+                        ss_pred_pw[t, :], xu = global_dynamics(xu)
+                    # rollout (replay action)
+                    xu = torch.cat((state, a_env[t, :]))[None, :]
+                    if dyn_model_type in ["nlm", "snngp"]:
+                        ss_pred_roll[t, :], var, xu = global_dynamics(xu)
+                    else:
+                        ss_pred_roll[t, :], xu = global_dynamics(xu)
+                    state = ss_pred_roll[t, :]
+                # compute rewards (except init state use pred next state)
+                r_env, _ = state_action_cost(sa_env)
+                s_pred_pw = torch.cat([s_env[:1, :], ss_pred_pw[:-1, :]])
+                sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=1)
+                r_pw, _ = state_action_cost(sa_pred_pw)
+                s_pred_roll = torch.cat([s_env[:1, :], ss_pred_roll[:-1, :]])
+                sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=1)
+                r_roll, _ = state_action_cost(sa_pred_roll)
 
-                    ### plot pointwise and rollout predictions (1 episode) ###
-                    fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
-                    steps = torch.tensor(range(0, horizon))
-                    axs[0, 0].set_title("pointwise predictions")
-                    axs[0, 1].set_title("rollout predictions")
-                    # plot actions (twice: left & right)
-                    for ui in range(dim_u):
-                        axs[ui, 0].plot(steps, a_env[:, ui], color="b")
-                        axs[ui, 0].set_ylabel("action")
-                        axs[ui, 1].plot(steps, a_env[:, ui], color="b")
-                        axs[ui, 1].set_ylabel("action")
-                    # plot reward
-                    ri = dim_u
-                    axs[ri, 0].plot(steps, r_env, color="b", label="data")
-                    axs[ri, 0].plot(steps, r_pw, color="r", label=dyn_model_type)
-                    axs[ri, 0].set_ylabel("reward")
-                    axs[ri, 1].plot(steps, r_env, color="b", label="data")
-                    axs[ri, 1].plot(steps, r_roll, color="r", label=dyn_model_type)
-                    axs[ri, 1].set_ylabel("reward")
-                    for xi in range(dim_x):
-                        xi_ = xi + dim_u + 1  # plotting offset
-                        # plot pointwise state predictions
-                        axs[xi_, 0].plot(steps, ss_env[:, xi], color="b")
-                        axs[xi_, 0].plot(steps, ss_pred_pw[:, xi], color="r")
-                        axs[xi_, 0].set_ylabel(f"ss[{xi}]")
-                        # plot rollout state predictions
-                        axs[xi_, 1].plot(steps, ss_env[:, xi], color="b")
-                        axs[xi_, 1].plot(steps, ss_pred_roll[:, xi], color="r")
-                        axs[xi_, 1].set_ylabel(f"ss[{xi}]")
-                    axs[-1, 0].set_xlabel("steps")
-                    axs[-1, 1].set_xlabel("steps")
-                    handles, labels = axs[ri, 0].get_legend_handles_labels()
-                    fig.legend(handles, labels, loc="lower center", ncol=2)
-                    fig.suptitle(
-                        f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
-                        f"({int(test_buffer.size/horizon)} "
-                        f"episodes, {n_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
-                    )
-                    plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
+                ### plot pointwise and rollout predictions (1 episode) ###
+                fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
+                steps = torch.tensor(range(0, horizon))
+                axs[0, 0].set_title("pointwise predictions")
+                axs[0, 1].set_title("rollout predictions")
+                # plot actions (twice: left & right)
+                for ui in range(dim_u):
+                    axs[ui, 0].plot(steps, a_env[:, ui], color="b")
+                    axs[ui, 0].set_ylabel("action")
+                    axs[ui, 1].plot(steps, a_env[:, ui], color="b")
+                    axs[ui, 1].set_ylabel("action")
+                # plot reward
+                ri = dim_u
+                axs[ri, 0].plot(steps, r_env, color="b", label="data")
+                axs[ri, 0].plot(steps, r_pw, color="r", label=dyn_model_type)
+                axs[ri, 0].set_ylabel("reward")
+                axs[ri, 1].plot(steps, r_env, color="b", label="data")
+                axs[ri, 1].plot(steps, r_roll, color="r", label=dyn_model_type)
+                axs[ri, 1].set_ylabel("reward")
+                for xi in range(dim_x):
+                    xi_ = xi + dim_u + 1  # plotting offset
+                    # plot pointwise state predictions
+                    axs[xi_, 0].plot(steps, ss_env[:, xi], color="b")
+                    axs[xi_, 0].plot(steps, ss_pred_pw[:, xi], color="r")
+                    axs[xi_, 0].set_ylabel(f"ss[{xi}]")
+                    # plot rollout state predictions
+                    axs[xi_, 1].plot(steps, ss_env[:, xi], color="b")
+                    axs[xi_, 1].plot(steps, ss_pred_roll[:, xi], color="r")
+                    axs[xi_, 1].set_ylabel(f"ss[{xi}]")
+                axs[-1, 0].set_xlabel("steps")
+                axs[-1, 1].set_xlabel("steps")
+                handles, labels = axs[ri, 0].get_legend_handles_labels()
+                fig.legend(handles, labels, loc="lower center", ncol=2)
+                fig.suptitle(
+                    f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
+                    f"({int(test_buffer.size/horizon)} "
+                    f"episodes, {n_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
+                )
+                plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
+                if plotting:
                     plt.show()
 
         # i2c: find local (optimal) tvlg policy
-        with torch.no_grad():
-            logger.weak_line()
-            logger.info(f"START i2c [{n_iter_solver} iters]")
-            local_policy = i2c_solver(
-                n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
-            )
-            logger.info("END i2c")
+        logger.weak_line()
+        logger.info(f"START i2c [{n_iter_solver} iters]")
+        local_policy = i2c_solver(
+            n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
+        )
+        logger.info("END i2c")
         # log i2c metrics
         for i_ in range(n_iter_solver):
             log_dict = {"iter": i_iter, "i2c_iter": i_}
@@ -1482,23 +1483,21 @@ def experiment(
 
         ## plot current i2c optimal controller
         if plot_local_policy_metrics and plotting:
-            with torch.no_grad():
-                fix, axs = plt.subplots(3)
-                for i, (k, v) in enumerate(i2c_solver.metrics.items()):
-                    with torch.no_grad():
-                        v = torch.tensor(v).cpu()
-                        # axs[i].plot(v, label=f"$\epsilon={kl_bound}$")
-                        # axs[i].plot(v, label=f"$\\alpha={alpha}$")
-                        axs[i].plot(v, label=f"$Polyak$")
-                        # axs[i].plot(v, label=f"Maximum Likelihood")
-                        # axs[i].plot(v, label="Quadratic Model")
-                        # axs[i].plot(v, label="Annealing")
-                        axs[i].set_ylabel(k)
-                for ax in axs:
-                    ax.legend()
-                # TODO clean up plot
-                plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
-                plt.show()
+            fix, axs = plt.subplots(3)
+            for i, (k, v) in enumerate(i2c_solver.metrics.items()):
+                v = torch.tensor(v).cpu()
+                # axs[i].plot(v, label=f"$\epsilon={kl_bound}$")
+                # axs[i].plot(v, label=f"$\\alpha={alpha}$")
+                axs[i].plot(v, label=f"$Polyak$")
+                # axs[i].plot(v, label=f"Maximum Likelihood")
+                # axs[i].plot(v, label="Quadratic Model")
+                # axs[i].plot(v, label="Annealing")
+                axs[i].set_ylabel(k)
+            for ax in axs:
+                ax.legend()
+            # TODO clean up plot
+            plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
+            plt.show()
 
         # Fit global policy to local policy
         if policy_type == "tvlg":
@@ -1511,75 +1510,67 @@ def experiment(
     ####################################################################################################################
     #### EVALUATION
 
-    if plotting:
-        # local_policy.plot_metrics()
-        initial_state = torch.Tensor([torch.pi, 0.0])
-        # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
-        with torch.no_grad():
-            if dyn_model_type != "env":
-                global_dynamics.cpu()  # in-place
-            if policy_type == "tvlg":
-                global_policy = global_policy.actual()
+    # local_policy.plot_metrics()
+    initial_state = torch.Tensor([torch.pi, 0.0])
+    # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
+    if policy_type == "tvlg":
+        global_policy = global_policy.actual()
 
-            ### policy vs env
-            # TODO label plot
-            xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-            environment.plot(xs, us)
-            plt.suptitle(f"{policy_type} policy vs env")
-            plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
+    ### policy vs env
+    # TODO label plot
+    xs, us, xxs = environment.run(initial_state, global_policy, horizon)
+    environment.plot(xs, us)
+    plt.suptitle(f"{policy_type} policy vs env")
+    plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
 
-            ### policy vs dyn model
-            xs = torch.zeros((horizon, dim_x))
-            us = torch.zeros((horizon, dim_u))
-            state = initial_state
-            for t in range(horizon):
-                action = global_policy.predict(state, t)
-                xu = torch.cat((state, action))[None, :]
-                x_, *_ = global_dynamics(xu)
-                xs[t, :] = state
-                us[t, :] = action
-                state = x_[0, :]
-            environment.plot(xs, us)  # env.plot does not use env, it only plots
-            plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-            plt.savefig(
-                results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
-            )
+    ### policy vs dyn model
+    xs = torch.zeros((horizon, dim_x))
+    us = torch.zeros((horizon, dim_u))
+    state = initial_state
+    for t in range(horizon):
+        action = global_policy.predict(state, t)
+        xu = torch.cat((state, action))[None, :]
+        x_, *_ = global_dynamics(xu)
+        xs[t, :] = state
+        us[t, :] = action
+        state = x_[0, :]
+    environment.plot(xs, us)  # env.plot does not use env, it only plots
+    plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+    plt.savefig(
+        results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
+    )
 
-        # plot training loss
-        def scaled_xaxis(y_points, n_on_axis):
-            return np.arange(len(y_points)) / len(y_points) * n_on_axis
+    # plot training loss
+    def scaled_xaxis(y_points, n_on_axis):
+        return np.arange(len(y_points)) / len(y_points) * n_on_axis
 
-        if dyn_model_type != "env":
-            fig_loss_dyn, ax_loss_dyn = plt.subplots()
-            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_iter * n_epochs_dyn)
-            ax_loss_dyn.plot(
-                x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
-            )
-            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, n_iter * n_epochs_dyn)
-            ax_loss_dyn.plot(
-                x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss"
-            )
-            if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
-                ax_loss_dyn.set_yscale("symlog")
-            ax_loss_dyn.set_xlabel("epochs")
-            ax_loss_dyn.set_ylabel("loss")
-            ax_loss_dyn.set_title(
-                f"DYN {dyn_model_type} loss "
-                f"({int(train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
-            )
-            ax_loss_dyn.legend()
-            plt.savefig(results_dir / "dyn_loss.png", dpi=150)
+    if dyn_model_type != "env":
+        fig_loss_dyn, ax_loss_dyn = plt.subplots()
+        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_iter * n_epochs_dyn)
+        ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
+        x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, n_iter * n_epochs_dyn)
+        ax_loss_dyn.plot(x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss")
+        if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
+            ax_loss_dyn.set_yscale("symlog")
+        ax_loss_dyn.set_xlabel("epochs")
+        ax_loss_dyn.set_ylabel("loss")
+        ax_loss_dyn.set_title(
+            f"DYN {dyn_model_type} loss "
+            f"({int(train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
+        )
+        ax_loss_dyn.legend()
+        plt.savefig(results_dir / "dyn_loss.png", dpi=150)
         # TODO plot policy train loss
 
-        if plotting:
-            plt.show()
+    if plotting:
+        plt.show()
 
-        logger.strong_line()
-        logger.info(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
-        logger.info(f"Logs in {results_dir}")
-        logger.finish()
+    logger.strong_line()
+    logger.info(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
+    logger.info(f"Logs in {results_dir}")
+    logger.finish()
 
-        torch.cuda.empty_cache()
+    torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":
