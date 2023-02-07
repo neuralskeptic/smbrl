@@ -992,7 +992,7 @@ def experiment(
     n_features_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
-    n_epochs_dyn: int = 100,
+    n_epochs_dyn: int = 1000,
     # # D4) linear regression w/ sn-dnn & rf features
     # dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
     # n_features_dyn: int = 128,
@@ -1382,6 +1382,11 @@ def experiment(
                         logstring = f"DYN: Epoch {i_epoch_dyn}, Train Loss={dyn_loss_trace[-1]:.2}"
                         logstring += f", Test Loss={dyn_test_loss_trace[-1]:.2}"
                         logger.info(logstring)
+
+                # stop condition
+                # if i_epoch_dyn > 0.1 * n_epochs_dyn:  # do at least 10% of epochs
+                if dyn_test_loss_trace[-1] < -5e3:  # stop if test loss good
+                    break
 
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
