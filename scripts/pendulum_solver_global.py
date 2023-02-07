@@ -1283,22 +1283,22 @@ def experiment(
         # # constant
         # exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
 
-        # # 50-50 %: tvgl-fb or N(0, var) noise
-        # def noise_pred(*args):
-        #     if torch.randn(1) > 0.5:
-        #         return global_policy.predict(*args)
-        #         # return global_policy.actual().predict(*args)
-        #     else:
-        #         return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
-        #     # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
+        # 50-50 %: tvgl-fb or gaussian noise
+        def noise_pred(*args):
+            dithering = torch.randn(dim_u)
+            # if torch.randn(1) > 0.5:
+            #     # return global_policy.predict(*args)  # TODO actual makes no difference?
+            #     return global_policy.actual().predict(*args) + dithering
+            # else:
+            #     return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
+            return global_policy.actual().predict(*args) + dithering
+            # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
-        # exploration_policy.predict = noise_pred
+        exploration_policy.predict = noise_pred
 
         # # random gaussian
         # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
-        exploration_policy.predict = lambda *_: torch.normal(
-            torch.zeros(dim_u), 3 * torch.ones(dim_u)
-        )
+        # exploration_policy.predict = lambda *_: torch.randn(dim_u) * 3
 
         # train and test rollouts (env & exploration policy)
         logger.weak_line()
