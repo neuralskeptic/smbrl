@@ -1471,6 +1471,8 @@ def experiment(
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
+        # TODO actual?
+        i2c_solver.policy_prior = global_policy  # update prior policy
         local_policy = i2c_solver(
             n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
         )
