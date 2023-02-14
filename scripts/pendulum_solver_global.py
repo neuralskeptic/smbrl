@@ -996,10 +996,11 @@ def experiment(
     n_epochs_dyn: int = 1000,
     # # D4) linear regression w/ sn-dnn & rf features
     # dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
-    # n_features_dyn: int = 128,
+    # n_features_dyn: int = 128,  # RFFs require ~512-1024 for accuracy
+    # n_hidden_dyn: int = 128,
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 1e-4,
-    # n_epochs_dyn: int = 50,
+    # n_epochs_dyn: int = 1000,
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
