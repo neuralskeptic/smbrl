@@ -987,20 +987,20 @@ def experiment(
     # n_features_dyn: int = 256,
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 100,
-    # D3) linear regression w/ dnn features
-    dyn_model_type: str = "nlm",
-    n_features_dyn: int = 128,
-    n_hidden_dyn: int = 128,
-    n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
-    lr_dyn: float = 1e-4,
-    n_epochs_dyn: int = 1000,
-    # # D4) linear regression w/ sn-dnn & rf features
-    # dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
-    # n_features_dyn: int = 128,  # RFFs require ~512-1024 for accuracy
+    # # D3) linear regression w/ dnn features
+    # dyn_model_type: str = "nlm",
+    # n_features_dyn: int = 128,
     # n_hidden_dyn: int = 128,
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
+    # D4) linear regression w/ sn-dnn & rf features
+    dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
+    n_features_dyn: int = 128,  # RFFs require ~512-1024 for accuracy
+    n_hidden_dyn: int = 128,
+    n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    lr_dyn: float = 1e-4,
+    n_epochs_dyn: int = 1000,
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
