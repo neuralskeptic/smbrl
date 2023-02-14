@@ -20,6 +20,7 @@ from torch.autograd.functional import hessian, jacobian
 from tqdm import trange
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
+from src.feature_fns.nns import NeuralNetwork
 from src.models.dnns import DNN3
 from src.models.linear_bayesian_models import (
     NeuralLinearModel,
@@ -1004,8 +1005,14 @@ def experiment(
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
-    #  a) no model
-    policy_type: str = "tvlg",  # time-varying linear gaussian controllers (i2c)
+    # #  D1) local time-varying linear gaussian controllers (i2c)
+    # policy_type: str = "tvlg",
+    #  D2) dnn model
+    policy_type: str = "mlp",
+    n_hidden_pol: int = 256,
+    n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    lr_pol: float = 3e-4,
+    n_epochs_pol: int = 100,
     ############
     ## i2c solver ##
     n_iter_solver: int = 5,  # how many i2c solver iterations to do
@@ -1220,7 +1227,25 @@ def experiment(
         global_policy = local_policy
         ai_pol = QuadratureGaussianInference(dim_x, quad_params)
     elif policy_type == "mlp":
-        pass  # TODO
+
+        def patch_call(fn):
+            def wrap(self, x, t=0):  # t needed for i2c compat (until refactor)
+                u = fn(self, x)
+                return u
+
+            return wrap
+
+        NeuralNetwork.__call__ = patch_call(NeuralNetwork.__call__)
+        global_policy = NeuralNetwork(
+            dim_x,
+            n_hidden_layers_pol,
+            n_hidden_pol,
+            dim_u,
+        )
+        # global_policy.init_whitening(train_buffer.xs, train_buffer.ys)
+        loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy(x)[0], y)
+        opt_pol = torch.optim.Adam(global_policy.parameters(), lr=lr_pol)
+        ai_pol = QuadratureInference(dim_x, quad_params)
     elif policy_type == "nlm":
         pass  # TODO
     elif policy_type == "snngp":
@@ -1268,6 +1293,8 @@ def experiment(
     # for _ in [None]:
     dyn_loss_trace = []
     dyn_test_loss_trace = []
+    pol_loss_trace = []
+    pol_test_loss_trace = []
     for i_iter in range(n_iter):
         logger.strong_line()
         logger.info(f"ITERATION {i_iter + 1}/{n_iter}")
@@ -1286,14 +1313,17 @@ def experiment(
         # exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
 
         # 50-50 %: tvgl-fb or gaussian noise
-        def noise_pred(*args):
+        def noise_pred(x, t):
             dithering = torch.randn(dim_u)
             # if torch.randn(1) > 0.5:
-            #     # return global_policy.predict(*args)  # TODO actual makes no difference?
-            #     return global_policy.actual().predict(*args) + dithering
+            #     # return global_policy.predict(x, t)  # TODO actual makes no difference?
+            #     return global_policy.actual().predict(x, t) + dithering
             # else:
             #     return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
-            return global_policy.actual().predict(*args) + dithering
+            if policy_type == "tvlg":  # whether to .actual()
+                return global_policy.actual().predict(x, t) + dithering
+            else:
+                return global_policy(x) + dithering
             # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
         exploration_policy.predict = noise_pred
@@ -1520,9 +1550,77 @@ def experiment(
         if policy_type == "tvlg":
             global_policy = local_policy
         else:
-            pass  # TODO
+            # Roll out local policy to get samples to train global policy
+            # TODO
+
             # min KL[mean local_policy || global_policy]
             # should do: global_policy.predict(x, t)
+            logger.weak_line()
+            logger.info("START Training Policy")
+            global_policy.to(device)  # in-place
+            global_policy.train()
+            torch.set_grad_enabled(True)
+
+            for i_epoch_pol in trange(n_epochs_pol + 1):
+                for i_minibatch, minibatch in enumerate(train_buffer):
+                    x, y = minibatch
+                    opt_pol.zero_grad()
+                    loss = loss_fn_pol(x, y)
+                    loss.backward()
+                    opt_dyn.step()
+                    pol_loss_trace.append(loss.detach().item())
+                    logger.log_data(
+                        **{
+                            # "policy/train/epoch": i_epoch_dyn,
+                            "policy/train/loss": pol_loss_trace[-1],
+                        },
+                    )
+
+                # save logs & test
+                logger.save_logs()
+                if i_epoch_pol % (n_epochs_pol * log_frequency) == 0:
+                    with torch.no_grad():
+                        # test loss
+                        test_buffer.shuffling = False  # TODO only for plotting?
+                        test_losses = []
+                        for minibatch in test_buffer:  # TODO not whole buffer!
+                            _x_test, _y_test = minibatch
+                            _test_loss = loss_fn_pol(_x_test, _y_test)
+                            test_losses.append(_test_loss.item())
+                        pol_test_loss_trace.append(np.mean(test_losses))
+                        logger.log_data(
+                            step=logger._step,  # in sync with training loss
+                            **{
+                                "policy/eval/loss": pol_test_loss_trace[-1],
+                            },
+                        )
+
+                        logstring = f"pol: Epoch {i_epoch_pol}, Train Loss={pol_loss_trace[-1]:.2}"
+                        logstring += f", Test Loss={pol_test_loss_trace[-1]:.2}"
+                        logger.info(logstring)
+
+                # stop condition
+                if i_epoch_pol > 0.01 * n_epochs_pol:  # do at least 1% of epochs
+                    if pol_test_loss_trace[-1] < -3e3:  # stop if test loss good
+                        break
+
+                # TODO save model more often than in each global iter?
+                # if n % (n_epochs * model_save_frequency) == 0:
+                #     # Save the agent
+                #     torch.save(model.state_dict(), results_dir / f"agent_{n}_{i_iter}.pth")
+
+            # Save the model after training
+            global_policy.cpu()  # in-place
+            global_policy.eval()
+            torch.set_grad_enabled(False)
+            torch.save(
+                global_policy.state_dict(),
+                results_dir / "pol_model_{i_iter}.pth",
+            )
+            logger.info("END Training policy")
+
+            if plot_policy:
+                pass  # TODO
 
     ####################################################################################################################
     #### EVALUATION
