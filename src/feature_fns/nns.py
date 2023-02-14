@@ -36,9 +36,7 @@ class TwoLayerNetwork(nn.Module):
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(
-        self, d_in, d_out, d_hidden, n_hidden_layers=1, activation="leakyrelu"
-    ):
+    def __init__(self, d_in, d_out, d_hidden, n_hidden_layers, activation="leakyrelu"):
         assert activation in ACTIVATIONS
         super().__init__()
         self.layers = nn.ModuleList([nn.Linear(d_in, d_hidden)])
@@ -54,9 +52,7 @@ class NeuralNetwork(nn.Module):
 
 
 class NormalizedResidualNetwork(nn.Module):
-    def __init__(
-        self, d_in, d_out, d_hidden, n_hidden_layers=1, activation="leakyrelu"
-    ):
+    def __init__(self, d_in, d_out, d_hidden, n_hidden_layers, activation="leakyrelu"):
         assert activation in ACTIVATIONS
         super().__init__()
         # Note: spectral_norm sets norm to 1, do we need it to be configurable?
