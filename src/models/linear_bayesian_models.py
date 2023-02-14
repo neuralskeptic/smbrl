@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from check_shape import check_shape
 
-from src.feature_fns.nns import TwoLayerNetwork, TwoLayerNormalizedResidualNetwork
+from src.feature_fns.nns import NeuralNetwork, NormalizedResidualNetwork
 from src.utils.whitening import data_whitening
 
 
@@ -183,17 +183,24 @@ class LinearBayesianModel(nn.Module):
 
 @data_whitening
 class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
-    d_approx = 512  # RFFs require ~512-1024 for accuracy
+    # d_approx = 512  # RFFs require ~512-1024 for accuracy
 
-    def __init__(self, dim_x, dim_y, dim_features):
-        super().__init__(dim_x, dim_y, self.d_approx)
-        self.features = TwoLayerNormalizedResidualNetwork(
-            dim_x, self.d_approx, dim_features
+    def __init__(self, dim_x, dim_y, dim_hidden, dim_features, n_hidden=2):
+        # super().__init__(dim_x, dim_y, self.d_approx)
+        super().__init__(dim_x, dim_y, dim_features)
+        # self.features = NormalizedResidualNetwork(
+        # dim_x, self.d_approx, dim_features, n_hidden
+        # )
+        self.features = NormalizedResidualNetwork(
+            dim_x,
+            n_hidden,
+            dim_hidden,
+            dim_features,
         )
 
 
 @data_whitening
 class NeuralLinearModel(LinearBayesianModel):
-    def __init__(self, dim_x, dim_y, dim_features):
+    def __init__(self, dim_x, dim_y, dim_hidden, dim_features, n_hidden=1):
         super().__init__(dim_x, dim_y, dim_features)
-        self.features = TwoLayerNetwork(dim_x, dim_features, dim_features)
+        self.features = NeuralNetwork(dim_x, n_hidden, dim_hidden, dim_features)

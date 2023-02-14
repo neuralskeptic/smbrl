@@ -990,6 +990,7 @@ def experiment(
     # D3) linear regression w/ dnn features
     dyn_model_type: str = "nlm",
     n_features_dyn: int = 128,
+    n_hidden_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
     n_epochs_dyn: int = 1000,
@@ -1163,7 +1164,7 @@ def experiment(
         dim_input = dim_xu + 1  # sin,cos of theta
         NeuralLinearModel.__call__ = patch_call(NeuralLinearModel.__call__)
         global_dynamics = NeuralLinearModel(
-            dim_input, dim_x, n_features_dyn, n_hidden_layers_dyn
+            dim_input, dim_x, n_hidden_dyn, n_features_dyn, n_hidden_layers_dyn
         )
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
 
@@ -1193,7 +1194,7 @@ def experiment(
             SpectralNormalizedNeuralGaussianProcess.__call__
         )
         global_dynamics = SpectralNormalizedNeuralGaussianProcess(
-            dim_input, dim_x, n_features_dyn, n_hidden_layers_dyn
+            dim_input, dim_x, n_hidden_dyn, n_features_dyn, n_hidden_layers_dyn
         )
         # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
 
