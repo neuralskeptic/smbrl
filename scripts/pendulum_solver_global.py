@@ -241,13 +241,11 @@ class QuadratureInference(object):
     ) -> MultivariateGaussian:
         assert isinstance(distribution, MultivariateGaussian)
         x_pts = self.get_x_pts(distribution.mean, distribution.covariance)
-        self.y_pts, self.m_y, self.sig_y, self.sig_xy = self.forward_pts(
-            function, distribution.mean, x_pts
-        )
+        y_pts, m_y, sig_y, sig_xy = self.forward_pts(function, distribution.mean, x_pts)
         return MultivariateGaussian(
-            self.m_y,
-            self.sig_y,
-            self.sig_xy.T,
+            m_y,
+            sig_y,
+            sig_xy.T,
             distribution.mean,
             distribution.covariance,
         )
@@ -304,12 +302,12 @@ class QuadratureImportanceSamplingInnovation(QuadratureInference):
     ) -> MultivariateGaussian:
         assert isinstance(distribution, MultivariateGaussian)
         x_pts = self.get_x_pts(distribution.mean, distribution.covariance)
-        f_pts, self.x_pts = function(x_pts)
+        f_pts, x_pts = function(x_pts)
         log_weights = -inverse_temperature * f_pts + torch.log(self.weights_mu)
         log_weights -= torch.logsumexp(log_weights, dim=0)
         weights = torch.exp(log_weights)
-        mu_x = torch.einsum("b, bi -> i", weights, self.x_pts)
-        diff = self.x_pts - mu_x[None, :]
+        mu_x = torch.einsum("b, bi -> i", weights, x_pts)
+        diff = x_pts - mu_x[None, :]
         sigma_x = torch.einsum("b, bi, bj -> ij", weights, diff, diff)
         sigma_x = 0.5 * (sigma_x + sigma_x.T)
         return MultivariateGaussian(mu_x, sigma_x, None, None, None)
@@ -542,7 +540,6 @@ class PseudoPosteriorSolver(object):
         self.horizon = horizon
         self.initial_state = initial_state_distribution
         self.policy_prior = policy_prior
-        self.alpha = 0.0
         self.approximate_inference_dynamics = approximate_inference_dynamics
         self.approximate_inference_policy = approximate_inference_policy
         self.approximate_inference_cost = approximate_inference_cost
@@ -628,37 +625,35 @@ class PseudoPosteriorSolver(object):
         return list(reversed(dist))
 
     def __call__(self, n_iteration: int, plot_posterior: bool = True):
-        initial_alpha = 0.0
         self.init_metrics()
+        alpha = 0.0
         policy = self.policy_prior
         (
             forward_state_action_prior,
             next_state_state_action_prior,
             _,
-        ) = self.forward_pass(
-            self.env, self.cost, policy, self.initial_state, alpha=initial_alpha
-        )
+        ) = self.forward_pass(self.env, self.cost, policy, self.initial_state, alpha)
         forward_distribution = [
             dist.reverse() for dist in next_state_state_action_prior
         ]
-        self.alpha = self.update_temperature_strategy(
+        alpha = self.update_temperature_strategy(
             self.cost,
             forward_distribution,
             forward_distribution,
-            current_alpha=initial_alpha,
+            current_alpha=alpha,
         )
         # plot_trajectory_distribution(forward_state_action_prior, f"init")
         self.compute_metrics(
-            forward_state_action_prior, forward_state_action_prior, initial_alpha
+            forward_state_action_prior, forward_state_action_prior, alpha
         )
         for i in range(n_iteration):
-            print(f"{i} {self.alpha:.2f}")
+            print(f"{i} {alpha:.2f}")
             (
                 forward_state_action_prior,
                 predicted_state_prior,
                 terminal_state,
             ) = self.forward_pass(
-                self.env, self.cost, policy, self.initial_state, self.alpha
+                self.env, self.cost, policy, self.initial_state, alpha
             )
             # plot_trajectory_distribution(forward_state_action_prior, f"filter{i}")
             state_action_posterior = self.backward_pass(
@@ -667,9 +662,7 @@ class PseudoPosteriorSolver(object):
             state_action_policy, _, _ = self.forward_pass(
                 self.env, self.cost, policy.actual(), self.initial_state, alpha=0.0
             )
-            self.compute_metrics(
-                state_action_posterior, state_action_policy, self.alpha
-            )
+            self.compute_metrics(state_action_posterior, state_action_policy, alpha)
 
             # plt.plot([forward_state_action_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
             # plt.plot([predicted_state_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
@@ -677,13 +670,13 @@ class PseudoPosteriorSolver(object):
             # plt.plot([state_action_policy[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
             # breakpoint()  # state_action_posterior broken?
             policy.update_from_distribution(state_action_posterior, state_action_policy)
-            self.alpha = self.update_temperature_strategy(
+            alpha = self.update_temperature_strategy(
                 self.cost,
                 state_action_posterior,
                 state_action_policy,
-                current_alpha=initial_alpha,
+                current_alpha=alpha,
             )
-            # self.alpha = self.update_temperature_strategy(self.cost, [dist.reverse() for dist in next_state_state_action_prior], current_alpha=initial_alpha)
+            # alpha = self.update_temperature_strategy(self.cost, [dist.reverse() for dist in next_state_state_action_prior], current_alpha=initial_alpha)
             # plot_trajectory_distribution(state_action_posterior, f"smooth{i}")
             # plt.show()
             # if converged(metrics):
