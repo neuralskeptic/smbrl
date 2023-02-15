@@ -1106,11 +1106,10 @@ def experiment(
             :, 2
         ] ** 2, xu
 
-    train_buffer = ReplayBuffer(
+    dyn_train_buffer = ReplayBuffer(
         dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
     )
-
-    test_buffer = ReplayBuffer(
+    dyn_test_buffer = ReplayBuffer(
         dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
     )
 
@@ -1151,7 +1150,7 @@ def experiment(
         DNN3.__call__ = patch_call(DNN3.__call__)
         dim_input = dim_xu + 1  # sin,cos of theta
         global_dynamics = DNN3(dim_input, dim_x, n_features_dyn)
-        # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
+        # global_dynamics.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x)[0], y)
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
         ai_dyn = QuadratureInference(dim_xu, quad_params)
@@ -1174,7 +1173,7 @@ def experiment(
         global_dynamics = NeuralLinearModel(
             dim_input, dim_x, n_hidden_dyn, n_features_dyn, n_hidden_layers_dyn
         )
-        # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
+        # global_dynamics.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
 
         def loss_fn_dyn(xu, x_next):
             xu_sincos = sincos_angle(clamp_u(xu))
@@ -1204,7 +1203,7 @@ def experiment(
         global_dynamics = SpectralNormalizedNeuralGaussianProcess(
             dim_input, dim_x, n_hidden_dyn, n_features_dyn, n_hidden_layers_dyn
         )
-        # global_dynamics.init_whitening(train_buffer.xs, train_buffer.ys)
+        # global_dynamics.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
 
         def loss_fn_dyn(xu, x_next):
             xu_sincos = sincos_angle(clamp_u(xu))
@@ -1256,8 +1255,6 @@ def experiment(
         def predict(self, *args):
             pass  # fill/override before use
 
-    exploration_policy = MockPolicy()
-
     ### i2c solver ###
     i2c_solver = PseudoPosteriorSolver(
         dim_x,
@@ -1303,6 +1300,9 @@ def experiment(
             global_dynamics.eval()
             torch.set_grad_enabled(False)
 
+        #### T: collect dynamics rollouts
+        exploration_policy = MockPolicy()
+
         # # tvlg with feedback
         # exploration_policy = global_policy.actual()
 
@@ -1338,13 +1338,14 @@ def experiment(
         for i in trange(n_rollout_episodes):  # 80 % train
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
-            train_buffer.add(torch.hstack([s, a]), ss)
+            dyn_train_buffer.add(torch.hstack([s, a]), ss)
         for i in trange(int(n_rollout_episodes / 4)):  # 20 % test
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
-            test_buffer.add(torch.hstack([s, a]), ss)
+            dyn_test_buffer.add(torch.hstack([s, a]), ss)
         logger.info("END Collecting Rollouts")
 
+        #### T: train dynamics model
         if dyn_model_type != "env":
             # Learn Dynamics
             logger.weak_line()
@@ -1354,7 +1355,7 @@ def experiment(
             torch.set_grad_enabled(True)
 
             ## initial loss
-            # for minibatch in train_buffer:  # TODO not whole buffer!
+            # for minibatch in dyn_train_buffer:  # TODO not whole buffer!
             #     _x, _y = minibatch
             #     _loss = loss_fn_dyn(_x, _y)
             #     dyn_loss_trace.append(_loss.detach().item())
@@ -1364,7 +1365,7 @@ def experiment(
             #         },
             #     )
             # test_losses = []
-            # for minibatch in test_buffer:  # TODO not whole buffer!
+            # for minibatch in dyn_test_buffer:  # TODO not whole buffer!
             #     _x_test, _y_test = minibatch
             #     _test_loss = loss_fn_dyn(_x_test, _y_test)
             #     test_losses.append(_test_loss.detach().item())
@@ -1378,7 +1379,7 @@ def experiment(
 
             # torch.autograd.set_detect_anomaly(True)
             for i_epoch_dyn in trange(n_epochs_dyn + 1):
-                for i_minibatch, minibatch in enumerate(train_buffer):
+                for i_minibatch, minibatch in enumerate(dyn_train_buffer):
                     x, y = minibatch
                     opt_dyn.zero_grad()
                     loss = loss_fn_dyn(x, y)
@@ -1397,9 +1398,9 @@ def experiment(
                 if i_epoch_dyn % (n_epochs_dyn * log_frequency) == 0:
                     with torch.no_grad():
                         # test loss
-                        test_buffer.shuffling = False  # TODO only for plotting?
+                        dyn_test_buffer.shuffling = False  # TODO only for plotting?
                         test_losses = []
-                        for minibatch in test_buffer:  # TODO not whole buffer!
+                        for minibatch in dyn_test_buffer:  # TODO not whole buffer!
                             _x_test, _y_test = minibatch
                             _test_loss = loss_fn_dyn(_x_test, _y_test)
                             test_losses.append(_test_loss.item())
@@ -1435,15 +1436,16 @@ def experiment(
             )
             logger.info("END Training Dynamics")
 
+            #### T: plot dynamics model
             if plot_dyn:
                 ## test dynamics model in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
-                # sa_env = test_buffer.xs[:horizon, :].cpu()  # first
-                sa_env = test_buffer.xs[-horizon:, :].cpu()  # last
+                # sa_env = dyn_test_buffer.xs[:horizon, :].cpu()  # first
+                sa_env = dyn_test_buffer.xs[-horizon:, :].cpu()  # last
                 s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                # ss_env = test_buffer.ys[:horizon, :].cpu()  # first
-                ss_env = test_buffer.ys[-horizon:, :].cpu()  # last
+                # ss_env = dyn_test_buffer.ys[:horizon, :].cpu()  # first
+                ss_env = dyn_test_buffer.ys[-horizon:, :].cpu()  # last
                 ss_pred_pw = torch.zeros((horizon, dim_x))
                 ss_pred_roll = torch.zeros((horizon, dim_x))
                 state = s_env[0, :]  # for rollouts: data init state
@@ -1505,13 +1507,14 @@ def experiment(
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
                     f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
-                    f"({int(test_buffer.size/horizon)} "
+                    f"({int(dyn_test_buffer.size/horizon)} "
                     f"episodes, {i_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
                 )
                 plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
                 if plotting:
                     plt.show()
 
+        #### T: i2c
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
@@ -1528,6 +1531,7 @@ def experiment(
                 log_dict[k] = v[i_]  # one key, n_iter_solver values
             logger.log_data(log_dict)
 
+        #### T: plot i2c opt. controller
         ## plot current i2c optimal controller
         if plot_local_policy_metrics and plotting:
             fix, axs = plt.subplots(3)
@@ -1550,6 +1554,7 @@ def experiment(
         if policy_type == "tvlg":
             global_policy = local_policy
         else:
+            #### T: collect policy rollouts
             # Roll out local policy to get samples to train global policy
             # TODO
 
@@ -1561,6 +1566,7 @@ def experiment(
             global_policy.train()
             torch.set_grad_enabled(True)
 
+            #### T: train policy
             for i_epoch_pol in trange(n_epochs_pol + 1):
                 for i_minibatch, minibatch in enumerate(train_buffer):
                     x, y = minibatch
@@ -1619,6 +1625,7 @@ def experiment(
             )
             logger.info("END Training policy")
 
+            #### T: plot policy
             if plot_policy:
                 pass  # TODO
 
@@ -1659,7 +1666,7 @@ def experiment(
     if plot_data:
         cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
         # train data
-        xs = train_buffer.xs[:, :dim_x]  # only states
+        xs = dyn_train_buffer.xs[:, :dim_x]  # only states
         df = pd.DataFrame()
         df[cols] = np.array(xs.cpu())
         df["traj_id"] = df.index // horizon
@@ -1670,7 +1677,7 @@ def experiment(
         g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
         g.savefig(results_dir / "train_data.png", dpi=150)
         # test data
-        xs = test_buffer.xs[:, :dim_x]  # only states
+        xs = dyn_test_buffer.xs[:, :dim_x]  # only states
         df = pd.DataFrame()
         df[cols] = np.array(xs.cpu())
         df["traj_id"] = df.index // horizon
@@ -1697,7 +1704,7 @@ def experiment(
         ax_loss_dyn.set_ylabel("loss")
         ax_loss_dyn.set_title(
             f"DYN {dyn_model_type} loss "
-            f"({int(train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
+            f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
         )
         ax_loss_dyn.legend()
         plt.savefig(results_dir / "dyn_loss.png", dpi=150)
