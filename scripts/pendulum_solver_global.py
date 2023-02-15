@@ -2,6 +2,7 @@ import math
 import os
 import time
 from abc import ABC, abstractmethod
+from copy import copy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -527,7 +528,7 @@ class PseudoPosteriorSolver(object):
         cost: Callable,
         horizon: int,
         initial_state_distribution: Distribution,
-        policy_prior: Policy,
+        policy_template: Policy,
         approximate_inference_dynamics,
         approximate_inference_policy,
         approximate_inference_cost,
@@ -539,7 +540,6 @@ class PseudoPosteriorSolver(object):
         self.cost = cost
         self.horizon = horizon
         self.initial_state = initial_state_distribution
-        self.policy_prior = policy_prior
         self.approximate_inference_dynamics = approximate_inference_dynamics
         self.approximate_inference_policy = approximate_inference_policy
         self.approximate_inference_cost = approximate_inference_cost
@@ -624,10 +624,21 @@ class PseudoPosteriorSolver(object):
         # plt.plot([d.covariance[1,1].detach() for d in dist])
         return list(reversed(dist))
 
-    def __call__(self, n_iteration: int, plot_posterior: bool = True):
+    def __call__(
+        self, n_iteration: int, policy_prior=None, plot_posterior: bool = True
+    ):
         self.init_metrics()
         alpha = 0.0
-        policy = self.policy_prior
+        policy_created = False
+        if policy_prior:  # run once with prior to initialize policy
+            policy = policy_prior
+        else:  # create new (blank) policy
+            policy = copy(self.policy_template)
+            policy_created = True
+        if hasattr(policy, "actual"):
+            actual_policy = policy.actual()
+        else:
+            actual_policy = policy
         (
             forward_state_action_prior,
             next_state_state_action_prior,
@@ -660,7 +671,7 @@ class PseudoPosteriorSolver(object):
                 forward_state_action_prior, predicted_state_prior, terminal_state
             )
             state_action_policy, _, _ = self.forward_pass(
-                self.env, self.cost, policy.actual(), self.initial_state, alpha=0.0
+                self.env, self.cost, actual_policy, self.initial_state, alpha=0.0
             )
             self.compute_metrics(state_action_posterior, state_action_policy, alpha)
 
@@ -669,7 +680,13 @@ class PseudoPosteriorSolver(object):
             # plt.plot([state_action_posterior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
             # plt.plot([state_action_policy[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
             # breakpoint()  # state_action_posterior broken?
-            policy.update_from_distribution(state_action_posterior, state_action_policy)
+
+            if not policy_created:  # switch from prior policy to local policy
+                policy = copy(self.policy_template)
+                policy_created = True
+            # 2nd param unused? (state_action_policy)
+            policy.update_from_distribution(state_action_posterior)
+            actual_policy = policy.actual()
             alpha = self.update_temperature_strategy(
                 self.cost,
                 state_action_posterior,
