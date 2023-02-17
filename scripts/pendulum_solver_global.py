@@ -2,7 +2,7 @@ import math
 import os
 import time
 from abc import ABC, abstractmethod
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -540,6 +540,7 @@ class PseudoPosteriorSolver(object):
         self.cost = cost
         self.horizon = horizon
         self.initial_state = initial_state_distribution
+        self.policy_template = policy_template
         self.approximate_inference_dynamics = approximate_inference_dynamics
         self.approximate_inference_policy = approximate_inference_policy
         self.approximate_inference_cost = approximate_inference_cost
@@ -633,7 +634,7 @@ class PseudoPosteriorSolver(object):
         if policy_prior:  # run once with prior to initialize policy
             policy = policy_prior
         else:  # create new (blank) policy
-            policy = copy(self.policy_template)
+            policy = deepcopy(self.policy_template)
             policy_created = True
         if hasattr(policy, "actual"):
             actual_policy = policy.actual()
@@ -682,7 +683,7 @@ class PseudoPosteriorSolver(object):
             # breakpoint()  # state_action_posterior broken?
 
             if not policy_created:  # switch from prior policy to local policy
-                policy = copy(self.policy_template)
+                policy = deepcopy(self.policy_template)
                 policy_created = True
             # 2nd param unused? (state_action_policy)
             policy.update_from_distribution(state_action_posterior)
@@ -1015,14 +1016,14 @@ def experiment(
     ##############
     ## policy ##
     plot_policy: bool = False,  # plot pointwise and rollout prediction
-    # #  D1) local time-varying linear gaussian controllers (i2c)
-    # policy_type: str = "tvlg",
-    #  D2) dnn model
-    policy_type: str = "mlp",
-    n_hidden_pol: int = 256,
-    n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
-    lr_pol: float = 3e-4,
-    n_epochs_pol: int = 100,
+    #  D1) local time-varying linear gaussian controllers (i2c)
+    policy_type: str = "tvlg",
+    # #  D2) dnn model
+    # policy_type: str = "mlp",
+    # n_hidden_pol: int = 256,
+    # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 3e-4,
+    # n_epochs_pol: int = 100,
     ############
     ## i2c solver ##
     n_iter_solver: int = 5,  # how many i2c solver iterations to do
@@ -1233,7 +1234,7 @@ def experiment(
 
     ### global policy model ###
     if policy_type == "tvlg":
-        global_policy = local_policy
+        global_policy = deepcopy(local_policy)
         ai_pol = QuadratureGaussianInference(dim_x, quad_params)
     elif policy_type == "mlp":
 
@@ -1273,7 +1274,7 @@ def experiment(
         state_action_cost,
         horizon,
         initial_state_distribution,
-        policy_prior=global_policy,
+        policy_template=local_policy,
         approximate_inference_dynamics=ai_dyn,
         approximate_inference_policy=ai_pol,
         approximate_inference_cost=QuadratureImportanceSamplingInnovation(
@@ -1531,7 +1532,9 @@ def experiment(
         # TODO actual?
         i2c_solver.policy_prior = global_policy  # update prior policy
         local_policy = i2c_solver(
-            n_iteration=n_iter_solver, plot_posterior=plot_posterior and plotting
+            n_iteration=n_iter_solver,
+            policy_prior=global_policy,
+            plot_posterior=plot_posterior and plotting,
         )
         logger.info("END i2c")
         # log i2c metrics
