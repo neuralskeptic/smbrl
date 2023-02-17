@@ -115,6 +115,9 @@ class MultivariateGaussian(Distribution):
             self.previous_covariance = self.previous_covariance.to(device)
         return self
 
+    def cpu(self):
+        return self.to("cpu")
+
 
 class LinearizationInference(object):
     def __call__(self, function: Callable, distribution: MultivariateGaussian):
@@ -275,6 +278,15 @@ class QuadratureInference(object):
             function(self.get_x_pts(distribution.mean, distribution.covariance))[0],
         )
 
+    def to(self, device):
+        self.base_pts = self.base_pts.to(device)
+        self.weights_mu = self.weights_mu.to(device)
+        self.weights_sig = self.weights_sig.to(device)
+        return self
+
+    def cpu(self):
+        return self.to("cpu")
+
 
 class QuadratureGaussianInference(QuadratureInference):
     """For a function that returns a mean and covariance."""
@@ -429,14 +441,17 @@ class TimeVaryingLinearGaussian(Policy):
         else:
             raise ValueError("Cannot update from this distribution!")
 
-    # def to(self, device):
-    #     self.k_actual = self.k_actual.to(device)
-    #     self.K_actual = self.K_actual.to(device)
-    #     self.k_opt = self.k_opt.to(device)
-    #     self.K_opt = self.K_opt.to(device)
-    #     self.sigma = self.sigma.to(device)
-    #     self.chol = self.chol.to(device)
-    #     return self
+    def to(self, device):
+        self.k_actual = self.k_actual.to(device)
+        self.K_actual = self.K_actual.to(device)
+        self.k_opt = self.k_opt.to(device)
+        self.K_opt = self.K_opt.to(device)
+        self.sigma = self.sigma.to(device)
+        self.chol = self.chol.to(device)
+        return self
+
+    def cpu(self):
+        return self.to("cpu")
 
 
 class Pendulum(object):
@@ -527,7 +542,6 @@ class PseudoPosteriorSolver(object):
         env: Callable,
         cost: Callable,
         horizon: int,
-        initial_state_distribution: Distribution,
         policy_template: Policy,
         approximate_inference_dynamics,
         approximate_inference_policy,
@@ -539,7 +553,6 @@ class PseudoPosteriorSolver(object):
         self.dim_x, self.dim_u = dim_x, dim_u
         self.cost = cost
         self.horizon = horizon
-        self.initial_state = initial_state_distribution
         self.policy_template = policy_template
         self.approximate_inference_dynamics = approximate_inference_dynamics
         self.approximate_inference_policy = approximate_inference_policy
@@ -626,7 +639,11 @@ class PseudoPosteriorSolver(object):
         return list(reversed(dist))
 
     def __call__(
-        self, n_iteration: int, policy_prior=None, plot_posterior: bool = True
+        self,
+        n_iteration: int,
+        initial_state: Distribution,
+        policy_prior=None,
+        plot_posterior: bool = True,
     ):
         self.init_metrics()
         alpha = 0.0
@@ -644,7 +661,7 @@ class PseudoPosteriorSolver(object):
             forward_state_action_prior,
             next_state_state_action_prior,
             _,
-        ) = self.forward_pass(self.env, self.cost, policy, self.initial_state, alpha)
+        ) = self.forward_pass(self.env, self.cost, policy, initial_state, alpha)
         forward_distribution = [
             dist.reverse() for dist in next_state_state_action_prior
         ]
@@ -664,15 +681,13 @@ class PseudoPosteriorSolver(object):
                 forward_state_action_prior,
                 predicted_state_prior,
                 terminal_state,
-            ) = self.forward_pass(
-                self.env, self.cost, policy, self.initial_state, alpha
-            )
+            ) = self.forward_pass(self.env, self.cost, policy, initial_state, alpha)
             # plot_trajectory_distribution(forward_state_action_prior, f"filter{i}")
             state_action_posterior = self.backward_pass(
                 forward_state_action_prior, predicted_state_prior, terminal_state
             )
             state_action_policy, _, _ = self.forward_pass(
-                self.env, self.cost, actual_policy, self.initial_state, alpha=0.0
+                self.env, self.cost, actual_policy, initial_state, alpha=0.0
             )
             self.compute_metrics(state_action_posterior, state_action_policy, alpha)
 
@@ -712,9 +727,9 @@ class PseudoPosteriorSolver(object):
         policy_cost = self.cost(
             torch.stack(tuple(d.mean for d in policy_distribution), dim=0)
         )[0].sum()
-        self.metrics["posterior_cost"] += [posterior_cost]
-        self.metrics["policy_cost"] += [policy_cost]
-        self.metrics["alpha"] += [alpha]
+        self.metrics["posterior_cost"] += [posterior_cost.cpu()]
+        self.metrics["policy_cost"] += [policy_cost.cpu()]
+        self.metrics["alpha"] += [alpha.cpu()]
 
     def init_metrics(self):
         self.metrics = {
@@ -728,6 +743,20 @@ class PseudoPosteriorSolver(object):
         for i, (k, v) in enumerate(self.metrics.items()):
             axs[i].plot(v.cpu())
             axs[i].set_ylabel(k)
+
+    def to(self, device):
+        self.env.to(device)
+        # self.cost.to(device)  # is function
+        self.policy_template.to(device)
+        self.approximate_inference_dynamics.to(device)
+        self.approximate_inference_policy.to(device)
+        self.approximate_inference_cost.to(device)
+        # self.approximate_inference_smoothing.to(device)  # is function
+        self.update_temperature_strategy.to(device)
+        return self
+
+    def cpu(self):
+        return self.to("cpu")
 
 
 class TemperatureStrategy(ABC):
@@ -910,6 +939,13 @@ class PolyakStepSize(TemperatureStrategy):
         sup_cost = sum([torch.max(costs_t) for costs_t in list_of_costs])
         expected_cost = torch.einsum("b,b->", traj_weights, traj_costs)
         return expected_cost / sup_cost
+
+    def to(self, device):
+        self.inference.to(device)
+        return self
+
+    def cpu(self):
+        return self.to("cpu")
 
 
 class QuadraticModel(TemperatureStrategy):
@@ -1273,7 +1309,6 @@ def experiment(
         global_dynamics,
         state_action_cost,
         horizon,
-        initial_state_distribution,
         policy_template=local_policy,
         approximate_inference_dynamics=ai_dyn,
         approximate_inference_policy=ai_pol,
@@ -1530,12 +1565,29 @@ def experiment(
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
         # TODO actual?
-        i2c_solver.policy_prior = global_policy  # update prior policy
+
+        global_policy.to(device)  # in-place
+        i2c_solver.to(device)
+        torch.set_grad_enabled(True)
+
+        s0 = initial_state_distribution.sample()
+        s0_dist = MultivariateGaussian(s0, 1e-6 * torch.eye(dim_x), None, None, None)
+        s0_dist.to(device)
+        t1 = time.time()
         local_policy = i2c_solver(
             n_iteration=n_iter_solver,
             policy_prior=global_policy,
+            initial_state=s0_dist,
             plot_posterior=plot_posterior and plotting,
         )
+        print(f"time: {time.time()-t1:.5} s")
+        # breakpoint()
+
+        local_policy.cpu()
+        global_policy.cpu()  # in-place
+        i2c_solver.cpu()
+        torch.set_grad_enabled(False)
+
         logger.info("END i2c")
         # log i2c metrics
         for i_ in range(n_iter_solver):
