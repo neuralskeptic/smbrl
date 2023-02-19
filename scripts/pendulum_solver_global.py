@@ -8,6 +8,7 @@ from functools import partial
 from pathlib import Path
 from typing import Callable, Dict, List
 
+import einops
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -55,28 +56,29 @@ class MultivariateGaussian(Distribution):
     def full_joint(self, reverse=True):
         """Convert Markovian structure into the joint multivariate Gaussian and forget history."""
         if reverse:
-            mean = torch.cat((self.previous_mean, self.mean), axis=0)
+            mean = torch.cat((self.previous_mean, self.mean), axis=-1)
+            cross_covariance_T = einops.rearrange(
+                self.cross_covariance, "... x1 x2 -> ... x2 x1"
+            )
             covariance = torch.cat(
                 (
-                    torch.cat(
-                        (self.previous_covariance, self.cross_covariance.T), axis=1
-                    ),
-                    (torch.cat((self.cross_covariance, self.covariance), axis=1)),
+                    torch.cat((self.previous_covariance, cross_covariance_T), axis=-1),
+                    (torch.cat((self.cross_covariance, self.covariance), axis=-1)),
                 ),
-                axis=0,
+                axis=-2,
             )
         else:
-            mean = torch.cat((self.mean, self.previous_mean), axis=0)
+            mean = torch.cat((self.mean, self.previous_mean), axis=-1)
             covariance = torch.cat(
                 (
-                    torch.cat((self.covariance, self.cross_covariance), axis=1),
+                    torch.cat((self.covariance, self.cross_covariance), axis=-1),
                     (
                         torch.cat(
-                            (self.cross_covariance.T, self.previous_covariance), axis=1
+                            (cross_covariance_T, self.previous_covariance), axis=-1
                         )
                     ),
                 ),
-                axis=0,
+                axis=-2,
             )
         return MultivariateGaussian(mean, covariance, None, None, None)
 
@@ -96,15 +98,16 @@ class MultivariateGaussian(Distribution):
         return MultivariateGaussian(
             self.previous_mean,
             self.previous_covariance,
-            self.cross_covariance.T,
+            self.cross_covariance.mT,  # transpose
             self.mean,
             self.covariance,
         )
 
-    def sample(self):
+    def sample(self, *args, **kwargs):
+        """Works for batched mean and covariance"""
         return torch.distributions.MultivariateNormal(
             self.mean, self.covariance
-        ).sample()
+        ).sample(*args, **kwargs)
 
     def to(self, device):
         self.mean = self.mean.to(device)
@@ -226,30 +229,31 @@ class QuadratureInference(object):
         self.n_points = self.base_pts.shape[0]
 
     def get_x_pts(self, mu_x, sigma_x):
+        """ " batched version (batch dims first)"""
         try:
-            sqrt = torch.linalg.cholesky(sigma_x)
+            sqrt = torch.linalg.cholesky(sigma_x)  # TODO full cuda version?
         except torch.linalg.LinAlgError:
             print(
                 f"singular covariance: {torch.linalg.eigvalsh(sigma_x)}, state: {mu_x}"
             )
             sqrt = torch.linalg.cholesky(torch.diag(torch.diag(sigma_x)))
         scale = self.sf * sqrt
-        try:
-            mu_x[None, :] + self.base_pts @ scale.T
-        except:
-            breakpoint()
-        return mu_x[None, :] + self.base_pts @ scale.T
+        # mu + self.base_pts @ scale.T  <==>  (B,X) + (P,X) @ (B,X,X) = (B,P,X)
+        return mu_x.unsqueeze(-2) + einops.einsum(
+            self.base_pts, scale.mT, "... p x2, ... x2 x1 -> ... p x1"
+        )
 
     def __call__(
         self, function: Callable, distribution: MultivariateGaussian
     ) -> MultivariateGaussian:
+        """ " batched version (batch dims first)"""
         assert isinstance(distribution, MultivariateGaussian)
         x_pts = self.get_x_pts(distribution.mean, distribution.covariance)
         y_pts, m_y, sig_y, sig_xy = self.forward_pts(function, distribution.mean, x_pts)
         return MultivariateGaussian(
             m_y,
             sig_y,
-            sig_xy.T,
+            sig_xy.mT,  # transpose
             distribution.mean,
             distribution.covariance,
         )
@@ -257,16 +261,26 @@ class QuadratureInference(object):
     def forward_pts(
         self, f: Callable, mu_x: torch.Tensor, x_pts: torch.Tensor
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
+        """ " batched version (batch dims first)"""
         y_pts, x_pts = f(x_pts)  # return updated arg, because env clips u
-        mu_y = torch.einsum("b,bi->i", self.weights_mu, y_pts)
-        diff_x = x_pts - mu_x[None, :]
-        diff_y = y_pts - mu_y[None, :]
-        sigma_y = torch.einsum(
-            "b,bi,bj->ij", self.weights_sig, diff_y, diff_y
-        ) + 1e-7 * torch.eye(y_pts.shape[1]).to(
-            mu_x.device
+        try:
+            mu_y = einops.einsum(self.weights_mu, y_pts, "p, ... p y -> ... y")
+        except:
+            breakpoint()
+        diff_x = x_pts - einops.rearrange(mu_x, "... x -> ... 1 x")  # unsqueeze
+        diff_y = y_pts - einops.rearrange(mu_y, "... y -> ... 1 y")
+        dim_y = y_pts.shape[-1]
+        sigma_y = einops.einsum(
+            self.weights_sig,
+            diff_y,
+            diff_y,
+            "p, ... p y1, ... p y2 -> ... y1 y2",
+        ) + 1e-7 * torch.eye(
+            dim_y, device=mu_x.device
         )  # regularization
-        sigma_xy = torch.einsum("b,bi,bj->ij", self.weights_sig, diff_x, diff_y)
+        sigma_xy = einops.einsum(
+            self.weights_sig, diff_x, diff_y, "p, ... p x, ... p y -> ... x y"
+        )
         return y_pts, mu_y, sigma_y, sigma_xy
 
     def mean(
@@ -294,15 +308,21 @@ class QuadratureGaussianInference(QuadratureInference):
     def forward_pts(
         self, f: Callable, mu_x: torch.Tensor, x_pts: torch.Tensor
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
-        # breakpoint()
-        y_pts, sigma_pts, x_pts = f(x_pts)
-        mu_y = torch.einsum("b,bi->i", self.weights_mu, y_pts)
-        diff_x = x_pts - mu_x[None, :]
-        diff_y = y_pts - mu_y[None, :]
-        sigma_y = torch.einsum(
-            "b,bi,bj->ij", self.weights_sig, diff_y, diff_y
-        ) + torch.einsum("b,bij->ij", self.weights_mu, sigma_pts)
-        sigma_xy = torch.einsum("b,bi,bj->ij", self.weights_sig, diff_x, diff_y)
+        """ " batched version (batch dims first)"""
+        y_pts, sigma_y_pts, x_pts = f(x_pts)
+        mu_y = einops.einsum(self.weights_mu, y_pts, "p, ... p y -> ... y")
+        diff_x = x_pts - einops.rearrange(mu_x, "... x -> ... 1 x")  # unsqueeze
+        diff_y = y_pts - einops.rearrange(mu_y, "... y -> ... 1 y")
+        # sigma_y = (y_pts - mu_y).T @ Wsig @ (y_pts - mu_y) + Wmu @ sigma_y_pts
+        sigma_y = einops.einsum(
+            self.weights_sig,
+            diff_y,
+            diff_y,
+            "p, ... p y1, ... p y2 -> ... y1 y2",
+        ) + einops.einsum(self.weights_mu, sigma_y_pts, "p, ... p y1 y2 -> ... y1 y2")
+        sigma_xy = einops.einsum(
+            self.weights_sig, diff_x, diff_y, "p, ... p x, ... p y -> ... x y"
+        )
         return y_pts, mu_y, sigma_y, sigma_xy
 
 
@@ -313,16 +333,20 @@ class QuadratureImportanceSamplingInnovation(QuadratureInference):
         inverse_temperature: float,
         distribution: MultivariateGaussian,
     ) -> MultivariateGaussian:
+        """ " batched version (batch dims first)"""
         assert isinstance(distribution, MultivariateGaussian)
         x_pts = self.get_x_pts(distribution.mean, distribution.covariance)
         f_pts, x_pts = function(x_pts)
         log_weights = -inverse_temperature * f_pts + torch.log(self.weights_mu)
-        log_weights -= torch.logsumexp(log_weights, dim=0)
+        log_weights -= torch.logsumexp(log_weights, dim=-1, keepdim=True)
         weights = torch.exp(log_weights)
-        mu_x = torch.einsum("b, bi -> i", weights, x_pts)
-        diff = x_pts - mu_x[None, :]
-        sigma_x = torch.einsum("b, bi, bj -> ij", weights, diff, diff)
-        sigma_x = 0.5 * (sigma_x + sigma_x.T)
+        mu_x = einops.einsum(weights, x_pts, "... p, ... p x -> ... x")
+        diff_x = x_pts - einops.rearrange(mu_x, "... x -> ... 1 x")  # unsqueeze
+        sigma_x = einops.einsum(
+            weights, diff_x, diff_x, "... p, ... p x1, ... p x2 -> ... x1 x2"
+        )
+        sigma_x_T = einops.rearrange(sigma_x, "... x1 x2 -> ... x2 x1")  # transpose
+        sigma_x = 0.5 * (sigma_x + sigma_x_T)  # TODO why this?
         return MultivariateGaussian(mu_x, sigma_x, None, None, None)
 
 
@@ -401,15 +425,18 @@ class TimeVaryingLinearGaussian(Policy):
         return copy
 
     def __call__(self, x: torch.Tensor, t: int) -> torch.Tensor:
-        """Assumes batch input."""
+        """Accepts (multi-)batch input."""
         return (
-            self.k_opt[t, :] + x @ self.K_opt[t, :, :].T,
-            torch.tile(self.sigma[t, :, :], (x.shape[0], 1, 1)),
+            self.k_opt[t, :] + torch.einsum("...x,xu->...u", x, self.K_opt[t, :, :].T),
+            torch.tile(self.sigma[t, :, :], x.shape[:-1] + (self.dim_u, self.dim_u)),
             x,
         )
 
     def predict(self, x: torch.Tensor, t: int) -> torch.Tensor:
-        return self.k_actual[t, :] + x @ self.K_actual[t, :, :].T
+        """Accepts (multi-)batch input."""
+        return self.k_actual[t, :] + torch.einsum(
+            "...x,xu->...u", x, self.K_opt[t, :, :].T
+        )
 
     def sample(self, t: int, x: torch.Tensor) -> torch.Tensor:
         mu = self.k[t, :] + self.K[t, :, :] @ x
@@ -467,18 +494,20 @@ class Pendulum(object):
         l = 1.0
         d = 1e-2  # damping
         g = 9.80665
-        x, u = xu[:, :2], xu[:, 2]
+        x, u = xu[..., :2], xu[..., 2]
         u = torch.clip(u, -self.u_mx, self.u_mx)
-        th_dot_dot = -3.0 * g / (2 * l) * torch.sin(x[:, 0] + torch.pi) - d * x[:, 1]
+        th_dot_dot = (
+            -3.0 * g / (2 * l) * torch.sin(x[..., 0] + torch.pi) - d * x[..., 1]
+        )
         th_dot_dot += 3.0 / (m * l**2) * u
         # variant from http://underactuated.mit.edu/pend.html
         # th_dot_dot = -g / l * torch.sin(x[:, 0] + torch.pi) - d / (m*l**2) * x[:, 1]
         # th_dot_dot += 1.0 / (m * l**2) * u
-        x_dot = x[:, 1] + th_dot_dot * dt  # theta_dot
-        x_pos = x[:, 0] + x_dot * dt  # theta
+        x_dot = x[..., 1] + th_dot_dot * dt  # theta_dot
+        x_pos = x[..., 0] + x_dot * dt  # theta
 
-        x2 = torch.stack((x_pos, x_dot), dim=1)
-        xu[:, 2] = u
+        x2 = torch.stack((x_pos, x_dot), dim=-1)
+        xu[..., 2] = u
         return x2, xu
 
     def run(self, initial_state, policy, horizon):
@@ -646,7 +675,8 @@ class PseudoPosteriorSolver(object):
         plot_posterior: bool = True,
     ):
         self.init_metrics()
-        alpha = 0.0
+        # create as many alphas as batches (0:1 -> trailing 1 dimension)
+        alpha = 0.0 * torch.ones_like(initial_state.mean[..., 0:1])
         policy_created = False
         if policy_prior:  # run once with prior to initialize policy
             policy = policy_prior
@@ -667,7 +697,7 @@ class PseudoPosteriorSolver(object):
         ]
         alpha = self.update_temperature_strategy(
             self.cost,
-            forward_distribution,
+            forward_distribution,  # unused for Polyak
             forward_distribution,
             current_alpha=alpha,
         )
@@ -676,7 +706,7 @@ class PseudoPosteriorSolver(object):
             forward_state_action_prior, forward_state_action_prior, alpha
         )
         for i in range(n_iteration):
-            print(f"{i} {alpha:.2f}")
+            print(f"alpha {i}: {alpha.mT.cpu()}")
             (
                 forward_state_action_prior,
                 predicted_state_prior,
@@ -705,7 +735,7 @@ class PseudoPosteriorSolver(object):
             actual_policy = policy.actual()
             alpha = self.update_temperature_strategy(
                 self.cost,
-                state_action_posterior,
+                state_action_posterior,  # unused for Polyak
                 state_action_policy,
                 current_alpha=alpha,
             )
@@ -745,7 +775,7 @@ class PseudoPosteriorSolver(object):
             axs[i].set_ylabel(k)
 
     def to(self, device):
-        self.env.to(device)
+        # self.env.to(device)  # has no state
         # self.cost.to(device)  # is function
         self.policy_template.to(device)
         self.approximate_inference_dynamics.to(device)
@@ -922,23 +952,38 @@ class PolyakStepSize(TemperatureStrategy):
     def __call__(
         self,
         cost: Callable,
-        state_action_distribution,
+        state_action_distribution,  # unused
         state_action_policy,
-        current_alpha: float,
+        current_alpha,  # unused
     ):
-        list_of_weights, list_of_costs = zip(
-            *[
-                (
-                    self.inference.weights_mu,
-                    cost(self.inference.get_x_pts(dist.mean, dist.covariance))[0],
-                )
-                for dist in state_action_policy
-            ]
+        """ " batched version (batch dims first)"""
+        # list_of_weights, list_of_costs = zip(
+        #     *[
+        #         (
+        #             self.inference.weights_mu,
+        #             cost(self.inference.get_x_pts(dist.mean, dist.covariance))[0],
+        #         )
+        #         for dist in state_action_policy
+        #     ]
+        # )
+        # breakpoint()
+        # traj_weights, traj_costs = map(torch.cat, [list_of_weights, list_of_costs])
+        # sup_cost = sum([torch.max(costs_t) for costs_t in list_of_costs])
+        # expected_cost = torch.einsum("b,b->", traj_weights, traj_costs)
+        list_of_costs = []
+        list_of_sup_costs = []
+        for dist in state_action_policy:
+            x_t_pts = self.inference.get_x_pts(dist.mean, dist.covariance)
+            cost_t_pts, _ = cost(x_t_pts)
+            list_of_costs.append(cost_t_pts)
+            max_cost_t, _ = cost_t_pts.max(dim=-1)
+            list_of_sup_costs.append(max_cost_t)
+        traj_costs = torch.stack(list_of_costs, dim=-1)
+        sup_cost = torch.stack(list_of_sup_costs, dim=-1).sum(dim=-1)
+        expected_cost = einops.einsum(
+            self.inference.weights_mu, traj_costs, "p, ... p time -> ..."
         )
-        traj_weights, traj_costs = map(torch.cat, [list_of_weights, list_of_costs])
-        sup_cost = sum([torch.max(costs_t) for costs_t in list_of_costs])
-        expected_cost = torch.einsum("b,b->", traj_weights, traj_costs)
-        return expected_cost / sup_cost
+        return einops.rearrange(expected_cost / sup_cost, "... -> ... 1")
 
     def to(self, device):
         self.inference.to(device)
@@ -1148,10 +1193,13 @@ def experiment(
     )
 
     def state_action_cost(xu):
-        # swing-up from \theta = \pi -> 0
-        return (torch.cos(xu[:, 0]) - 1.0) ** 2 + 1e-2 * xu[:, 1] ** 2 + 1e-2 * xu[
-            :, 2
-        ] ** 2, xu
+        """ " batched version (batch dims first)"""
+        # swing-up: \theta = \pi -> 0
+        theta_cost = (torch.cos(xu[..., 0]) - 1.0) ** 2
+        theta_dot_cost = 1e-2 * xu[..., 1] ** 2
+        u_cost = 1e-2 * xu[..., 2] ** 2
+        tot_cost = theta_cost + theta_dot_cost + u_cost
+        return tot_cost, xu
 
     dyn_train_buffer = ReplayBuffer(
         dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
@@ -1168,16 +1216,18 @@ def experiment(
 
     ### global dynamics model ###
     def clamp_u(xu):
-        xu[:, 2] = torch.clamp(xu[:, 2], -environment.u_mx, +environment.u_mx)
+        xu[..., 2] = torch.clamp(xu[..., 2], -environment.u_mx, +environment.u_mx)
         return xu
 
     def sincos_angle(xu):
         # input angles get split sin/cos
-        xu_sincos = torch.zeros((xu.shape[0], xu.shape[1] + 1)).to(xu.device)
-        xu_sincos[:, 0] = xu[:, 0].sin()
-        xu_sincos[:, 1] = xu[:, 0].cos()
-        xu_sincos[:, 2] = xu[:, 1]
-        xu_sincos[:, 3] = xu[:, 2]
+        xu_sincos_shape = list(xu.shape)
+        xu_sincos_shape[-1] += 1  # add another x dimension
+        xu_sincos = torch.zeros(xu_sincos_shape).to(xu.device)
+        xu_sincos[..., 0] = xu[..., 0].sin()
+        xu_sincos[..., 1] = xu[..., 0].cos()
+        xu_sincos[..., 2] = xu[..., 1]
+        xu_sincos[..., 3] = xu[..., 2]
         return xu_sincos
 
     if dyn_model_type == "env":
@@ -1190,7 +1240,7 @@ def experiment(
                 xu_sincos = sincos_angle(clamp_u(xu))
                 # output states are deltas
                 delta_x = fn(self, xu_sincos)
-                return xu[:, :dim_x].detach() + delta_x, xu
+                return xu[..., :dim_x].detach() + delta_x, xu
 
             return wrap
 
@@ -1208,9 +1258,11 @@ def experiment(
                 xu_sincos = sincos_angle(clamp_u(xu))
                 # output states are deltas
                 delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
-                # cov_bii = torch.einsum('n,ij->nij', cov_out.diag(), cov_in)
-                cov_bij = torch.einsum("ij,n->nij", cov_out, cov_in.diag())
-                mu = xu[:, :dim_x].detach() + delta_mu
+                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
+                cov_bij = einops.einsum(
+                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
+                )
+                mu = xu[..., :dim_x].detach() + delta_mu
                 return mu, cov_bij, xu
 
             return wrap
@@ -1224,7 +1276,7 @@ def experiment(
 
         def loss_fn_dyn(xu, x_next):
             xu_sincos = sincos_angle(clamp_u(xu))
-            delta_x = x_next - xu[:, :dim_x]
+            delta_x = x_next - xu[..., :dim_x]
             return -global_dynamics.elbo(xu_sincos, delta_x)
 
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
@@ -1236,9 +1288,11 @@ def experiment(
                 xu_sincos = sincos_angle(clamp_u(xu))
                 # output states are deltas
                 delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
-                # cov_bii = torch.einsum('n,ij->nij', cov_out.diag(), cov_in)
-                cov_bij = torch.einsum("ij,n->nij", cov_out, cov_in.diag())
-                mu = xu[:, :dim_x].detach() + delta_mu
+                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
+                cov_bij = einops.einsum(
+                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
+                )
+                mu = xu[..., :dim_x].detach() + delta_mu
                 return mu, cov_bij, xu
 
             return wrap
@@ -1254,7 +1308,7 @@ def experiment(
 
         def loss_fn_dyn(xu, x_next):
             xu_sincos = sincos_angle(clamp_u(xu))
-            delta_x = x_next - xu[:, :dim_x]
+            delta_x = x_next - xu[..., :dim_x]
             return -global_dynamics.elbo(xu_sincos, delta_x)
 
         opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
@@ -1570,8 +1624,10 @@ def experiment(
         i2c_solver.to(device)
         torch.set_grad_enabled(True)
 
-        s0 = initial_state_distribution.sample()
-        s0_dist = MultivariateGaussian(s0, 1e-6 * torch.eye(dim_x), None, None, None)
+        n_i2c = 9
+        init_mean = initial_state_distribution.sample([n_i2c])
+        init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c, 1, 1)
+        s0_dist = MultivariateGaussian(init_mean, init_covar, None, None, None)
         s0_dist.to(device)
         t1 = time.time()
         local_policy = i2c_solver(

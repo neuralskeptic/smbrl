@@ -68,7 +68,7 @@ class LinearBayesianModel(nn.Module):
 
     def post_cov_in(self):
         lower_triangular = self.post_cov_in_tril()
-        return lower_triangular @ lower_triangular.t()
+        return lower_triangular @ lower_triangular.mT
 
     def post_cov_out_tril(self):
         # make diagonal of post_cov_in_chol positive (softplus)
@@ -82,7 +82,7 @@ class LinearBayesianModel(nn.Module):
 
     def post_cov_out(self):
         lower_triangular = self.post_cov_out_tril()
-        return lower_triangular @ lower_triangular.t()
+        return lower_triangular @ lower_triangular.mT
 
     def error_cov_out(self):
         return torch.diag(torch.pow(self.error_vars_out_sqrt, 2))
@@ -99,13 +99,13 @@ class LinearBayesianModel(nn.Module):
 
         Parameter and return shapes see below.
         """
-        n = x.shape[0]
+        n = x.shape[-2]
         with torch.set_grad_enabled(grad):
             phi = self.features(x)
             mu = phi @ self.post_mean
             if covs:
                 covariance_out = self.error_cov_out()
-                covariance_feat = phi @ self.post_cov_in() @ phi.t()
+                covariance_feat = phi @ self.post_cov_in() @ phi.mT
                 covariance_pred_in = torch.eye(n, device=x.device) + covariance_feat
                 covariance = torch.kron(
                     covariance_out, covariance_pred_in
