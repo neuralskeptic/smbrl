@@ -237,14 +237,22 @@ class QuadratureInference(object):
         try:
             sqrt = torch.linalg.cholesky(sigma_x)  # TODO full cuda version?
         except torch.linalg.LinAlgError:
+            # breakpoint()
             print(
-                f"singular covariance: {torch.linalg.eigvalsh(sigma_x)}, state: {mu_x}"
+                f"ERROR: singular covariance: {torch.linalg.eigvalsh(sigma_x)}, state: {mu_x}"
             )
-            sqrt = torch.linalg.cholesky(torch.diag(torch.diag(sigma_x)))
+            # TODO inject variance (good idea?)
+            print(
+                "ERROR: singular covariance: taking only diagonal and clipping to min 1e-8"
+            )
+            sigma_min = 1e-8
+            diags = sigma_x.diagonal(dim1=-2, dim2=-1)
+            diags = diags.maximum(torch.tensor(sigma_min))
+            sqrt = torch.linalg.cholesky(diags.diag_embed())
         scale = self.sf * sqrt
         # mu + self.base_pts @ scale.T  <==>  (B,X) + (P,X) @ (B,X,X) = (B,P,X)
         return mu_x.unsqueeze(-2) + einops.einsum(
-            self.base_pts, scale.mT, "... p x2, ... x2 x1 -> ... p x1"
+            self.base_pts, scale.mT, "p x2, ... x2 x1 -> ... p x1"
         )
 
     def __call__(
@@ -267,10 +275,7 @@ class QuadratureInference(object):
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
         """ " batched version (batch dims first)"""
         y_pts, x_pts = f(x_pts)  # return updated arg, because env clips u
-        try:
-            mu_y = einops.einsum(self.weights_mu, y_pts, "p, ... p y -> ... y")
-        except:
-            breakpoint()
+        mu_y = einops.einsum(self.weights_mu, y_pts, "p, ... p y -> ... y")
         diff_x = x_pts - einops.rearrange(mu_x, "... x -> ... 1 x")  # unsqueeze
         diff_y = y_pts - einops.rearrange(mu_y, "... y -> ... 1 y")
         dim_y = y_pts.shape[-1]
@@ -313,6 +318,7 @@ class QuadratureGaussianInference(QuadratureInference):
         self, f: Callable, mu_x: torch.Tensor, x_pts: torch.Tensor
     ) -> (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
         """ " batched version (batch dims first)"""
+        # TODO get x_pts batch and outputs blockwise (!) sigmas
         y_pts, sigma_y_pts, x_pts = f(x_pts)
         mu_y = einops.einsum(self.weights_mu, y_pts, "p, ... p y -> ... y")
         diff_x = x_pts - einops.rearrange(mu_x, "... x -> ... 1 x")  # unsqueeze
@@ -432,17 +438,41 @@ class TimeVaryingLinearGaussian(Policy):
 
     def __call__(self, x: torch.Tensor, t: int) -> torch.Tensor:
         """Accepts (multi-)batch input."""
+        # x: (b1, b2, ..., bm, x), K: (t, b1, b2, ..., bn, u, x)
+        # k: (t, b1, ..., bn, u), sigma: (t, b1, ..., bn, u, u)
+        # unsqueeze gains to match input batch size
+        x_batch_dims = len(x.shape) - 1  # m: do not count x
+        K_batch_dims = len(self.K_opt.shape) - 3  # n: do not count t,u,x
+        K_opt = self.K_opt[t, ...]
+        k_opt = self.k_opt[t, ...]
+        sigma = self.sigma[t, ...]
+        for _ in range(x_batch_dims - K_batch_dims):  # for every extra batch dim in x
+            K_opt = K_opt.unsqueeze(-2)  # add 1 dimension before u,x (so dims match)
+            k_opt = k_opt.unsqueeze(-1)  # add 1 dimension before u (so dims match)
+            sigma = sigma.unsqueeze(-2)  # add 1 dimension before u,u (so dims match)
         return (
-            self.k_opt[t, :] + torch.einsum("...x,xu->...u", x, self.K_opt[t, :, :].T),
-            torch.tile(self.sigma[t, :, :], x.shape[:-1] + (self.dim_u, self.dim_u)),
+            k_opt + einops.einsum(K_opt, x, "... u x, ... x -> ... u"),
+            torch.tile(sigma, x.shape[K_batch_dims:-1] + (self.dim_u, self.dim_u)),
             x,
         )
 
     def predict(self, x: torch.Tensor, t: int) -> torch.Tensor:
         """Accepts (multi-)batch input."""
-        return self.k_actual[t, :] + torch.einsum(
-            "...x,xu->...u", x, self.K_opt[t, :, :].T
-        )
+        # x: (b1, b2, ..., bm, x), K: (t, b1, b2, ..., bn, u, x)
+        # k: (t, b1, ..., bn, u)
+        # unsqueeze gains to match input batch size
+        x_batch_dims = len(x.shape) - 1  # m: do not count x
+        K_batch_dims = len(self.K_actual.shape) - 3  # n: do not count t,u,x
+        K_actual = self.K_actual[t, ...]
+        k_actual = self.k_actual[t, ...]
+        for _ in range(x_batch_dims - K_batch_dims):  # for every extra batch dim in x
+            K_actual = K_actual.unsqueeze(
+                -2
+            )  # add 1 dimension before u,x (so dims match)
+            k_actual = k_actual.unsqueeze(
+                -1
+            )  # add 1 dimension before u (so dims match)
+        return k_actual + einops.einsum(K_actual, x, "... u x, ... x -> ... u")
 
     def sample(self, t: int, x: torch.Tensor) -> torch.Tensor:
         mu = self.k[t, :] + self.K[t, :, :] @ x
@@ -452,25 +482,39 @@ class TimeVaryingLinearGaussian(Policy):
     def update_from_distribution(self, distribution, *args, **kwargs):
         assert len(distribution) == self.horizon
         if isinstance(distribution[0], MultivariateGaussian):
+            # recreate weights with correct batch dimensions
+            device = distribution[0].mean.device
+            batch_shape = [self.horizon] + list(distribution[0].mean.shape[:-1])
+            self.k_actual = torch.empty(batch_shape + [self.dim_u], device=device)
+            self.k_opt = torch.empty(batch_shape + [self.dim_u], device=device)
+            self.K_actual = torch.empty(
+                batch_shape + [self.dim_u, self.dim_x], device=device
+            )
+            self.K_opt = torch.empty(
+                batch_shape + [self.dim_u, self.dim_x], device=device
+            )
+            self.sigma = torch.empty(
+                batch_shape + [self.dim_u, self.dim_u], device=device
+            )
+            self.chol = torch.empty(
+                batch_shape + [self.dim_u, self.dim_u], device=device
+            )
             for t, dist in enumerate(distribution):
-                x, u = dist.marginalize(slice(0, self.dim_x)), dist.marginalize(
-                    slice(self.dim_x, self.dim_x + self.dim_u)
-                )
+                x = dist.marginalize(slice(0, self.dim_x))
+                u = dist.marginalize(slice(self.dim_x, self.dim_x + self.dim_u))
                 K = torch.linalg.solve(
-                    x.covariance, dist.covariance[: self.dim_x, self.dim_x :]
-                ).T
+                    x.covariance, dist.covariance[..., : self.dim_x, self.dim_x :]
+                ).mT
                 self.K_actual[t, ...] = K
-                self.k_actual[t, ...] = u.mean - self.K_actual[t, ...] @ x.mean
-                self.k_opt[t, ...] = u.mean - self.K_opt[t, ...] @ x.mean
+                self.k_actual[t, ...] = u.mean - einops.einsum(
+                    self.K_actual[t, ...], x.mean, "... u x, ... x -> ... u"
+                )
+                self.k_opt[t, ...] = u.mean - einops.einsum(
+                    self.K_opt[t, ...], x.mean, "... u x, ... x -> ... u"
+                )
                 self.sigma[t, ...] = u.covariance
-                if self.sigma[t, ...].det() <= 0:
-                    # self.sigma[t, ...] = nearest_spd(self.sigma[t, ...])
-                    breakpoint()
-                try:  # TODO debug
-                    torch.linalg.cholesky(self.sigma[t, ...])
-                except:
-                    breakpoint()
                 self.chol[t, ...] = torch.linalg.cholesky(self.sigma[t, ...])
+                # torch.linalg.cholesky_ex() faster but no error checking (BLAS)
         else:
             raise ValueError("Cannot update from this distribution!")
 
@@ -556,6 +600,8 @@ def plot_gp(axis, mean, variance):
 
 
 def plot_trajectory_distribution(list_of_distributions, title=""):
+    # TODO vectorize me
+    breakpoint()
     means = torch.stack(tuple(d.mean for d in list_of_distributions), dim=0)
     covariances = torch.stack(tuple(d.covariance for d in list_of_distributions), dim=0)
     n_plots = means.shape[1]
@@ -613,15 +659,15 @@ class PseudoPosteriorSolver(object):
             state_action_cost = self.approximate_inference_cost(
                 cost, alpha, state_action_policy
             )
-            if state_action_cost.covariance.det() <= 0:  # TODO debug
-                # state_action_cost.covariance = nearest_spd(state_action_cost.covariance)
-                breakpoint()
+            # if state_action_cost.covariance.det() <= 0:  # TODO debug
+            #     # state_action_cost.covariance = nearest_spd(state_action_cost.covariance)
+            #     breakpoint()
             state_action_dist += [state_action_cost]
             # update state_action_cost with dynamics correlations
             next_state = self.approximate_inference_dynamics(env, state_action_cost)
-            if next_state.covariance.det() <= 0:  # TODO debug
-                # next_state.covariance = nearest_spd(next_state.covariance)
-                breakpoint()
+            # if next_state.covariance.det() <= 0:  # TODO debug
+            #     # next_state.covariance = nearest_spd(next_state.covariance)
+            #     breakpoint()
             future_state_dist += [next_state]
             state = next_state
         # breakpoint()  # TODO debug
@@ -653,23 +699,11 @@ class PseudoPosteriorSolver(object):
                 predicted_state_prior,
                 future_state_posterior,
             )
-            if state_action_posterior.covariance.det() <= 0:  # TODO debug
-                # state_action_posterior.covariance = nearest_spd(
-                #     state_action_posterior.covariance
-                # )
-                breakpoint()
+            # pass the state posterior to previous timestep
             future_state_posterior = state_action_posterior.marginalize(
                 slice(0, self.dim_x)
-            )  # pass the state posterior to previous timestep
-            if future_state_posterior.covariance.det() <= 0:  # TODO debug
-                # future_state_posterior.covariance = nearest_spd(
-                #     future_state_posterior.covariance
-                # )
-                breakpoint()
+            )
             dist += [state_action_posterior]
-        # breakpoint()
-        # plt.plot([d.covariance[0,0].detach() for d in dist])
-        # plt.plot([d.covariance[1,1].detach() for d in dist])
         return list(reversed(dist))
 
     def __call__(
@@ -711,7 +745,7 @@ class PseudoPosteriorSolver(object):
             forward_state_action_prior, forward_state_action_prior, alpha
         )
         for i in range(n_iteration):
-            print(f"alpha {i}: {alpha.mT.cpu()}")
+            print(f"alpha {i}: {alpha.flatten().cpu()}")
             (
                 forward_state_action_prior,
                 predicted_state_prior,
@@ -758,13 +792,13 @@ class PseudoPosteriorSolver(object):
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
         posterior_cost = self.cost(
             torch.stack(tuple(d.mean for d in posterior_distribution), dim=0)
-        )[0].sum()
+        )[0].sum(dim=0)
         policy_cost = self.cost(
             torch.stack(tuple(d.mean for d in policy_distribution), dim=0)
-        )[0].sum()
-        self.metrics["posterior_cost"] += [posterior_cost.cpu()]
-        self.metrics["policy_cost"] += [policy_cost.cpu()]
-        self.metrics["alpha"] += [alpha.cpu()]
+        )[0].sum(dim=0)
+        self.metrics["posterior_cost"] += [posterior_cost.flatten().cpu()]
+        self.metrics["policy_cost"] += [policy_cost.flatten().cpu()]
+        self.metrics["alpha"] += [alpha.flatten().cpu()]
 
     def init_metrics(self):
         self.metrics = {
@@ -1639,10 +1673,10 @@ def experiment(
             n_iteration=n_iter_solver,
             policy_prior=global_policy,
             initial_state=s0_dist,
-            plot_posterior=plot_posterior and plotting,
+            plot_posterior=False,  # plot_posterior and plotting,
         )
         print(f"time: {time.time()-t1:.5} s")
-        # breakpoint()
+        breakpoint()
 
         local_policy.cpu()
         global_policy.cpu()  # in-place
