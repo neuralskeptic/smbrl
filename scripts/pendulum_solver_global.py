@@ -50,7 +50,11 @@ class MultivariateGaussian(Distribution):
     def marginalize(self, indices):
         """Marginalize out indices"""
         return MultivariateGaussian(
-            self.mean[indices], self.covariance[indices, indices], None, None, None
+            self.mean[..., indices],
+            self.covariance[..., indices, indices],
+            None,
+            None,
+            None,
         )
 
     def full_joint(self, reverse=True):
@@ -360,19 +364,21 @@ def linear_gaussian_smoothing(
     """
     J = torch.linalg.solve(
         predicted_prior.covariance, predicted_prior.cross_covariance
-    ).T
-    mean = current_prior.mean + J @ (future_posterior.mean - predicted_prior.mean)
-    covariance = (
-        current_prior.covariance
-        + J @ (future_posterior.covariance - predicted_prior.covariance) @ J.T
-    )
-    if covariance.det() <= 0:  # TODO debug
-        # covariance = nearest_spd(covariance)
+    ).mT
+    try:
+        diff_mean = future_posterior.mean - predicted_prior.mean
+    except:
         breakpoint()
+    mean = current_prior.mean + einops.einsum(J, diff_mean, "... xu u, ... u -> ... xu")
+    diff_cov = future_posterior.covariance - predicted_prior.covariance
+    covariance = current_prior.covariance + J.matmul(diff_cov).matmul(J.mT)
+    # if covariance.det() <= 0:  # TODO debug
+    #     # covariance = nearest_spd(covariance)
+    #     breakpoint()
     return MultivariateGaussian(
         mean,
         covariance,
-        J @ future_posterior.covariance,
+        J.matmul(future_posterior.covariance),
         future_posterior.mean,
         future_posterior.covariance,
     )
@@ -642,7 +648,6 @@ class PseudoPosteriorSolver(object):
             reversed(forward_state_action_distribution),
             reversed(predicted_state_distribution),
         ):
-            # breakpoint()
             state_action_posterior = self.approximate_inference_smoothing(
                 current_state_action_prior,
                 predicted_state_prior,
