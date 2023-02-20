@@ -514,7 +514,6 @@ class TimeVaryingLinearGaussian(Policy):
                 )
                 self.sigma[t, ...] = u.covariance
                 self.chol[t, ...] = torch.linalg.cholesky(self.sigma[t, ...])
-                # torch.linalg.cholesky_ex() faster but no error checking (BLAS)
         else:
             raise ValueError("Cannot update from this distribution!")
 
@@ -1152,8 +1151,9 @@ def experiment(
     ############
     ## i2c solver ##
     n_iter_solver: int = 5,  # how many i2c solver iterations to do
-    # plot_posterior: bool = False,  # plot state-action-posterior over time
-    plot_posterior: bool = True,  # plot state-action-posterior over time
+    n_i2c_local_policies: int = 10,  # how many local policies in the mixture i2c
+    plot_posterior: bool = False,  # plot state-action-posterior over time
+    # plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     # plot_local_policy_metrics: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
@@ -1229,8 +1229,8 @@ def experiment(
     initial_state = torch.Tensor([torch.pi, 0.0])
     initial_state_distribution = MultivariateGaussian(
         initial_state,
-        1e-6 * torch.eye(dim_x),
-        # 1e-2 * torch.eye(dim_x),  # more exploration
+        # 1e-6 * torch.eye(dim_x),
+        1e-2 * torch.eye(dim_x),  # more exploration
         None,
         None,
         None,
@@ -1662,32 +1662,16 @@ def experiment(
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
-        # TODO actual?
-
-        global_policy.to(device)  # in-place
-        i2c_solver.to(device)
-        torch.set_grad_enabled(True)
-
-        n_i2c = 9
-        init_mean = initial_state_distribution.sample([n_i2c])
-        init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c, 1, 1)
+        # sample initial states for i2c mixture (batched init_state_dist)
+        init_mean = initial_state_distribution.sample([n_i2c_local_policies])
+        init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
         s0_dist = MultivariateGaussian(init_mean, init_covar, None, None, None)
-        s0_dist.to(device)
-        t1 = time.time()
-        local_policy = i2c_solver(
+        local_mixture_policy = i2c_solver(
             n_iteration=n_iter_solver,
             policy_prior=global_policy,
             initial_state=s0_dist,
             plot_posterior=plot_posterior and plotting,
         )
-        print(f"time: {time.time()-t1:.5} s")
-        breakpoint()
-
-        local_policy.cpu()
-        global_policy.cpu()  # in-place
-        i2c_solver.cpu()
-        torch.set_grad_enabled(False)
-
         logger.info("END i2c")
         # log i2c metrics
         for i_ in range(n_iter_solver):
@@ -1701,7 +1685,7 @@ def experiment(
         if plot_local_policy_metrics and plotting:
             fix, axs = plt.subplots(3)
             for i, (k, v) in enumerate(i2c_solver.metrics.items()):
-                v = torch.tensor(v).cpu()
+                v = torch.tensor(v)
                 # axs[i].plot(v, label=f"$\epsilon={kl_bound}$")
                 # axs[i].plot(v, label=f"$\\alpha={alpha}$")
                 axs[i].plot(v, label=f"$Polyak$")
@@ -1717,10 +1701,22 @@ def experiment(
 
         # Fit global policy to local policy
         if policy_type == "tvlg":
-            global_policy = local_policy
+            global_policy = deepcopy(local_policy)
+            # TODO does this make sense?
+            # # a) average over gains
+            # global_policy.k_actual = local_mixture_policy.k_actual.mean(1)
+            # global_policy.K_actual = local_mixture_policy.K_actual.mean(1)
+            # global_policy.k_opt = local_mixture_policy.k_opt.mean(1)
+            # global_policy.K_opt = local_mixture_policy.K_opt.mean(1)
+            # b) take first gains
+            global_policy.k_actual = local_mixture_policy.k_actual[:, 0, :]
+            global_policy.K_actual = local_mixture_policy.K_actual[:, 0, :]
+            global_policy.k_opt = local_mixture_policy.k_opt[:, 0, :]
+            global_policy.K_opt = local_mixture_policy.K_opt[:, 0, :]
         else:
             #### T: collect policy rollouts
-            # Roll out local policy to get samples to train global policy
+            # Roll out local policy mixture to get samples to train global policy
+            breakpoint()
             # TODO
 
             # min KL[mean local_policy || global_policy]
