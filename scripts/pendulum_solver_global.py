@@ -590,25 +590,30 @@ class Pendulum(object):
         axs[-1].set_xlabel("timestep")
 
 
-def plot_gp(axis, mean, variance):
-    axis.plot(mean, "b")
+def plot_gp(axis, mean, variance, color="b"):
+    axis.plot(mean, color=color)
     sqrt = torch.sqrt(variance)
     upper, lower = mean + sqrt, mean - sqrt
     axis.fill_between(
-        range(mean.shape[0]), upper, lower, where=upper >= lower, color="b", alpha=0.3
+        range(mean.shape[0]), upper, lower, where=upper >= lower, color=color, alpha=0.2
     )
 
 
 def plot_trajectory_distribution(list_of_distributions, title=""):
-    # TODO vectorize me
-    breakpoint()
     means = torch.stack(tuple(d.mean for d in list_of_distributions), dim=0)
     covariances = torch.stack(tuple(d.covariance for d in list_of_distributions), dim=0)
-    n_plots = means.shape[1]
+    # batch_shape = means.shape[1:-1]  # store batch dimensions
+    # flatten batch dimensions (for plotting)
+    means = einops.rearrange(means, "t ... x -> t (...) x")
+    covariances = einops.rearrange(covariances, "t ... x1 x2 -> t (...) x1 x2")
+    n_plots = means.shape[-1]
+    n_batches = means.shape[1]
+    colors = plt.cm.brg(np.linspace(0, 1, n_batches))
     fig, axs = plt.subplots(n_plots)
     axs[0].set_title(title)
     for i, ax in enumerate(axs):
-        plot_gp(ax, means[:, i].cpu(), covariances[:, i, i].cpu())
+        for b, c in zip(range(n_batches), colors):
+            plot_gp(ax, means[:, b, i].cpu(), covariances[:, b, i, i].cpu(), color=c)
     return fig, axs
 
 
@@ -1673,7 +1678,7 @@ def experiment(
             n_iteration=n_iter_solver,
             policy_prior=global_policy,
             initial_state=s0_dist,
-            plot_posterior=False,  # plot_posterior and plotting,
+            plot_posterior=plot_posterior and plotting,
         )
         print(f"time: {time.time()-t1:.5} s")
         breakpoint()
