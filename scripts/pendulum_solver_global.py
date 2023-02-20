@@ -485,20 +485,22 @@ class TimeVaryingLinearGaussian(Policy):
             # recreate weights with correct batch dimensions
             device = distribution[0].mean.device
             batch_shape = [self.horizon] + list(distribution[0].mean.shape[:-1])
-            self.k_actual = torch.empty(batch_shape + [self.dim_u], device=device)
-            self.k_opt = torch.empty(batch_shape + [self.dim_u], device=device)
-            self.K_actual = torch.empty(
-                batch_shape + [self.dim_u, self.dim_x], device=device
-            )
-            self.K_opt = torch.empty(
-                batch_shape + [self.dim_u, self.dim_x], device=device
-            )
-            self.sigma = torch.empty(
-                batch_shape + [self.dim_u, self.dim_u], device=device
-            )
-            self.chol = torch.empty(
-                batch_shape + [self.dim_u, self.dim_u], device=device
-            )
+            bu = batch_shape + [self.dim_u]
+            bux = batch_shape + [self.dim_u, self.dim_x]
+            buu = batch_shape + [self.dim_u, self.dim_u]
+            self.k_actual = torch.empty(bu, device=device)
+            self.k_opt = torch.empty(bu, device=device)
+            self.K_actual = torch.empty(bux, device=device)
+            self.sigma = torch.empty(buu, device=device)
+            self.chol = torch.empty(buu, device=device)
+            # except K_opt: only unsqueeze (because is not updated = would be overwritten)
+            K_opt = self.K_opt
+            K_batch_dims = len(self.K_opt.shape) - 2  # do not cound u,x
+            # for every extra batch dim
+            for _ in range(len(batch_shape) - K_batch_dims):
+                # add 1 dimension before u,x (so dims match)
+                K_opt = K_opt.unsqueeze(-2)
+            self.K_opt = K_opt
             for t, dist in enumerate(distribution):
                 x = dist.marginalize(slice(0, self.dim_x))
                 u = dist.marginalize(slice(self.dim_x, self.dim_x + self.dim_u))
@@ -507,7 +509,7 @@ class TimeVaryingLinearGaussian(Policy):
                 ).mT
                 self.K_actual[t, ...] = K
                 self.k_actual[t, ...] = u.mean - einops.einsum(
-                    self.K_actual[t, ...], x.mean, "... u x, ... x -> ... u"
+                    K, x.mean, "... u x, ... x -> ... u"
                 )
                 self.k_opt[t, ...] = u.mean - einops.einsum(
                     self.K_opt[t, ...], x.mean, "... u x, ... x -> ... u"
