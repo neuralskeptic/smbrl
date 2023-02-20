@@ -466,12 +466,10 @@ class TimeVaryingLinearGaussian(Policy):
         K_actual = self.K_actual[t, ...]
         k_actual = self.k_actual[t, ...]
         for _ in range(x_batch_dims - K_batch_dims):  # for every extra batch dim in x
-            K_actual = K_actual.unsqueeze(
-                -2
-            )  # add 1 dimension before u,x (so dims match)
-            k_actual = k_actual.unsqueeze(
-                -1
-            )  # add 1 dimension before u (so dims match)
+            # add 1 dimension before u,x (so dims match)
+            K_actual = K_actual.unsqueeze(-2)
+            # add 1 dimension before u (so dims match)
+            k_actual = k_actual.unsqueeze(-1)
         return k_actual + einops.einsum(K_actual, x, "... u x, ... x -> ... u")
 
     def sample(self, t: int, x: torch.Tensor) -> torch.Tensor:
