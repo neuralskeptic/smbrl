@@ -519,28 +519,19 @@ class PseudoPosteriorSolver(object):
         return list(reversed(dist))
 
     def __call__(self, n_iteration: int):
-        initial_alpha = 0.0
+        self.alpha = 0.0
         self.init_metrics()
         policy = self.policy_prior
-        (
-            forward_state_action_prior,
-            next_state_state_action_prior,
-            _,
-        ) = self.forward_pass(
-            self.env, self.cost, policy, self.initial_state, alpha=initial_alpha
+        state_action_policy, _, _ = self.forward_pass(
+            self.env, self.cost, policy, self.initial_state, alpha=0.0
         )
-        forward_distribution = [
-            dist.reverse() for dist in next_state_state_action_prior
-        ]
+        self.compute_metrics(state_action_policy, state_action_policy, alpha=0.0)
         self.alpha = self.update_temperature_strategy(
             self.cost,
-            forward_distribution,
-            forward_distribution,
-            current_alpha=initial_alpha,
-        )
-        # plot_trajectory_distribution(forward_state_action_prior, f"init")
-        self.compute_metrics(
-            forward_state_action_prior, forward_state_action_prior, initial_alpha
+            None,  # unused
+            # forward_distribution,
+            state_action_policy,
+            current_alpha=0.0,  # unused
         )
         print(self.alpha)
         for i in range(n_iteration):
@@ -562,12 +553,12 @@ class PseudoPosteriorSolver(object):
             self.compute_metrics(
                 state_action_posterior, state_action_policy, self.alpha
             )
-            policy.update_from_distribution(state_action_posterior, state_action_policy)
+            policy.update_from_distribution(state_action_posterior)
             self.alpha = self.update_temperature_strategy(
                 self.cost,
-                state_action_posterior,
+                state_action_posterior,  # unused
                 state_action_policy,
-                current_alpha=initial_alpha,
+                current_alpha=0.0,  # unused
             )
             # self.alpha = self.update_temperature_strategy(self.cost, [dist.reverse() for dist in next_state_state_action_prior], current_alpha=initial_alpha)
             # plot_trajectory_distribution(state_action_posterior, f"smooth{i}")
