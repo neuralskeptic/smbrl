@@ -472,10 +472,11 @@ class TimeVaryingLinearGaussian(Policy):
             k_actual = k_actual.unsqueeze(-1)
         return k_actual + einops.einsum(K_actual, x, "... u x, ... x -> ... u")
 
-    def sample(self, t: int, x: torch.Tensor) -> torch.Tensor:
-        mu = self.k[t, :] + self.K[t, :, :] @ x
-        eps = torch.randn(self.dim_u)
-        return mu + self.chol[t, :, :] @ eps
+    # def sample(self, t: int, x: torch.Tensor) -> torch.Tensor:
+    #     breakpoint()  # broken!
+    #     mu = self.k[t, :] + self.K[t, :, :] @ x
+    #     eps = torch.randn(self.dim_u)
+    #     return mu + self.chol[t, :, :] @ eps
 
     def update_from_distribution(self, distribution, *args, **kwargs):
         assert len(distribution) == self.horizon
@@ -1267,7 +1268,7 @@ def experiment(
         # input angles get split sin/cos
         xu_sincos_shape = list(xu.shape)
         xu_sincos_shape[-1] += 1  # add another x dimension
-        xu_sincos = torch.zeros(xu_sincos_shape).to(xu.device)
+        xu_sincos = torch.empty(xu_sincos_shape, device=xu.device)
         xu_sincos[..., 0] = xu[..., 0].sin()
         xu_sincos[..., 1] = xu[..., 0].cos()
         xu_sincos[..., 2] = xu[..., 1]
@@ -1441,7 +1442,6 @@ def experiment(
         logger.info(f"ITERATION {i_iter + 1}/{n_iter}")
         if dyn_model_type != "env":
             global_dynamics.cpu()  # in-place
-            global_dynamics.eval()
             torch.set_grad_enabled(False)
 
         #### T: collect dynamics rollouts
@@ -1495,7 +1495,6 @@ def experiment(
             logger.weak_line()
             logger.info("START Training Dynamics")
             global_dynamics.to(device)  # in-place
-            global_dynamics.train()
             torch.set_grad_enabled(True)
 
             ## initial loss
@@ -1572,7 +1571,6 @@ def experiment(
 
             # Save the model after training
             global_dynamics.cpu()  # in-place
-            global_dynamics.eval()
             torch.set_grad_enabled(False)
             torch.save(
                 global_dynamics.state_dict(),
@@ -1702,7 +1700,7 @@ def experiment(
         # Fit global policy to local policy
         if policy_type == "tvlg":
             global_policy = deepcopy(local_policy)
-            # TODO does this make sense?
+            # what makes more sense?
             # # a) average over gains
             # global_policy.k_actual = local_mixture_policy.k_actual.mean(1)
             # global_policy.K_actual = local_mixture_policy.K_actual.mean(1)
@@ -1724,7 +1722,6 @@ def experiment(
             logger.weak_line()
             logger.info("START Training Policy")
             global_policy.to(device)  # in-place
-            global_policy.train()
             torch.set_grad_enabled(True)
 
             #### T: train policy
@@ -1778,7 +1775,6 @@ def experiment(
 
             # Save the model after training
             global_policy.cpu()  # in-place
-            global_policy.eval()
             torch.set_grad_enabled(False)
             torch.save(
                 global_policy.state_dict(),
