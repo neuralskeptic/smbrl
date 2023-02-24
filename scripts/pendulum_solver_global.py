@@ -1,3 +1,4 @@
+import functools
 import math
 import os
 import time
@@ -390,17 +391,116 @@ def linear_gaussian_smoothing(
     )
 
 
-class Policy(ABC):
+class CudaAble(ABC):
     @abstractmethod
-    def __call__(self, x: torch.Tensor, t: int) -> torch.Tensor:
+    def to(self, device):
         pass
 
-    @abstractmethod
-    def update_from_distribution(self, distribution, *args, **kwargs):
+    def cpu(self):
+        self.to("cpu")
+
+
+class Stateless:
+    def to(self, device):
+        pass
+
+    def cpu(self):
         pass
 
 
-class TimeVaryingLinearGaussian(Policy):
+@dataclass
+class Model(CudaAble):
+    approximate_inference: QuadratureInference
+    """QuadratureInference.__call__:
+    (x -> x_mu, x_cov, x_), MultivariateGaussian -> MultivariateGaussian
+    => takes function that also returns (possibly) clamped input x_"""
+    model: Callable
+    """model.__call__: x, **_ -> ???"""
+
+    def __call__(self, x, **kwargs):
+        return self.model_call(x, **kwargs)
+
+    def model_call(self, x, **kwargs):  # override to wrap call to model
+        return self.model(x, **kwargs)
+
+    def call_and_inputs(self, x, **kwargs):  # overload to use kwargs
+        """calls model on input x and returns result and (unmodified) input"""
+        res = self.model_call(x)
+        x_ = x  # overload to modify inputs in model (e.g. action constraints)
+        if type(res) in [tuple, list]:  # multiple return values
+            return (*res, x_)
+        else:
+            return res, x_
+
+    def propagate(self, dist: MultivariateGaussian, **kwargs) -> MultivariateGaussian:
+        """propagate dist through model using approximate inference"""
+        fun = partial(self.call_and_inputs, **kwargs)
+        return self.approximate_inference(fun, dist)
+
+    def predict(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+        """predict with model (default: not stochastic)"""
+        y, x_ = self.call_and_inputs(x, **kwargs)
+        return y
+
+    def to(self, device):
+        self.model.to(device)
+        self.approximate_inference.to(device)
+
+
+@dataclass
+class InputModifyingModel(Model):
+    def call_and_inputs(self, x, **kwargs):  # overload to use kwargs
+        *res, x_ = self.model_call(x)  # modifies x (e.g. action constraints)
+        if type(res) in [tuple, list]:  # multiple return values
+            return (*res, x_)
+        else:
+            return res, x_
+
+
+@dataclass
+class DeterministicModel(Model):
+    pass  # identical to Model
+
+
+@dataclass
+class StochasticModel(Model):
+    def predict(self, x: torch.Tensor, *, stoch=False, **kwargs) -> torch.Tensor:
+        mu, cov, x_ = self.call_and_inputs(x, **kwargs)
+        if stoch:
+            return torch.distributions.MultivariateNormal(mu, cov).sample()
+        else:
+            return mu
+
+
+@dataclass
+class StochasticPolicy(StochasticModel):
+    pass
+
+
+@dataclass
+class DeterministicPolicy(DeterministicModel):
+    pass
+
+
+@dataclass
+class StochasticDynamics(StochasticModel, InputModifyingModel):
+    pass
+
+
+@dataclass
+class DeterministicDynamics(DeterministicModel, InputModifyingModel):
+    pass
+
+
+@dataclass
+class TimeVaryingStochasticPolicy(StochasticPolicy):
+    def call_and_inputs(self, x, *, t: int, open_loop=False):
+        mean, cov = self.model_call(x, t=t, open_loop=open_loop)
+        x_ = x
+        return mean, cov, x_
+
+
+class TimeVaryingLinearGaussian(CudaAble):
     def __init__(
         self,
         horizon: int,
@@ -436,41 +536,28 @@ class TimeVaryingLinearGaussian(Policy):
         # TODO skip k/K_actual ?
         return copy
 
-    def __call__(self, x: torch.Tensor, t: int) -> torch.Tensor:
+    def __call__(self, x: torch.Tensor, *, t: int, open_loop: bool = False):
         """Accepts (multi-)batch input."""
         # x: (b1, b2, ..., bm, x), K: (t, b1, b2, ..., bn, u, x)
         # k: (t, b1, ..., bn, u), sigma: (t, b1, ..., bn, u, u)
+        if open_loop:
+            K_t = self.K_opt[t, ...]
+            k_t = self.k_opt[t, ...]
+        else:
+            K_t = self.K_actual[t, ...]
+            k_t = self.k_actual[t, ...]
         # unsqueeze gains to match input batch size
         x_batch_dims = len(x.shape) - 1  # m: do not count x
-        K_batch_dims = len(self.K_opt.shape) - 3  # n: do not count t,u,x
-        K_opt = self.K_opt[t, ...]
-        k_opt = self.k_opt[t, ...]
+        K_batch_dims = len(K_t.shape) - 2  # n: do not count u,x
         sigma = self.sigma[t, ...]
         for _ in range(x_batch_dims - K_batch_dims):  # for every extra batch dim in x
-            K_opt = K_opt.unsqueeze(-2)  # add 1 dimension before u,x (so dims match)
-            k_opt = k_opt.unsqueeze(-1)  # add 1 dimension before u (so dims match)
+            K_t = K_t.unsqueeze(-2)  # add 1 dimension before u,x (so dims match)
+            k_t = k_t.unsqueeze(-1)  # add 1 dimension before u (so dims match)
             sigma = sigma.unsqueeze(-2)  # add 1 dimension before u,u (so dims match)
         return (
-            k_opt + einops.einsum(K_opt, x, "... u x, ... x -> ... u"),
+            k_t + einops.einsum(K_t, x, "... u x, ... x -> ... u"),
             torch.tile(sigma, x.shape[K_batch_dims:-1] + (self.dim_u, self.dim_u)),
-            x,
         )
-
-    def predict(self, x: torch.Tensor, t: int) -> torch.Tensor:
-        """Accepts (multi-)batch input."""
-        # x: (b1, b2, ..., bm, x), K: (t, b1, b2, ..., bn, u, x)
-        # k: (t, b1, ..., bn, u)
-        # unsqueeze gains to match input batch size
-        x_batch_dims = len(x.shape) - 1  # m: do not count x
-        K_batch_dims = len(self.K_actual.shape) - 3  # n: do not count t,u,x
-        K_actual = self.K_actual[t, ...]
-        k_actual = self.k_actual[t, ...]
-        for _ in range(x_batch_dims - K_batch_dims):  # for every extra batch dim in x
-            # add 1 dimension before u,x (so dims match)
-            K_actual = K_actual.unsqueeze(-2)
-            # add 1 dimension before u (so dims match)
-            k_actual = k_actual.unsqueeze(-1)
-        return k_actual + einops.einsum(K_actual, x, "... u x, ... x -> ... u")
 
     # def sample(self, t: int, x: torch.Tensor) -> torch.Tensor:
     #     breakpoint()  # broken!
@@ -527,11 +614,8 @@ class TimeVaryingLinearGaussian(Policy):
         self.chol = self.chol.to(device)
         return self
 
-    def cpu(self):
-        return self.to("cpu")
 
-
-class Pendulum(object):
+class Pendulum(Stateless):
 
     dim_x = 2
     dim_u = 1
@@ -566,7 +650,7 @@ class Pendulum(object):
         xxs = torch.zeros((horizon, self.dim_x))
         state = initial_state
         for t in range(horizon):
-            action = policy.predict(state, t)
+            action = policy.predict(state, t=t)
             xu = torch.cat((state, action))[None, :]
             xxs[t, :], _ = self.__call__(xu)
             xs[t, :] = state
@@ -617,7 +701,7 @@ def plot_trajectory_distribution(list_of_distributions, title=""):
     return fig, axs
 
 
-class PseudoPosteriorSolver(object):
+class PseudoPosteriorSolver(CudaAble):
 
     metrics: Dict
 
@@ -625,67 +709,41 @@ class PseudoPosteriorSolver(object):
         self,
         dim_x: int,
         dim_u: int,
-        env: Callable,
-        cost: Callable,
         horizon: int,
-        policy_template: Policy,
-        approximate_inference_dynamics,
-        approximate_inference_policy,
-        approximate_inference_cost,
-        approximate_inference_smoothing,
-        update_temperature_strategy,
+        dynamics: InputModifyingModel,
+        cost: Model,
+        policy_template: TimeVaryingStochasticPolicy,
+        smoother: Callable,
+        update_temperature_strategy: Callable,
     ):
-        self.env = env
         self.dim_x, self.dim_u = dim_x, dim_u
-        self.cost = cost
         self.horizon = horizon
+        self.dynamics = dynamics
+        self.cost = cost
         self.policy_template = policy_template
-        self.approximate_inference_dynamics = approximate_inference_dynamics
-        self.approximate_inference_policy = approximate_inference_policy
-        self.approximate_inference_cost = approximate_inference_cost
-        self.approximate_inference_smoothing = approximate_inference_smoothing
+        self.smoother = smoother
         self.update_temperature_strategy = update_temperature_strategy
 
     def forward_pass(
         self,
-        env: Callable,
-        cost: Callable,
-        policy: Policy,
+        policy: Model,
         initial_state: Distribution,
         alpha: float,
+        open_loop: bool = True,
     ) -> (List[Distribution], Distribution):
-        state = initial_state
-        state_action_dist = []
-        future_state_dist = []
+        s = initial_state
+        sa_cost_list = []
+        next_s_list = []
         for t in range(self.horizon):
-            policy_ = partial(policy.__call__, t=t)
-            action = self.approximate_inference_policy(policy_, state)
-            state_action_policy = action.full_joint(reverse=True)
-            state_action_cost = self.approximate_inference_cost(
-                cost, alpha, state_action_policy
-            )
-            # if state_action_cost.covariance.det() <= 0:  # TODO debug
-            #     # state_action_cost.covariance = nearest_spd(state_action_cost.covariance)
-            #     breakpoint()
-            state_action_dist += [state_action_cost]
+            a = policy.propagate(s, t=t, open_loop=open_loop)
+            sa_policy = a.full_joint(reverse=True)
+            sa_cost = self.cost.propagate(sa_policy, alpha=alpha)
+            sa_cost_list += [sa_cost]
             # update state_action_cost with dynamics correlations
-            next_state = self.approximate_inference_dynamics(env, state_action_cost)
-            # if next_state.covariance.det() <= 0:  # TODO debug
-            #     # next_state.covariance = nearest_spd(next_state.covariance)
-            #     breakpoint()
-            future_state_dist += [next_state]
-            state = next_state
-        # breakpoint()  # TODO debug
-        # npar = sum([p.numel() for p in env.parameters()])
-        # sumpar = sum([p.sum().detach() for p in env.parameters()])
-        # meanpar = sumpar/npar
-        # plt.plot([dist.mean[0].detach() for dist in future_state_dist])
-        # plt.plot([dist.mean[1].detach() for dist in future_state_dist])
-        # plt.plot([dist.covariance[0,0].detach() for dist in future_state_dist])
-        # plt.plot([dist.covariance[1,1].detach() for dist in future_state_dist])
-        # plt.plot([forward_state_action_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u))
-        #           .covariance.item() for i in range(200)])
-        return state_action_dist, future_state_dist, state
+            next_s = self.dynamics.propagate(sa_cost)
+            next_s_list += [next_s]
+            s = next_s
+        return sa_cost_list, next_s_list, s
 
     def backward_pass(
         self,
@@ -695,13 +753,13 @@ class PseudoPosteriorSolver(object):
     ):
         dist = []
         future_state_posterior = terminal_state_distribution
-        for current_state_action_prior, predicted_state_prior in zip(
+        for current_state_action_prior, pred_s_prior in zip(
             reversed(forward_state_action_distribution),
             reversed(predicted_state_distribution),
         ):
-            state_action_posterior = self.approximate_inference_smoothing(
+            state_action_posterior = self.smoother(
                 current_state_action_prior,
-                predicted_state_prior,
+                pred_s_prior,
                 future_state_posterior,
             )
             # pass the state posterior to previous timestep
@@ -715,9 +773,11 @@ class PseudoPosteriorSolver(object):
         self,
         n_iteration: int,
         initial_state: Distribution,
-        policy_prior=None,
+        policy_prior: Model,
         plot_posterior: bool = True,
     ):
+        # A1: tempstrat can be modified/tweaked
+        # A2: forward to get filter is always on feedforward (also prior)
         self.init_metrics()
         # create as many alphas as batches (0:1 -> trailing 1 dimension)
         alpha = 0.0 * torch.ones_like(initial_state.mean[..., 0:1])
@@ -727,78 +787,48 @@ class PseudoPosteriorSolver(object):
         else:  # create new (blank) policy
             policy = deepcopy(self.policy_template)
             policy_created = True
-        if hasattr(policy, "actual"):
-            actual_policy = policy.actual()
-        else:
-            actual_policy = policy
-        (
-            forward_state_action_prior,
-            next_state_state_action_prior,
-            _,
-        ) = self.forward_pass(self.env, self.cost, policy, initial_state, alpha)
-        forward_distribution = [
-            dist.reverse() for dist in next_state_state_action_prior
-        ]
-        alpha = self.update_temperature_strategy(
-            self.cost,
-            forward_distribution,  # unused for Polyak
-            forward_distribution,
-            current_alpha=alpha,
-        )
-        # plot_trajectory_distribution(forward_state_action_prior, f"init")
-        self.compute_metrics(
-            forward_state_action_prior, forward_state_action_prior, alpha
-        )
+
         for i in range(n_iteration):
             print(f"alpha {i}: {alpha.flatten().cpu()}")
-            (
-                forward_state_action_prior,
-                predicted_state_prior,
-                terminal_state,
-            ) = self.forward_pass(self.env, self.cost, policy, initial_state, alpha)
-            # plot_trajectory_distribution(forward_state_action_prior, f"filter{i}")
-            state_action_posterior = self.backward_pass(
-                forward_state_action_prior, predicted_state_prior, terminal_state
+            sa_filter, s_filter, s_T = self.forward_pass(
+                policy,
+                initial_state,
+                alpha,
+                open_loop=True,  # optimize only open-loop
             )
-            state_action_policy, _, _ = self.forward_pass(
-                self.env, self.cost, actual_policy, initial_state, alpha=0.0
+            sa_smoother = self.backward_pass(sa_filter, s_filter, s_T)
+            # compute sa_policy trajectory (without cost: alpha=0)
+            sa_policy_fb, _, _ = self.forward_pass(
+                policy,
+                initial_state,
+                alpha=0.0,
+                open_loop=False,  # to evaluate use feedback
             )
-            self.compute_metrics(state_action_posterior, state_action_policy, alpha)
-
-            # plt.plot([forward_state_action_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
-            # plt.plot([predicted_state_prior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
-            # plt.plot([state_action_posterior[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
-            # plt.plot([state_action_policy[i].marginalize(slice(self.dim_x, self.dim_x + self.dim_u)).covariance.item() for i in range(200)])
-            # breakpoint()  # state_action_posterior broken?
+            self.compute_metrics(sa_smoother, sa_policy_fb, alpha)
 
             if not policy_created:  # switch from prior policy to local policy
                 policy = deepcopy(self.policy_template)
                 policy_created = True
-            # 2nd param unused? (state_action_policy)
-            policy.update_from_distribution(state_action_posterior)
-            actual_policy = policy.actual()
+
+            policy.model.update_from_distribution(sa_smoother)
+
             alpha = self.update_temperature_strategy(
-                self.cost,
-                state_action_posterior,  # unused for Polyak
-                state_action_policy,
-                current_alpha=alpha,
+                self.cost.predict,
+                sa_smoother,  # unused for Polyak
+                sa_policy_fb,
+                current_alpha=alpha,  # unused for Polyak
             )
-            # alpha = self.update_temperature_strategy(self.cost, [dist.reverse() for dist in next_state_state_action_prior], current_alpha=initial_alpha)
-            # plot_trajectory_distribution(state_action_posterior, f"smooth{i}")
-            # plt.show()
-            # if converged(metrics):
-            #   break
             if plot_posterior:
-                # plot_trajectory_distribution(forward_state_action_prior, f"filter {i}")
-                plot_trajectory_distribution(state_action_posterior, f"posterior {i}")
+                # plot_trajectory_distribution(sa_filter, f"filter {i}")
+                plot_trajectory_distribution(sa_smoother, f"posterior {i}")
                 plt.show()
         return policy
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
-        posterior_cost = self.cost(
+        posterior_cost = self.cost.predict(
             torch.stack(tuple(d.mean for d in posterior_distribution), dim=0)
         )[0].sum(dim=0)
-        policy_cost = self.cost(
+        policy_cost = self.cost.predict(
             torch.stack(tuple(d.mean for d in policy_distribution), dim=0)
         )[0].sum(dim=0)
         self.metrics["posterior_cost"] += [posterior_cost.flatten().cpu()]
@@ -819,21 +849,15 @@ class PseudoPosteriorSolver(object):
             axs[i].set_ylabel(k)
 
     def to(self, device):
-        # self.env.to(device)  # has no state
-        # self.cost.to(device)  # is function
+        self.dynamics.to(device)
+        self.cost.to(device)
         self.policy_template.to(device)
-        self.approximate_inference_dynamics.to(device)
-        self.approximate_inference_policy.to(device)
-        self.approximate_inference_cost.to(device)
-        # self.approximate_inference_smoothing.to(device)  # is function
+        self.smoother.to(device)
         self.update_temperature_strategy.to(device)
         return self
 
-    def cpu(self):
-        return self.to("cpu")
 
-
-class TemperatureStrategy(ABC):
+class TemperatureStrategy(CudaAble):
 
     _alpha: torch.float32
 
@@ -930,7 +954,7 @@ class KullbackLeiblerDivergence(TemperatureStrategy):
         # n_points = list_of_points[0].shape[0]
         # points are (horizon x n_points, dim_xu + dim_x)
         traj_weights, traj_points = map(torch.cat, [list_of_weights, list_of_points])
-        traj_costs, _ = cost(traj_points)
+        traj_costs = cost(traj_points)
         non_zero_weight = traj_weights > 0.0
         log_traj_weights_nz = torch.log(traj_weights[non_zero_weight])
         # traj_future_state_llhs = torch.cat([llh(xunx[:, dim_xu:]) for (llh, xunx) in zip(list_of_future_llh_fns, list_of_points)])
@@ -1018,7 +1042,7 @@ class PolyakStepSize(TemperatureStrategy):
         list_of_sup_costs = []
         for dist in state_action_policy:
             x_t_pts = self.inference.get_x_pts(dist.mean, dist.covariance)
-            cost_t_pts, _ = cost(x_t_pts)
+            cost_t_pts = cost(x_t_pts)
             list_of_costs.append(cost_t_pts)
             max_cost_t, _ = cost_t_pts.max(dim=-1)
             list_of_sup_costs.append(max_cost_t)
@@ -1032,9 +1056,6 @@ class PolyakStepSize(TemperatureStrategy):
     def to(self, device):
         self.inference.to(device)
         return self
-
-    def cpu(self):
-        return self.to("cpu")
 
 
 class QuadraticModel(TemperatureStrategy):
@@ -1105,6 +1126,14 @@ def nearest_spd(covariance):
     return V @ torch.diag(L) @ V.T
 
 
+def compose(wrapper, func):
+    @functools.wraps(func)
+    def composed(*args, **kwargs):
+        return wrapper(func(*args, **kwargs))
+
+    return composed
+
+
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
@@ -1121,9 +1150,10 @@ def experiment(
     # dyn_model_type: str = "env",
     # #  D2) dnn model
     # dyn_model_type: str = "mlp",
-    # n_features_dyn: int = 256,
+    # n_hidden_dyn: int = 256,
+    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 3e-4,
-    # n_epochs_dyn: int = 100,
+    # n_epochs_dyn: int = 1000,
     # # D3) linear regression w/ dnn features
     # dyn_model_type: str = "nlm",
     # n_features_dyn: int = 128,
@@ -1237,15 +1267,6 @@ def experiment(
         None,
     )
 
-    def state_action_cost(xu):
-        """ " batched version (batch dims first)"""
-        # swing-up: \theta = \pi -> 0
-        theta_cost = (torch.cos(xu[..., 0]) - 1.0) ** 2
-        theta_dot_cost = 1e-2 * xu[..., 1] ** 2
-        u_cost = 1e-2 * xu[..., 2] ** 2
-        tot_cost = theta_cost + theta_dot_cost + u_cost
-        return tot_cost, xu
-
     dyn_train_buffer = ReplayBuffer(
         dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
     )
@@ -1259,11 +1280,6 @@ def experiment(
     # if deterministic -> QuadratureInference (unscented gaussian approx)
     # if gaussian -> QuadratureGaussianInference (unscented gaussian approx)
 
-    ### global dynamics model ###
-    def clamp_u(xu):
-        xu[..., 2] = torch.clamp(xu[..., 2], -environment.u_mx, +environment.u_mx)
-        return xu
-
     def sincos_angle(xu):
         # input angles get split sin/cos
         xu_sincos_shape = list(xu.shape)
@@ -1275,148 +1291,185 @@ def experiment(
         xu_sincos[..., 3] = xu[..., 2]
         return xu_sincos
 
+    ### cost (model) ###
+    @dataclass
+    class CostModel(DeterministicModel):
+        model: Callable = None  # unused in model_call
+        approximate_inference: QuadratureImportanceSamplingInnovation
+
+        def model_call(self, xu, **kwargs):
+            """batched version (batch dims first)"""
+            # swing-up: \theta = \pi -> 0
+            theta, theta_dot, u = xu[..., 0], xu[..., 1], xu[..., 2]
+            theta_cost = (torch.cos(theta) - 1.0) ** 2
+            theta_dot_cost = 1e-2 * theta_dot**2
+            u_cost = 1e-2 * u**2
+            total_cost = theta_cost + theta_dot_cost + u_cost
+            return total_cost
+
+        def propagate(
+            self, dist: MultivariateGaussian, *, alpha, **kwargs
+        ) -> MultivariateGaussian:
+            fun = partial(self.call_and_inputs, **kwargs)
+            return self.approximate_inference(fun, alpha, dist)
+
+    cost = CostModel(
+        approximate_inference=QuadratureImportanceSamplingInnovation(
+            dim_xu,
+            gh_params,
+        ),
+    )
+
+    ### global dynamics model ###
     if dyn_model_type == "env":
-        global_dynamics = environment
-        ai_dyn = QuadratureInference(dim_xu, quad_params)
+        global_dynamics = DeterministicDynamics(
+            model=environment,
+            approximate_inference=QuadratureInference(dim_xu, quad_params),
+        )
     elif dyn_model_type == "mlp":
 
-        def patch_call(fn):
-            def wrap(self, xu):
-                xu_sincos = sincos_angle(clamp_u(xu))
-                # output states are deltas
-                delta_x = fn(self, xu_sincos)
-                return xu[..., :dim_x].detach() + delta_x, xu
+        @dataclass
+        class MLPDynamics(DeterministicDynamics):
+            def model_call(self, xu, **kwargs):
+                x, u = xu[..., :dim_x], xu[..., dim_x]
+                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+                xu_sincos = sincos_angle(xu)
+                delta_x = self.model(xu_sincos)  # output states are deltas
+                return x.detach() + delta_x, xu
 
-            return wrap
+        global_dynamics = MLPDynamics(
+            model=NeuralNetwork(
+                dim_xu + 1,  # sin,cos of theta
+                n_hidden_layers_dyn,
+                n_hidden_dyn,
+                dim_x,
+            ),
+            approximate_inference=QuadratureInference(dim_xu, quad_params),
+        )
 
-        DNN3.__call__ = patch_call(DNN3.__call__)
-        dim_input = dim_xu + 1  # sin,cos of theta
-        global_dynamics = DNN3(dim_input, dim_x, n_features_dyn)
-        # global_dynamics.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
-        loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics(x)[0], y)
-        opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
-        ai_dyn = QuadratureInference(dim_xu, quad_params)
+        # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
+        loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics.predict(x), y)
+        opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "nlm":
 
-        def patch_call(fn):
-            def wrap(self, xu):
-                xu_sincos = sincos_angle(clamp_u(xu))
+        @dataclass
+        class NLMDynamics(StochasticDynamics):
+            def model_call(self, xu, **kwargs):
+                x, u = xu[..., :dim_x], xu[..., dim_x]
+                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+                xu_sincos = sincos_angle(xu)
                 # output states are deltas
-                delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
+                delta_mu, cov, cov_in, cov_out = self.model(xu_sincos)
                 # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
                 cov_bij = einops.einsum(
                     cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
                 )
-                mu = xu[..., :dim_x].detach() + delta_mu
+                mu = x.detach() + delta_mu
                 return mu, cov_bij, xu
 
-            return wrap
-
-        dim_input = dim_xu + 1  # sin,cos of theta
-        NeuralLinearModel.__call__ = patch_call(NeuralLinearModel.__call__)
-        global_dynamics = NeuralLinearModel(
-            dim_input, dim_x, n_hidden_dyn, n_features_dyn, n_hidden_layers_dyn
+        global_dynamics = NLMDynamics(
+            model=NeuralLinearModel(
+                dim_xu + 1,  # sin,cos of theta
+                dim_x,
+                n_hidden_dyn,
+                n_features_dyn,
+                n_hidden_layers_dyn,
+            ),
+            approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
         )
-        # global_dynamics.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
+
+        # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
 
         def loss_fn_dyn(xu, x_next):
-            xu_sincos = sincos_angle(clamp_u(xu))
-            delta_x = x_next - xu[..., :dim_x]
-            return -global_dynamics.elbo(xu_sincos, delta_x)
+            x, u = xu[..., :dim_x], xu[..., dim_x]
+            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+            xu_sincos = sincos_angle(xu)
+            delta_x = x_next - x
+            return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
-        opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
-        ai_dyn = QuadratureGaussianInference(dim_xu, quad_params)
+        opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "snngp":
 
-        def patch_call(fn):
-            def wrap(self, xu):
-                xu_sincos = sincos_angle(clamp_u(xu))
+        @dataclass
+        class SNNGPDynamics(StochasticDynamics):
+            def model_call(self, xu, **kwargs):
+                x, u = xu[..., :dim_x], xu[..., dim_x]
+                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+                xu_sincos = sincos_angle(xu)
                 # output states are deltas
-                delta_mu, cov, cov_in, cov_out = fn(self, xu_sincos)
+                delta_mu, cov, cov_in, cov_out = self.model(xu_sincos)
                 # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
                 cov_bij = einops.einsum(
                     cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
                 )
-                mu = xu[..., :dim_x].detach() + delta_mu
+                mu = x.detach() + delta_mu
                 return mu, cov_bij, xu
 
-            return wrap
+        global_dynamics = SNNGPDynamics(
+            model=SpectralNormalizedNeuralGaussianProcess(
+                dim_xu + 1,  # sin,cos of theta
+                dim_x,
+                n_hidden_dyn,
+                n_features_dyn,
+                n_hidden_layers_dyn,
+            ),
+            approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
+        )
 
-        dim_input = dim_xu + 1  # sin,cos of theta
-        SpectralNormalizedNeuralGaussianProcess.__call__ = patch_call(
-            SpectralNormalizedNeuralGaussianProcess.__call__
-        )
-        global_dynamics = SpectralNormalizedNeuralGaussianProcess(
-            dim_input, dim_x, n_hidden_dyn, n_features_dyn, n_hidden_layers_dyn
-        )
-        # global_dynamics.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
+        # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
 
         def loss_fn_dyn(xu, x_next):
-            xu_sincos = sincos_angle(clamp_u(xu))
-            delta_x = x_next - xu[..., :dim_x]
-            return -global_dynamics.elbo(xu_sincos, delta_x)
+            x, u = xu[..., :dim_x], xu[..., dim_x]
+            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+            xu_sincos = sincos_angle(xu)
+            delta_x = x_next - x
+            return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
-        opt_dyn = torch.optim.Adam(global_dynamics.parameters(), lr=lr_dyn)
-        ai_dyn = QuadratureGaussianInference(dim_xu, quad_params)
+        opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
 
     ### local (i2c) policy ###
-    local_policy = TimeVaryingLinearGaussian(
-        horizon,
-        dim_x,
-        dim_u,
-        action_covariance=0.2 * torch.eye(dim_u),
+    local_policy = TimeVaryingStochasticPolicy(
+        model=TimeVaryingLinearGaussian(
+            horizon,
+            dim_x,
+            dim_u,
+            action_covariance=0.2 * torch.eye(dim_u),
+        ),
+        approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
     )
 
     ### global policy model ###
     if policy_type == "tvlg":
         global_policy = deepcopy(local_policy)
-        ai_pol = QuadratureGaussianInference(dim_x, quad_params)
     elif policy_type == "mlp":
-
-        def patch_call(fn):
-            def wrap(self, x, t=0):  # t needed for i2c compat (until refactor)
-                u = fn(self, x)
-                return u
-
-            return wrap
-
-        NeuralNetwork.__call__ = patch_call(NeuralNetwork.__call__)
-        global_policy = NeuralNetwork(
-            dim_x,
-            n_hidden_layers_pol,
-            n_hidden_pol,
-            dim_u,
+        global_policy = DeterministicPolicy(
+            model=NeuralNetwork(
+                dim_x,
+                n_hidden_layers_pol,
+                n_hidden_pol,
+                dim_u,
+            ),
+            approximate_inference=QuadratureInference(dim_x, quad_params),
         )
-        # global_policy.init_whitening(train_buffer.xs, train_buffer.ys)
-        loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy(x)[0], y)
-        opt_pol = torch.optim.Adam(global_policy.parameters(), lr=lr_pol)
-        ai_pol = QuadratureInference(dim_x, quad_params)
+        # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
+        loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy.predict(x), y)
+        opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm":
         pass  # TODO
+        approx_inf = QuadratureGaussianInference(dim_x, quad_params)
     elif policy_type == "snngp":
         pass  # TODO
-
-    ### rollout policy (mock object) ###
-    class MockPolicy:
-        def predict(self, *args):
-            pass  # fill/override before use
+        approx_inf = QuadratureGaussianInference(dim_x, quad_params)
 
     ### i2c solver ###
     i2c_solver = PseudoPosteriorSolver(
-        dim_x,
-        dim_u,
-        global_dynamics,
-        state_action_cost,
-        horizon,
+        dim_x=dim_x,
+        dim_u=dim_u,
+        horizon=horizon,
+        dynamics=global_dynamics,
+        cost=cost,
         policy_template=local_policy,
-        approximate_inference_dynamics=ai_dyn,
-        approximate_inference_policy=ai_pol,
-        approximate_inference_cost=QuadratureImportanceSamplingInnovation(
-            dim_xu,
-            gh_params,
-        ),
-        # approximate_inference_cost=LinearizationInnovation(),
-        approximate_inference_smoothing=linear_gaussian_smoothing,
+        smoother=linear_gaussian_smoothing,
         # update_temperature_strategy=Constant(alpha),
         # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
@@ -1445,36 +1498,34 @@ def experiment(
             torch.set_grad_enabled(False)
 
         #### T: collect dynamics rollouts
-        exploration_policy = MockPolicy()
+        # # global policy (tvlg with feedback)
+        # exploration_policy = compose(lambda _: _[0], global_policy)
 
-        # # tvlg with feedback
-        # exploration_policy = global_policy.actual()
-
-        # # tvlg without feedback
-        # exploration_policy = global_policy
-
-        # # constant
-        # exploration_policy.predict = lambda self, *args: 1.0 * torch.ones(dim_u)
+        # # tvlg (only!!!) without feedback
+        # exploration_policy = compose(
+        #     lambda _: _[0],
+        #     partial(global_policy.__call__, with_feedback=False)
+        # )
 
         # 50-50 %: tvgl-fb or gaussian noise
-        def noise_pred(x, t):
-            dithering = torch.randn(dim_u)
-            # if torch.randn(1) > 0.5:
-            #     # return global_policy.predict(x, t)  # TODO actual makes no difference?
-            #     return global_policy.actual().predict(x, t) + dithering
-            # else:
-            #     return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
-            if policy_type == "tvlg":  # whether to .actual()
-                return global_policy.actual().predict(x, t) + dithering
-            else:
-                return global_policy(x) + dithering
-            # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
-        exploration_policy.predict = noise_pred
+        def add_dithering(y):
+            return y + torch.randn_like(y)
+
+            # # if torch.randn(1) > 0.5:
+            # #     # return global_policy.predict(x, t)  # TODO actual makes no difference?
+            # #     return global_policy.actual().predict(x, t) + dithering
+            # # else:
+            # #     return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
+            # return global_policy.predict(x, **kwargs) + dithering
+            # # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
         # # random gaussian
         # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
         # exploration_policy.predict = lambda *_: torch.randn(dim_u) * 3
+
+        exploration_policy = deepcopy(global_policy)
+        exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
 
         # train and test rollouts (env & exploration policy)
         logger.weak_line()
@@ -1573,7 +1624,7 @@ def experiment(
             global_dynamics.cpu()  # in-place
             torch.set_grad_enabled(False)
             torch.save(
-                global_dynamics.state_dict(),
+                global_dynamics.model.state_dict(),
                 results_dir / "dyn_model_{i_iter}.pth",
             )
             logger.info("END Training Dynamics")
@@ -1595,9 +1646,9 @@ def experiment(
                     # pointwise
                     xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
                     if dyn_model_type in ["nlm", "snngp"]:
-                        ss_pred_pw[t, :], var, xu = global_dynamics(xu)
+                        ss_pred_pw[t, :], var, xu_ = global_dynamics(xu)
                     else:
-                        ss_pred_pw[t, :], xu = global_dynamics(xu)
+                        ss_pred_pw[t, :], xu_ = global_dynamics(xu)
                     # rollout (replay action)
                     xu = torch.cat((state, a_env[t, :]))[None, :]
                     if dyn_model_type in ["nlm", "snngp"]:
@@ -1606,13 +1657,13 @@ def experiment(
                         ss_pred_roll[t, :], xu = global_dynamics(xu)
                     state = ss_pred_roll[t, :]
                 # compute costs (except init state use pred next state)
-                c_env, _ = state_action_cost(sa_env)
+                c_env = cost.predict(sa_env)
                 s_pred_pw = torch.cat([s_env[:1, :], ss_pred_pw[:-1, :]])
                 sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=1)
-                c_pw, _ = state_action_cost(sa_pred_pw)
+                c_pw = cost.predict(sa_pred_pw)
                 s_pred_roll = torch.cat([s_env[:1, :], ss_pred_roll[:-1, :]])
                 sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=1)
-                c_roll, _ = state_action_cost(sa_pred_roll)
+                c_roll = cost.predict(sa_pred_roll)
 
                 ### plot pointwise and rollout predictions (1 episode) ###
                 fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
@@ -1664,10 +1715,11 @@ def experiment(
         init_mean = initial_state_distribution.sample([n_i2c_local_policies])
         init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
         s0_dist = MultivariateGaussian(init_mean, init_covar, None, None, None)
+
         local_mixture_policy = i2c_solver(
             n_iteration=n_iter_solver,
-            policy_prior=global_policy,
             initial_state=s0_dist,
+            policy_prior=global_policy,
             plot_posterior=plot_posterior and plotting,
         )
         logger.info("END i2c")
@@ -1702,15 +1754,15 @@ def experiment(
             global_policy = deepcopy(local_policy)
             # what makes more sense?
             # # a) average over gains
-            # global_policy.k_actual = local_mixture_policy.k_actual.mean(1)
-            # global_policy.K_actual = local_mixture_policy.K_actual.mean(1)
-            # global_policy.k_opt = local_mixture_policy.k_opt.mean(1)
-            # global_policy.K_opt = local_mixture_policy.K_opt.mean(1)
+            # global_policy.model.k_actual = local_mixture_policy.model.k_actual.mean(1)
+            # global_policy.model.K_actual = local_mixture_policy.model.K_actual.mean(1)
+            # global_policy.model.k_opt = local_mixture_policy.model.k_opt.mean(1)
+            # global_policy.model.K_opt = local_mixture_policy.model.K_opt.mean(1)
             # b) take first gains
-            global_policy.k_actual = local_mixture_policy.k_actual[:, 0, :]
-            global_policy.K_actual = local_mixture_policy.K_actual[:, 0, :]
-            global_policy.k_opt = local_mixture_policy.k_opt[:, 0, :]
-            global_policy.K_opt = local_mixture_policy.K_opt[:, 0, :]
+            global_policy.model.k_actual = local_mixture_policy.model.k_actual[:, 0, :]
+            global_policy.model.K_actual = local_mixture_policy.model.K_actual[:, 0, :]
+            global_policy.model.k_opt = local_mixture_policy.model.k_opt[:, 0, :]
+            global_policy.model.K_opt = local_mixture_policy.model.K_opt[:, 0, :]
         else:
             #### T: collect policy rollouts
             # Roll out local policy mixture to get samples to train global policy
@@ -1777,7 +1829,7 @@ def experiment(
             global_policy.cpu()  # in-place
             torch.set_grad_enabled(False)
             torch.save(
-                global_policy.state_dict(),
+                global_policy.model.state_dict(),
                 results_dir / "pol_model_{i_iter}.pth",
             )
             logger.info("END Training policy")
@@ -1792,11 +1844,10 @@ def experiment(
     # local_policy.plot_metrics()
     initial_state = torch.Tensor([torch.pi, 0.0])
     # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
-    if policy_type == "tvlg":
-        global_policy = global_policy.actual()
 
     ### policy vs env
     # TODO label plot
+    # TODO sample action?
     xs, us, xxs = environment.run(initial_state, global_policy, horizon)
     environment.plot(xs, us)
     plt.suptitle(f"{policy_type} policy vs env")
@@ -1807,9 +1858,9 @@ def experiment(
     us = torch.zeros((horizon, dim_u))
     state = initial_state
     for t in range(horizon):
-        action = global_policy.predict(state, t)
+        action = global_policy.predict(state, t=t)
         xu = torch.cat((state, action))[None, :]
-        x_, *_ = global_dynamics(xu)
+        x_ = global_dynamics.predict(xu)
         xs[t, :] = state
         us[t, :] = action
         state = x_[0, :]
