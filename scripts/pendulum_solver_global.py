@@ -645,28 +645,34 @@ class Pendulum(Stateless):
         return x2, xu
 
     def run(self, initial_state, policy, horizon):
-        xs = torch.zeros((horizon, self.dim_x))
-        us = torch.zeros((horizon, self.dim_u))
-        xxs = torch.zeros((horizon, self.dim_x))
+        batch_shape = [horizon] + list(initial_state.shape[:-1])
+        xs = torch.zeros(batch_shape + [self.dim_x])
+        us = torch.zeros(batch_shape + [self.dim_u])
+        xxs = torch.zeros(batch_shape + [self.dim_x])
         state = initial_state
         for t in range(horizon):
             action = policy.predict(state, t=t)
-            xu = torch.cat((state, action))[None, :]
-            xxs[t, :], _ = self.__call__(xu)
-            xs[t, :] = state
-            us[t, :] = action
-            state = xxs[t, :]
+            xu = torch.cat((state, action), dim=-1)
+            xxs[t, ...], _ = self.__call__(xu)
+            xs[t, ...] = state
+            us[t, ...] = action
+            state = xxs[t, ...]
         return xs, us, xxs
 
     def plot(self, xs, us):
         fig, axs = plt.subplots(self.dim_x + self.dim_u, figsize=(12, 9))
+        xs = einops.rearrange(xs, "t ... x -> t (...) x")
+        us = einops.rearrange(us, "t ... u -> t (...) u")
+        n_batches = xs.shape[-2]
         for i in range(self.dim_x):
-            axs[i].plot(xs[:, i])
+            for ib in range(n_batches):
+                axs[i].plot(xs[:, ib, i])
             axs[i].set_ylabel(f"x{i}")
             axs[i].grid(True)
         for i in range(self.dim_u):
             j = self.dim_x + i
-            axs[j].plot(us[:, i])
+            for ib in range(n_batches):
+                axs[j].plot(us[:, ib, i])
             axs[j].plot(self.u_mx * torch.ones_like(us[:, i]), "k--")
             axs[j].plot(-self.u_mx * torch.ones_like(us[:, i]), "k--")
             axs[j].set_ylabel(f"u{i}")
