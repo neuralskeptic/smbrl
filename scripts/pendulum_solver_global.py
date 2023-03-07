@@ -1143,7 +1143,8 @@ def compose(wrapper, func):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_rollout_episodes: int = 10,
+    n_dyn_rollout_episodes: int = 10,
+    n_pol_rollout_episodes: int = 10,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     # plot_data: bool = False,
     n_iter: int = 10,  # outer loop
@@ -1278,6 +1279,13 @@ def experiment(
     )
     dyn_test_buffer = ReplayBuffer(
         dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
+    )
+
+    pol_train_buffer = ReplayBuffer(
+        dim_x, dim_u, batchsize=batch_size, device=device, max_size=1e4
+    )
+    pol_test_buffer = ReplayBuffer(
+        dim_x, dim_u, batchsize=batch_size, device=device, max_size=1e4
     )
 
     ### approximate inference params ###
@@ -1722,12 +1730,23 @@ def experiment(
         init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
         s0_dist = MultivariateGaussian(init_mean, init_covar, None, None, None)
 
-        local_mixture_policy = i2c_solver(
+        # learn a batch of local policies
+        local_vectorized_policy = i2c_solver(
             n_iteration=n_iter_solver,
             initial_state=s0_dist,
             policy_prior=global_policy,
             plot_posterior=plot_posterior and plotting,
         )
+        # create mixture (mean) policy
+        local_mixture_policy = deepcopy(local_vectorized_policy)
+        local_mixture_policy.model.k_actual = (
+            local_vectorized_policy.model.k_actual.mean(1)
+        )
+        local_mixture_policy.model.K_actual = (
+            local_vectorized_policy.model.K_actual.mean(1)
+        )
+        local_mixture_policy.model.k_opt = local_vectorized_policy.model.k_opt.mean(1)
+        local_mixture_policy.model.K_opt = local_vectorized_policy.model.K_opt.mean(1)
         logger.info("END i2c")
         # log i2c metrics
         for i_ in range(n_iter_solver):
@@ -1757,23 +1776,40 @@ def experiment(
 
         # Fit global policy to local policy
         if policy_type == "tvlg":
-            global_policy = deepcopy(local_policy)
-            # what makes more sense?
-            # # a) average over gains
-            # global_policy.model.k_actual = local_mixture_policy.model.k_actual.mean(1)
-            # global_policy.model.K_actual = local_mixture_policy.model.K_actual.mean(1)
-            # global_policy.model.k_opt = local_mixture_policy.model.k_opt.mean(1)
-            # global_policy.model.K_opt = local_mixture_policy.model.K_opt.mean(1)
-            # b) take first gains
-            global_policy.model.k_actual = local_mixture_policy.model.k_actual[:, 0, :]
-            global_policy.model.K_actual = local_mixture_policy.model.K_actual[:, 0, :]
-            global_policy.model.k_opt = local_mixture_policy.model.k_opt[:, 0, :]
-            global_policy.model.K_opt = local_mixture_policy.model.K_opt[:, 0, :]
+            global_policy = deepcopy(local_mixture_policy)  # average gains
+            # # else) take first gains
+            # global_policy.model.k_actual = local_vectorized_policy.model.k_actual[:, 0, :]
+            # global_policy.model.K_actual = local_vectorized_policy.model.K_actual[:, 0, :]
+            # global_policy.model.k_opt = local_vectorized_policy.model.k_opt[:, 0, :]
+            # global_policy.model.K_opt = local_vectorized_policy.model.K_opt[:, 0, :]
         else:
             #### T: collect policy rollouts
             # Roll out local policy mixture to get samples to train global policy
-            breakpoint()
-            # TODO
+            # train and test rollouts (env & exploration policy)
+            logger.weak_line()
+            logger.info("START Collecting Policy Rollouts")
+            # a) rollout mixture (mean local policy)
+            for i in trange(n_pol_rollout_episodes):  # 80 % train
+                state = initial_state_distribution.sample()
+                s, a, ss = environment.run(state, local_mixture_policy, horizon)
+                pol_train_buffer.add(s, a)
+            for i in trange(max(1, int(n_pol_rollout_episodes / 4))):  # 20 % test
+                state = initial_state_distribution.sample()
+                s, a, ss = environment.run(state, local_mixture_policy, horizon)
+                pol_test_buffer.add(s, a)
+            # # b) rollout every local policy separately
+            # n_rollouts_vectorized = int(n_pol_rollout_episodes / n_i2c_local_policies)
+            # for i in trange(n_rollouts_vectorized):  # 80 % train
+            #     state = s0_dist.sample()
+            #     s, a, ss = environment.run(state, local_vectorized_policy, horizon)
+            #     for i_local in range(n_i2c_local_policies):
+            #         pol_train_buffer.add(s[:, i_local, :], a[:, i_local, :])
+            # for i in trange(max(1, int(n_rollouts_vectorized / 4))):  # 20 % test
+            #     state = s0_dist.sample()
+            #     s, a, ss = environment.run(state, local_vectorized_policy, horizon)
+            #     for i_local in range(n_i2c_local_policies):
+            #         pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
+            logger.info("END Collecting Policy Rollouts")
 
             # min KL[mean local_policy || global_policy]
             # should do: global_policy.predict(x, t)
@@ -1784,16 +1820,16 @@ def experiment(
 
             #### T: train policy
             for i_epoch_pol in trange(n_epochs_pol + 1):
-                for i_minibatch, minibatch in enumerate(train_buffer):
+                for i_minibatch, minibatch in enumerate(pol_train_buffer):
                     x, y = minibatch
                     opt_pol.zero_grad()
                     loss = loss_fn_pol(x, y)
                     loss.backward()
-                    opt_dyn.step()
+                    opt_pol.step()
                     pol_loss_trace.append(loss.detach().item())
                     logger.log_data(
                         **{
-                            # "policy/train/epoch": i_epoch_dyn,
+                            # "policy/train/epoch": i_epoch_pol,
                             "policy/train/loss": pol_loss_trace[-1],
                         },
                     )
@@ -1803,9 +1839,9 @@ def experiment(
                 if i_epoch_pol % (n_epochs_pol * log_frequency) == 0:
                     with torch.no_grad():
                         # test loss
-                        test_buffer.shuffling = False  # TODO only for plotting?
+                        pol_test_buffer.shuffling = False  # TODO only for plotting?
                         test_losses = []
-                        for minibatch in test_buffer:  # TODO not whole buffer!
+                        for minibatch in pol_test_buffer:  # TODO not whole buffer!
                             _x_test, _y_test = minibatch
                             _test_loss = loss_fn_pol(_x_test, _y_test)
                             test_losses.append(_test_loss.item())
@@ -1821,10 +1857,10 @@ def experiment(
                         logstring += f", Test Loss={pol_test_loss_trace[-1]:.2}"
                         logger.info(logstring)
 
-                # stop condition
-                if i_epoch_pol > 0.01 * n_epochs_pol:  # do at least 1% of epochs
-                    if pol_test_loss_trace[-1] < -3e3:  # stop if test loss good
-                        break
+                # # stop condition
+                # if i_epoch_pol > 0.01 * n_epochs_pol:  # do at least 1% of epochs
+                #     if pol_test_loss_trace[-1] < -3e3:  # stop if test loss good
+                #         break
 
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
