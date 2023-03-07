@@ -1169,8 +1169,8 @@ def experiment(
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
     # D4) linear regression w/ sn-dnn & rf features
-    dyn_model_type: str = "snngp",  # TODO why so slow? (x15) paper says x1.2
-    n_features_dyn: int = 128,  # RFFs require ~512-1024 for accuracy
+    dyn_model_type: str = "snngp",
+    n_features_dyn: int = 128,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     n_hidden_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 1e-4,
@@ -1543,16 +1543,16 @@ def experiment(
 
         # train and test rollouts (env & exploration policy)
         logger.weak_line()
-        logger.info("START Collecting Rollouts")
-        for i in trange(n_rollout_episodes):  # 80 % train
+        logger.info("START Collecting Dynamics Rollouts")
+        for i in trange(n_dyn_rollout_episodes):  # 80 % train
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
             dyn_train_buffer.add(torch.hstack([s, a]), ss)
-        for i in trange(int(n_rollout_episodes / 4)):  # 20 % test
+        for i in trange(max(1, int(n_dyn_rollout_episodes / 4))):  # 20 % test
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
             dyn_test_buffer.add(torch.hstack([s, a]), ss)
-        logger.info("END Collecting Rollouts")
+        logger.info("END Collecting Dynamics Rollouts")
 
         #### T: train dynamics model
         if dyn_model_type != "env":
@@ -1729,7 +1729,6 @@ def experiment(
         init_mean = initial_state_distribution.sample([n_i2c_local_policies])
         init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
         s0_dist = MultivariateGaussian(init_mean, init_covar, None, None, None)
-
         # learn a batch of local policies
         local_vectorized_policy = i2c_solver(
             n_iteration=n_iter_solver,
