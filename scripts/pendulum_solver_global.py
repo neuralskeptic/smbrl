@@ -1177,20 +1177,27 @@ def experiment(
     n_epochs_dyn: int = 1000,
     ##############
     ## policy ##
-    plot_policy: bool = False,  # plot pointwise and rollout prediction
-    #  D1) local time-varying linear gaussian controllers (i2c)
-    policy_type: str = "tvlg",
+    plot_policy: bool = True,  # plot pointwise and rollout prediction
+    # #  D1) local time-varying linear gaussian controllers (i2c)
+    # policy_type: str = "tvlg",
     # #  D2) dnn model
     # policy_type: str = "mlp",
     # n_hidden_pol: int = 256,
     # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 3e-4,
-    # n_epochs_pol: int = 100,
+    # n_epochs_pol: int = 500,
+    # D3) linear regression w/ dnn features
+    policy_type: str = "nlm",
+    n_features_pol: int = 128,
+    n_hidden_pol: int = 128,
+    n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    lr_pol: float = 1e-4,
+    n_epochs_pol: int = 1000,
     ############
     ## i2c solver ##
     n_iter_solver: int = 5,  # how many i2c solver iterations to do
-    n_i2c_local_policies: int = 10,  # how many local policies in the mixture i2c
-    plot_posterior: bool = False,  # plot state-action-posterior over time
+    n_i2c_local_policies: int = 1,  # how many local policies in the mixture i2c
+    plot_posterior: bool = True,  # plot state-action-posterior over time
     # plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     # plot_local_policy_metrics: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
@@ -1469,8 +1476,32 @@ def experiment(
         loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy.predict(x), y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm":
-        pass  # TODO
-        approx_inf = QuadratureGaussianInference(dim_x, quad_params)
+
+        @dataclass
+        class NLMPolicy(StochasticPolicy):
+            def model_call(self, x, **kwargs):
+                mu, cov, cov_in, cov_out = self.model(x)
+                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
+                cov_bij = einops.einsum(
+                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
+                )
+                return mu, cov_bij
+
+        global_policy = NLMPolicy(
+            model=NeuralLinearModel(
+                dim_x,
+                dim_u,
+                n_hidden_pol,
+                n_features_pol,
+                n_hidden_layers_pol,
+            ),
+            approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
+        )
+
+        # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
+
+        loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
+        opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "snngp":
         pass  # TODO
         approx_inf = QuadratureGaussianInference(dim_x, quad_params)
@@ -1538,7 +1569,7 @@ def experiment(
         # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
         # exploration_policy.predict = lambda *_: torch.randn(dim_u) * 3
 
-        exploration_policy = deepcopy(global_policy)
+        exploration_policy = copy(global_policy)  # only shallow copy, so no mutation
         exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
 
         # train and test rollouts (env & exploration policy)
@@ -1733,7 +1764,7 @@ def experiment(
         local_vectorized_policy = i2c_solver(
             n_iteration=n_iter_solver,
             initial_state=s0_dist,
-            # policy_prior=global_policy,
+            policy_prior=global_policy if i_iter != 0 else None,
             plot_posterior=plot_posterior and plotting,
         )
         # create mixture (mean) policy
@@ -1787,27 +1818,27 @@ def experiment(
             # train and test rollouts (env & exploration policy)
             logger.weak_line()
             logger.info("START Collecting Policy Rollouts")
-            # a) rollout mixture (mean local policy)
-            for i in trange(n_pol_rollout_episodes):  # 80 % train
-                state = initial_state_distribution.sample()
-                s, a, ss = environment.run(state, local_mixture_policy, horizon)
-                pol_train_buffer.add(s, a)
-            for i in trange(max(1, int(n_pol_rollout_episodes / 4))):  # 20 % test
-                state = initial_state_distribution.sample()
-                s, a, ss = environment.run(state, local_mixture_policy, horizon)
-                pol_test_buffer.add(s, a)
-            # # b) rollout every local policy separately
-            # n_rollouts_vectorized = int(n_pol_rollout_episodes / n_i2c_local_policies)
-            # for i in trange(n_rollouts_vectorized):  # 80 % train
-            #     state = s0_dist.sample()
-            #     s, a, ss = environment.run(state, local_vectorized_policy, horizon)
-            #     for i_local in range(n_i2c_local_policies):
-            #         pol_train_buffer.add(s[:, i_local, :], a[:, i_local, :])
-            # for i in trange(max(1, int(n_rollouts_vectorized / 4))):  # 20 % test
-            #     state = s0_dist.sample()
-            #     s, a, ss = environment.run(state, local_vectorized_policy, horizon)
-            #     for i_local in range(n_i2c_local_policies):
-            #         pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
+            # # a) rollout mixture (mean local policy)
+            # for i in trange(n_pol_rollout_episodes):  # 80 % train
+            #     state = initial_state_distribution.sample()
+            #     s, a, ss = environment.run(state, local_mixture_policy, horizon)
+            #     pol_train_buffer.add(s, a)
+            # for i in trange(max(1, int(n_pol_rollout_episodes / 4))):  # 20 % test
+            #     state = initial_state_distribution.sample()
+            #     s, a, ss = environment.run(state, local_mixture_policy, horizon)
+            #     pol_test_buffer.add(s, a)
+            # b) rollout every local policy separately
+            n_rollouts_vectorized = int(n_pol_rollout_episodes / n_i2c_local_policies)
+            for i in trange(n_rollouts_vectorized):  # 80 % train
+                state = s0_dist.sample()
+                s, a, ss = environment.run(state, local_vectorized_policy, horizon)
+                for i_local in range(n_i2c_local_policies):
+                    pol_train_buffer.add(s[:, i_local, :], a[:, i_local, :])
+            for i in trange(max(1, int(n_rollouts_vectorized / 4))):  # 20 % test
+                state = s0_dist.sample()
+                s, a, ss = environment.run(state, local_vectorized_policy, horizon)
+                for i_local in range(n_i2c_local_policies):
+                    pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
             logger.info("END Collecting Policy Rollouts")
 
             # min KL[mean local_policy || global_policy]
@@ -1856,10 +1887,10 @@ def experiment(
                         logstring += f", Test Loss={pol_test_loss_trace[-1]:.2}"
                         logger.info(logstring)
 
-                # # stop condition
-                # if i_epoch_pol > 0.01 * n_epochs_pol:  # do at least 1% of epochs
-                #     if pol_test_loss_trace[-1] < -3e3:  # stop if test loss good
-                #         break
+                # stop condition
+                if i_epoch_pol > 0.01 * n_epochs_pol:  # do at least 1% of epochs
+                    if pol_test_loss_trace[-1] < -3e3:  # stop if test loss good
+                        break
 
                 # TODO save model more often than in each global iter?
                 # if n % (n_epochs * model_save_frequency) == 0:
@@ -1874,6 +1905,53 @@ def experiment(
                 results_dir / "pol_model_{i_iter}.pth",
             )
             logger.info("END Training policy")
+
+            ### tvlg vectorized vs env
+            xs, us, xxs = environment.run(
+                s0_dist.sample(), local_vectorized_policy, horizon
+            )
+            environment.plot(xs, us)
+            plt.suptitle(f"tvlg vec policy vs env")
+
+            ### tvlg vec vs dyn model
+            xs = torch.zeros((horizon, dim_x))
+            us = torch.zeros((horizon, dim_u))
+            state = initial_state[None, :]
+            for t in range(horizon):
+                action = local_vectorized_policy.predict(state, t=t)
+                # breakpoint()
+                xu = torch.cat((state, action), dim=-1)
+                xs[t, :] = state
+                us[t, :] = action
+                state = global_dynamics.predict(xu)
+            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
+
+            # ### local mixture vs env
+            # xs, us, xxs = environment.run(initial_state, local_mixture_policy, horizon)
+            # environment.plot(xs, us)
+            # plt.suptitle(f"tvlg mixture policy vs env")
+
+            ### global policy vs env
+            xs, us, xxs = environment.run(initial_state, global_policy, horizon)
+            environment.plot(xs, us)
+            plt.suptitle(f"{policy_type} policy vs env")
+
+            ### global policy vs dyn model
+            xs = torch.zeros((horizon, dim_x))
+            us = torch.zeros((horizon, dim_u))
+            state = initial_state[None, :]
+            for t in range(horizon):
+                action = global_policy.predict(state, t=t)
+                xu = torch.cat((state, action), dim=-1)
+                xs[t, :] = state
+                us[t, :] = action
+                state = global_dynamics.predict(xu)
+            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+
+            plt.show()
+            breakpoint()
 
             #### T: plot policy
             if plot_policy:
@@ -1890,14 +1968,14 @@ def experiment(
                 state = s_env[0, :]  # for rollouts: data init state
                 for t in range(horizon):
                     # pointwise
-                    if type(global_policy) is StochasticPolicy:
+                    if isinstance(global_policy, StochasticPolicy):
                         a_pred_pw[t, :], var = global_policy(s_env[t, :])
                     else:
                         a_pred_pw[t, :] = global_policy(s_env[t, :])
                     # a_pred_pw[t, :], var = local_mixture_policy(s_env[t, :], t=t)  # DEBUG
                     # rollout
                     s_pred_roll[t, :] = state
-                    if type(global_policy) is StochasticPolicy:
+                    if isinstance(global_policy, StochasticPolicy):
                         action, var = global_policy(state)
                     else:
                         action = global_policy(state)
