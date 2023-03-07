@@ -1186,8 +1186,15 @@ def experiment(
     # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 3e-4,
     # n_epochs_pol: int = 500,
-    # D3) linear regression w/ dnn features
-    policy_type: str = "nlm",
+    # # D3) linear regression w/ dnn features
+    # policy_type: str = "nlm",
+    # n_features_pol: int = 128,
+    # n_hidden_pol: int = 128,
+    # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 1e-4,
+    # n_epochs_pol: int = 1000,
+    # D4) linear regression w/ sn-dnn & rf features
+    policy_type: str = "snngp",
     n_features_pol: int = 128,
     n_hidden_pol: int = 128,
     n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
@@ -1503,7 +1510,32 @@ def experiment(
         loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "snngp":
-        pass  # TODO
+
+        @dataclass
+        class SNNGPPolicy(StochasticPolicy):
+            def model_call(self, x, **kwargs):
+                mu, cov, cov_in, cov_out = self.model(x)
+                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
+                cov_bij = einops.einsum(
+                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
+                )
+                return mu, cov_bij
+
+        global_policy = SNNGPPolicy(
+            model=NeuralLinearModel(
+                dim_x,
+                dim_u,
+                n_hidden_pol,
+                n_features_pol,
+                n_hidden_layers_pol,
+            ),
+            approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
+        )
+
+        # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
+
+        loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
+        opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
         approx_inf = QuadratureGaussianInference(dim_x, quad_params)
 
     ### i2c solver ###
