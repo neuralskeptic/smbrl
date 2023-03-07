@@ -779,7 +779,7 @@ class PseudoPosteriorSolver(CudaAble):
         self,
         n_iteration: int,
         initial_state: Distribution,
-        policy_prior: Model,
+        policy_prior: Model = None,
         plot_posterior: bool = True,
     ):
         # A1: tempstrat can be modified/tweaked
@@ -1734,7 +1734,7 @@ def experiment(
         local_vectorized_policy = i2c_solver(
             n_iteration=n_iter_solver,
             initial_state=s0_dist,
-            policy_prior=global_policy,
+            # policy_prior=global_policy,
             plot_posterior=plot_posterior and plotting,
         )
         # create mixture (mean) policy
