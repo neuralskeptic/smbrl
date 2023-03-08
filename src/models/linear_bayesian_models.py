@@ -99,6 +99,10 @@ class LinearBayesianModel(nn.Module):
 
         Parameter and return shapes see below.
         """
+        unsqueezed = False
+        if len(x.shape) == 1:  # needed because n=x.shape[-2] and .mT
+            x = x.unsqueeze(0)
+            unsqueezed = True
         n = x.shape[-2]
         with torch.set_grad_enabled(grad):
             phi = self.features(x)
@@ -110,7 +114,8 @@ class LinearBayesianModel(nn.Module):
                 covariance = torch.kron(
                     covariance_out, covariance_pred_in
                 )  # only useful for 1D?
-
+        if unsqueezed:
+            mu = mu.squeeze(0)
         if covs:
             return mu, covariance, covariance_feat, covariance_out
         else:
