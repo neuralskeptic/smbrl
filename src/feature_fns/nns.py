@@ -46,8 +46,9 @@ class NeuralNetwork(nn.Module):
         self.act = ACTIVATIONS[activation]
 
     def forward(self, x):
-        for l in self.layers:
+        for l in self.layers[:-1]:
             x = self.act(l(x))
+        return self.layers[-1](x)  # no output activation!
         return x
 
 
