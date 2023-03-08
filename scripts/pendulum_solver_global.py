@@ -1146,11 +1146,15 @@ def experiment(
     n_dyn_rollout_episodes: int = 10,
     n_pol_rollout_episodes: int = 10,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
-    # plot_data: bool = False,
     n_iter: int = 10,  # outer loop
-    use_cuda: bool = True,  # for policy/dynamics training (i2c on cpu)
-    log_frequency: float = 0.1,  # every p% epochs of n_epochs
-    model_save_frequency: float = 0.5,  # every n-th of n_epochs
+    ## frequency or period: whichever is lower dominates
+    log_frequency: float = 0.1,  # every p-th of n_epochs
+    log_period: int = 100,  # every N epochs
+    model_save_frequency: float = 0.5,  # every p-th of n_epochs
+    model_save_period: int = 500,  # every N epochs
+    ##########
+    min_epochs_per_train: int = 100,  # train at least N epochs (even if early stop)
+    early_stop_thresh: float = -3e3,  # stop training when validation loss lower
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
     # #  D1) true dynamics
@@ -1247,6 +1251,7 @@ def experiment(
     results_dir: str = "logs/tmp/",
     debug: bool = True,  # prepends logdir with 'debug/', disables wandb, enables console logging
     # debug: bool = False,  # prepends logdir with 'debug/', disables wandb, enables console logging
+    use_cuda: bool = True,  # for policy/dynamics training (i2c always on cpu)
 ):
     ####################################################################################################################
     #### SETUP (saved to yaml)
@@ -1606,8 +1611,10 @@ def experiment(
     # for alpha in [1e-1, 1, 10, 100, 1000]:
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
     # for _ in [None]:
+    dyn_epoch_counter = 0
     dyn_loss_trace = []
     dyn_test_loss_trace = []
+    pol_epoch_counter = 0
     pol_loss_trace = []
     pol_test_loss_trace = []
     for i_iter in range(n_iter):
@@ -1617,7 +1624,7 @@ def experiment(
             global_dynamics.cpu()  # in-place
             torch.set_grad_enabled(False)
 
-        #### T: collect dynamics rollouts
+        #### T: global policy rollouts
         # # global policy (tvlg with feedback)
         # exploration_policy = compose(lambda _: _[0], global_policy)
 
@@ -1692,6 +1699,7 @@ def experiment(
             # )
 
             # torch.autograd.set_detect_anomaly(True)
+            _train_losses = []
             for i_epoch_dyn in trange(n_epochs_dyn + 1):
                 for i_minibatch, minibatch in enumerate(dyn_train_buffer):
                     x, y = minibatch
@@ -1700,43 +1708,50 @@ def experiment(
                     loss.backward()
                     opt_dyn.step()
                     dyn_loss_trace.append(loss.detach().item())
+                    _train_losses.append(dyn_loss_trace[-1])
                     logger.log_data(
                         **{
-                            # "dynamics/train/epoch": i_epoch_dyn,
+                            # "dynamics/train/epoch": dyn_epoch_counter,
                             "dynamics/train/loss": dyn_loss_trace[-1],
                         },
                     )
+                dyn_epoch_counter += 1
 
                 # save logs & test
                 logger.save_logs()
-                if i_epoch_dyn % (n_epochs_dyn * log_frequency) == 0:
+                if i_epoch_dyn % min(n_epochs_dyn * log_frequency, log_period) == 0:
                     with torch.no_grad():
                         # test loss
                         dyn_test_buffer.shuffling = False  # TODO only for plotting?
-                        test_losses = []
+                        _test_losses = []
                         for minibatch in dyn_test_buffer:  # TODO not whole buffer!
                             _x_test, _y_test = minibatch
                             _test_loss = loss_fn_dyn(_x_test, _y_test)
-                            test_losses.append(_test_loss.item())
-                        dyn_test_loss_trace.append(np.mean(test_losses))
+                            _test_losses.append(_test_loss.item())
+                        dyn_test_loss_trace.append(np.mean(_test_losses))
+                        mean_train_loss = np.mean(_train_losses)
+                        _train_losses = []
                         logger.log_data(
                             step=logger._step,  # in sync with training loss
                             **{
-                                "dynamics/eval/loss": dyn_test_loss_trace[-1],
+                                "dynamics/train/loss_mean": mean_train_loss,
+                                "dynamics/eval/loss_mean": dyn_test_loss_trace[-1],
                             },
                         )
-
-                        logstring = f"DYN: Epoch {i_epoch_dyn}, Train Loss={dyn_loss_trace[-1]:.2}"
-                        logstring += f", Test Loss={dyn_test_loss_trace[-1]:.2}"
+                        logstring = (
+                            f"DYN: Epoch {i_epoch_dyn} ({dyn_epoch_counter}), "
+                            f"Train Loss={mean_train_loss:.2}, "
+                            f"Test Loss={dyn_test_loss_trace[-1]:.2}"
+                        )
                         logger.info(logstring)
 
                 # stop condition
-                if i_epoch_dyn > 0.01 * n_epochs_dyn:  # do at least 1% of epochs
-                    if dyn_test_loss_trace[-1] < -3e3:  # stop if test loss good
-                        break
+                if i_epoch_dyn > min_epochs_per_train:
+                    if dyn_test_loss_trace[-1] < early_stop_thresh:
+                        break  # stop if test loss good
 
                 # TODO save model more often than in each global iter?
-                # if n % (n_epochs * model_save_frequency) == 0:
+                # if n % min(n_epochs * model_save_frequency, model_save_period) == 0:
                 #     # Save the agent
                 #     torch.save(model.state_dict(), results_dir / f"agent_{n}_{i_iter}.pth")
 
@@ -1765,13 +1780,13 @@ def experiment(
                 for t in range(horizon):
                     # pointwise
                     xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
-                    if dyn_model_type in ["nlm", "snngp"]:
+                    if isinstance(global_dynamics, StochasticDynamics):
                         ss_pred_pw[t, :], var, xu_ = global_dynamics(xu)
                     else:
                         ss_pred_pw[t, :], xu_ = global_dynamics(xu)
                     # rollout (replay action)
                     xu = torch.cat((state, a_env[t, :]))[None, :]
-                    if dyn_model_type in ["nlm", "snngp"]:
+                    if isinstance(global_dynamics, StochasticDynamics):
                         ss_pred_roll[t, :], var, xu = global_dynamics(xu)
                     else:
                         ss_pred_roll[t, :], xu = global_dynamics(xu)
@@ -1820,8 +1835,8 @@ def experiment(
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
                     f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
-                    f"({int(dyn_test_buffer.size/horizon)} "
-                    f"episodes, {i_iter * n_epochs_dyn} epochs, lr={lr_dyn})"
+                    f"({int(dyn_train_buffer.size/horizon)} episodes, "
+                    f"{dyn_epoch_counter} epochs, lr={lr_dyn:.0e})"
                 )
                 plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
                 if plotting:
@@ -1924,6 +1939,7 @@ def experiment(
             torch.set_grad_enabled(True)
 
             #### T: train policy
+            _train_losses = []
             for i_epoch_pol in trange(n_epochs_pol + 1):
                 for i_minibatch, minibatch in enumerate(pol_train_buffer):
                     x, y = minibatch
@@ -1932,43 +1948,51 @@ def experiment(
                     loss.backward()
                     opt_pol.step()
                     pol_loss_trace.append(loss.detach().item())
+                    _train_losses.append(pol_loss_trace[-1])
                     logger.log_data(
                         **{
-                            # "policy/train/epoch": i_epoch_pol,
+                            # "policy/train/epoch": pol_epoch_counter,
                             "policy/train/loss": pol_loss_trace[-1],
                         },
                     )
+                pol_epoch_counter += 1
 
                 # save logs & test
                 logger.save_logs()
-                if i_epoch_pol % (n_epochs_pol * log_frequency) == 0:
+                if i_epoch_pol % min(n_epochs_pol * log_frequency, log_period) == 0:
                     with torch.no_grad():
                         # test loss
                         pol_test_buffer.shuffling = False  # TODO only for plotting?
-                        test_losses = []
+                        _test_losses = []
                         for minibatch in pol_test_buffer:  # TODO not whole buffer!
                             _x_test, _y_test = minibatch
                             _test_loss = loss_fn_pol(_x_test, _y_test)
-                            test_losses.append(_test_loss.item())
-                        pol_test_loss_trace.append(np.mean(test_losses))
+                            _test_losses.append(_test_loss.item())
+                        pol_test_loss_trace.append(np.mean(_test_losses))
+                        mean_train_loss = np.mean(_train_losses)
+                        _train_losses = []
                         logger.log_data(
                             step=logger._step,  # in sync with training loss
                             **{
+                                "policy/train/loss_mean": mean_train_loss,
                                 "policy/eval/loss": pol_test_loss_trace[-1],
                             },
                         )
 
-                        logstring = f"pol: Epoch {i_epoch_pol}, Train Loss={pol_loss_trace[-1]:.2}"
-                        logstring += f", Test Loss={pol_test_loss_trace[-1]:.2}"
+                        logstring = (
+                            f"POL: Epoch {i_epoch_pol} ({pol_epoch_counter}), "
+                            f"Train Loss={mean_train_loss:.2}, "
+                            f"Test Loss={pol_test_loss_trace[-1]:.2}"
+                        )
                         logger.info(logstring)
 
                 # stop condition
-                if i_epoch_pol > 0.01 * n_epochs_pol:  # do at least 1% of epochs
-                    if pol_test_loss_trace[-1] < -3e3:  # stop if test loss good
-                        break
+                if i_epoch_pol >= min_epochs_per_train:
+                    if pol_test_loss_trace[-1] < early_stop_thresh:
+                        break  # stop if test loss good
 
                 # TODO save model more often than in each global iter?
-                # if n % (n_epochs * model_save_frequency) == 0:
+                # if n % min(n_epochs * model_save_frequency, model_save_period) == 0:
                 #     # Save the agent
                 #     torch.save(model.state_dict(), results_dir / f"agent_{n}_{i_iter}.pth")
 
@@ -2102,8 +2126,8 @@ def experiment(
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
                     f"{policy_type} pointwise and rollout policy on 1 episode "
-                    f"({int(pol_test_buffer.size/horizon)} "
-                    f"episodes, {i_iter * n_epochs_pol} epochs, lr={lr_pol})"
+                    f"({int(pol_train_buffer.size/horizon)} episodes, "
+                    f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
                 )
                 plt.savefig(results_dir / f"pol_eval_{i_iter}.png", dpi=150)
                 if plotting:
@@ -2173,9 +2197,9 @@ def experiment(
 
     if dyn_model_type != "env":
         fig_loss_dyn, ax_loss_dyn = plt.subplots()
-        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_iter * n_epochs_dyn)
+        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
         ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
-        x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, n_iter * n_epochs_dyn)
+        x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
         ax_loss_dyn.plot(x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss")
         if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
             ax_loss_dyn.set_yscale("symlog")
@@ -2187,7 +2211,23 @@ def experiment(
         )
         ax_loss_dyn.legend()
         plt.savefig(results_dir / "dyn_loss.png", dpi=150)
-        # TODO plot policy train loss
+
+    if policy_type != "tvlg":
+        fig_loss_pol, ax_loss_pol = plt.subplots()
+        x_train_loss_pol = scaled_xaxis(pol_loss_trace, pol_epoch_counter)
+        ax_loss_pol.plot(x_train_loss_pol, pol_loss_trace, c="k", label="train loss")
+        x_test_loss_pol = scaled_xaxis(pol_test_loss_trace, pol_epoch_counter)
+        ax_loss_pol.plot(x_test_loss_pol, pol_test_loss_trace, c="g", label="test loss")
+        if pol_loss_trace[0] > 1 and pol_loss_trace[-1] < 0.1:
+            ax_loss_pol.set_yscale("symlog")
+        ax_loss_pol.set_xlabel("epochs")
+        ax_loss_pol.set_ylabel("loss")
+        ax_loss_pol.set_title(
+            f"POL {policy_type} loss "
+            f"({int(pol_train_buffer.size/horizon)} episodes, lr={lr_pol:.0e})"
+        )
+        ax_loss_pol.legend()
+        plt.savefig(results_dir / "pol_loss.png", dpi=150)
 
     if plotting:
         plt.show()
