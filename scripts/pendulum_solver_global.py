@@ -23,10 +23,10 @@ from torch.autograd.functional import hessian, jacobian
 from tqdm import trange
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
-from src.feature_fns.nns import NeuralNetwork
-from src.models.dnns import DNN3
+from src.feature_fns.nns import MultiLayerPerceptron, ResidualNetwork
 from src.models.linear_bayesian_models import (
-    NeuralLinearModel,
+    NeuralLinearModelMLP,
+    NeuralLinearModelResNet,
     SpectralNormalizedNeuralGaussianProcess,
 )
 from src.utils.seeds import fix_random_seed
@@ -1155,50 +1155,76 @@ def experiment(
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
     # #  D1) true dynamics
     # dyn_model_type: str = "env",
-    # #  D2) dnn model
+    # #  D2) mlp model
     # dyn_model_type: str = "mlp",
-    # n_hidden_dyn: int = 256,
+    # dim_hidden_dyn: int = 256,
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 1000,
-    # # D3) linear regression w/ dnn features
-    # dyn_model_type: str = "nlm",
+    # #  D3) resnet model
+    # dyn_model_type: str = "resnet",
+    # dim_hidden_dyn: int = 256,
+    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_dyn: float = 3e-4,
+    # n_epochs_dyn: int = 1000,
+    # # D4) linear regression w/ mlp features
+    # dyn_model_type: str = "nlm-mlp",
     # n_features_dyn: int = 128,
     # n_hidden_dyn: int = 128,
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
-    # D4) linear regression w/ sn-dnn & rf features
+    # # D5) linear regression w/ resnet features
+    # dyn_model_type: str = "nlm-resnet",
+    # n_features_dyn: int = 128,
+    # n_hidden_dyn: int = 128,
+    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_dyn: float = 1e-4,
+    # n_epochs_dyn: int = 1000,
+    # D6) linear regression w/ spec.norm.-resnet & rf features
     dyn_model_type: str = "snngp",
-    n_features_dyn: int = 128,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     n_hidden_dyn: int = 128,
     n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
-    lr_dyn: float = 1e-4,
-    n_epochs_dyn: int = 1000,
+    lr_dyn: float = 5e-4,
+    n_epochs_dyn: int = 10,
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
     # #  D1) local time-varying linear gaussian controllers (i2c)
     # policy_type: str = "tvlg",
-    # #  D2) dnn model
+    # #  D2) mlp model
     # policy_type: str = "mlp",
-    # n_hidden_pol: int = 256,
-    # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
-    # lr_pol: float = 3e-4,
-    # n_epochs_pol: int = 500,
-    # # D3) linear regression w/ dnn features
-    # policy_type: str = "nlm",
+    # n_hidden_pol: int = 128,
+    # n_hidden_layers_pol: int = 6,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 5e-4,
+    # n_epochs_pol: int = 1000,
+    # #  D3) resnet model
+    # policy_type: str = "resnet",
+    # n_hidden_pol: int = 128,
+    # n_hidden_layers_pol: int = 6,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 5e-4,
+    # n_epochs_pol: int = 1000,
+    # # D4) linear regression w/ mlp features
+    # policy_type: str = "nlm-mlp",
     # n_features_pol: int = 128,
     # n_hidden_pol: int = 128,
-    # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
-    # lr_pol: float = 1e-4,
+    # n_hidden_layers_pol: int = 4,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 1000,
-    # D4) linear regression w/ sn-dnn & rf features
+    # # D5) linear regression w/ resnet features
+    # policy_type: str = "nlm-resnet",
+    # n_features_pol: int = 128,
+    # n_hidden_pol: int = 128,
+    # n_hidden_layers_pol: int = 4,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 5e-4,
+    # n_epochs_pol: int = 1000,
+    # D6) linear regression w/ spec.norm.-resnet & rf features
     policy_type: str = "snngp",
-    n_features_pol: int = 128,
+    n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     n_hidden_pol: int = 128,
     n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
-    lr_pol: float = 1e-4,
+    lr_pol: float = 5e-4,
     n_epochs_pol: int = 1000,
     ############
     ## i2c solver ##
@@ -1349,24 +1375,36 @@ def experiment(
     )
 
     ### global dynamics model ###
+    @dataclass
+    class DetDyn_SinCos1_Uclamp(DeterministicDynamics):
+        def model_call(self, xu, **kwargs):
+            x, u = xu[..., :dim_x], xu[..., dim_x]
+            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+            xu_sincos = sincos_angle(xu)
+            delta_x = self.model(xu_sincos)  # output states are deltas
+            return x.detach() + delta_x, xu
+
+    @dataclass
+    class LBMDyn_SinCos1_Uclamp(StochasticDynamics):
+        def model_call(self, xu, **kwargs):
+            x, u = xu[..., :dim_x], xu[..., dim_x]
+            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+            xu_sincos = sincos_angle(xu)
+            # output states are deltas
+            delta_mu, cov, cov_in, cov_out = self.model(xu_sincos)
+            # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
+            cov_bij = einops.einsum(cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2")
+            mu = x.detach() + delta_mu
+            return mu, cov_bij, xu
+
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
             model=environment,
             approximate_inference=QuadratureInference(dim_xu, quad_params),
         )
     elif dyn_model_type == "mlp":
-
-        @dataclass
-        class MLPDynamics(DeterministicDynamics):
-            def model_call(self, xu, **kwargs):
-                x, u = xu[..., :dim_x], xu[..., dim_x]
-                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-                xu_sincos = sincos_angle(xu)
-                delta_x = self.model(xu_sincos)  # output states are deltas
-                return x.detach() + delta_x, xu
-
-        global_dynamics = MLPDynamics(
-            model=NeuralNetwork(
+        global_dynamics = DetDyn_SinCos1_Uclamp(
+            model=MultiLayerPerceptron(
                 dim_xu + 1,  # sin,cos of theta
                 n_hidden_layers_dyn,
                 n_hidden_dyn,
@@ -1374,40 +1412,54 @@ def experiment(
             ),
             approximate_inference=QuadratureInference(dim_xu, quad_params),
         )
-
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics.predict(x), y)
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
-    elif dyn_model_type == "nlm":
-
-        @dataclass
-        class NLMDynamics(StochasticDynamics):
-            def model_call(self, xu, **kwargs):
-                x, u = xu[..., :dim_x], xu[..., dim_x]
-                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-                xu_sincos = sincos_angle(xu)
-                # output states are deltas
-                delta_mu, cov, cov_in, cov_out = self.model(xu_sincos)
-                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
-                cov_bij = einops.einsum(
-                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
-                )
-                mu = x.detach() + delta_mu
-                return mu, cov_bij, xu
-
-        global_dynamics = NLMDynamics(
-            model=NeuralLinearModel(
+    elif dyn_model_type == "resnet":
+        global_dynamics = DetDyn_SinCos1_Uclamp(
+            model=ResidualNetwork(
                 dim_xu + 1,  # sin,cos of theta
+                n_hidden_layers_dyn,
+                n_hidden_dyn,
                 dim_x,
+            ),
+            approximate_inference=QuadratureInference(dim_xu, quad_params),
+        )
+        # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
+        loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics.predict(x), y)
+        opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
+    elif dyn_model_type == "nlm-mlp":
+        global_dynamics = LBMDyn_SinCos1_Uclamp(
+            model=NeuralLinearModelMLP(
+                dim_xu + 1,  # sin,cos of theta
+                n_hidden_layers_dyn,
                 n_hidden_dyn,
                 n_features_dyn,
-                n_hidden_layers_dyn,
+                dim_x,
             ),
             approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
         )
-
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
+        def loss_fn_dyn(xu, x_next):
+            x, u = xu[..., :dim_x], xu[..., dim_x]
+            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
+            xu_sincos = sincos_angle(xu)
+            delta_x = x_next - x
+            return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
+        opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
+    elif dyn_model_type == "nlm-resnet":
+        global_dynamics = LBMDyn_SinCos1_Uclamp(
+            model=NeuralLinearModelResNet(
+                dim_xu + 1,  # sin,cos of theta
+                n_hidden_layers_dyn,
+                n_hidden_dyn,
+                n_features_dyn,
+                dim_x,
+            ),
+            approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
+        )
+        # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         def loss_fn_dyn(xu, x_next):
             x, u = xu[..., :dim_x], xu[..., dim_x]
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
@@ -1417,35 +1469,17 @@ def experiment(
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "snngp":
-
-        @dataclass
-        class SNNGPDynamics(StochasticDynamics):
-            def model_call(self, xu, **kwargs):
-                x, u = xu[..., :dim_x], xu[..., dim_x]
-                u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-                xu_sincos = sincos_angle(xu)
-                # output states are deltas
-                delta_mu, cov, cov_in, cov_out = self.model(xu_sincos)
-                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
-                cov_bij = einops.einsum(
-                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
-                )
-                mu = x.detach() + delta_mu
-                return mu, cov_bij, xu
-
-        global_dynamics = SNNGPDynamics(
+        global_dynamics = LBMDyn_SinCos1_Uclamp(
             model=SpectralNormalizedNeuralGaussianProcess(
                 dim_xu + 1,  # sin,cos of theta
-                dim_x,
+                n_hidden_layers_dyn,
                 n_hidden_dyn,
                 n_features_dyn,
-                n_hidden_layers_dyn,
+                dim_x,
             ),
             approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
         )
-
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
-
         def loss_fn_dyn(xu, x_next):
             x, u = xu[..., :dim_x], xu[..., dim_x]
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
@@ -1467,11 +1501,19 @@ def experiment(
     )
 
     ### global policy model ###
+    @dataclass
+    class LBMPol(StochasticPolicy):
+        def model_call(self, x, **kwargs):
+            mu, cov, cov_in, cov_out = self.model(x)
+            # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
+            cov_bij = einops.einsum(cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2")
+            return mu, cov_bij
+
     if policy_type == "tvlg":
         global_policy = deepcopy(local_policy)
     elif policy_type == "mlp":
         global_policy = DeterministicPolicy(
-            model=NeuralNetwork(
+            model=MultiLayerPerceptron(
                 dim_x,
                 n_hidden_layers_pol,
                 n_hidden_pol,
@@ -1482,58 +1524,59 @@ def experiment(
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
         loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy.predict(x), y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
-    elif policy_type == "nlm":
-
-        @dataclass
-        class NLMPolicy(StochasticPolicy):
-            def model_call(self, x, **kwargs):
-                mu, cov, cov_in, cov_out = self.model(x)
-                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
-                cov_bij = einops.einsum(
-                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
-                )
-                return mu, cov_bij
-
-        global_policy = NLMPolicy(
-            model=NeuralLinearModel(
+    elif policy_type == "resnet":
+        global_policy = DeterministicPolicy(
+            model=ResidualNetwork(
                 dim_x,
+                n_hidden_layers_pol,
+                n_hidden_pol,
                 dim_u,
+            ),
+            approximate_inference=QuadratureInference(dim_x, quad_params),
+        )
+        # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
+        loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy.predict(x), y)
+        opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
+    elif policy_type == "nlm-mlp":
+        global_policy = LBMPol(
+            model=NeuralLinearModelMLP(
+                dim_x,
+                n_hidden_layers_pol,
                 n_hidden_pol,
                 n_features_pol,
-                n_hidden_layers_pol,
+                dim_u,
             ),
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
-
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
-
+        loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
+        opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
+    elif policy_type == "nlm-resnet":
+        global_policy = LBMPol(
+            model=NeuralLinearModelResNet(
+                dim_x,
+                n_hidden_layers_pol,
+                n_hidden_pol,
+                n_features_pol,
+                dim_u,
+            ),
+            approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
+        )
+        # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "snngp":
-
-        @dataclass
-        class SNNGPPolicy(StochasticPolicy):
-            def model_call(self, x, **kwargs):
-                mu, cov, cov_in, cov_out = self.model(x)
-                # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
-                cov_bij = einops.einsum(
-                    cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2"
-                )
-                return mu, cov_bij
-
-        global_policy = SNNGPPolicy(
-            model=NeuralLinearModel(
+        global_policy = LBMPol(
+            model=SpectralNormalizedNeuralGaussianProcess(
                 dim_x,
-                dim_u,
+                n_hidden_layers_pol,
                 n_hidden_pol,
                 n_features_pol,
-                n_hidden_layers_pol,
+                dim_u,
             ),
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
-
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
-
         loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
         approx_inf = QuadratureGaussianInference(dim_x, quad_params)

@@ -1,10 +1,15 @@
 import math
 
+import einops
 import torch
 import torch.nn as nn
 from check_shape import check_shape
 
-from src.feature_fns.nns import NeuralNetwork, NormalizedResidualNetwork
+from src.feature_fns.nns import (
+    MultiLayerPerceptron,
+    ResidualNetwork,
+    SpectralNormResidualNetwork,
+)
 from src.utils.whitening import data_whitening
 
 
@@ -190,22 +195,33 @@ class LinearBayesianModel(nn.Module):
 class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
     # d_approx = 512  # RFFs require ~512-1024 for accuracy
 
-    def __init__(self, dim_x, dim_y, dim_hidden, dim_features, n_hidden=2):
+    def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
         # super().__init__(dim_x, dim_y, self.d_approx)
         super().__init__(dim_x, dim_y, dim_features)
         # self.features = NormalizedResidualNetwork(
         # dim_x, self.d_approx, dim_features, n_hidden
         # )
-        self.features = NormalizedResidualNetwork(
+        self.features = SpectralNormResidualNetwork(
             dim_x,
-            n_hidden,
+            n_hidden_layers,
             dim_hidden,
             dim_features,
         )
 
 
 @data_whitening
-class NeuralLinearModel(LinearBayesianModel):
-    def __init__(self, dim_x, dim_y, dim_hidden, dim_features, n_hidden=1):
+class NeuralLinearModelMLP(LinearBayesianModel):
+    def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
         super().__init__(dim_x, dim_y, dim_features)
-        self.features = NeuralNetwork(dim_x, n_hidden, dim_hidden, dim_features)
+        self.features = MultiLayerPerceptron(
+            dim_x, n_hidden_layers, dim_hidden, dim_features
+        )
+
+
+@data_whitening
+class NeuralLinearModelResNet(LinearBayesianModel):
+    def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
+        super().__init__(dim_x, dim_y, dim_features)
+        self.features = ResidualNetwork(
+            dim_x, n_hidden_layers, dim_hidden, dim_features
+        )
