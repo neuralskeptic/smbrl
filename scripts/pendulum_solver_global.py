@@ -1894,6 +1894,38 @@ def experiment(
             plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
             plt.show()
 
+        #### T: collect local policy rollouts
+        # Roll out local policy mixture to get samples to train global policy
+        # train and test rollouts (env & local policy)
+        logger.weak_line()
+        logger.info("START Collecting Local Policy Rollouts")
+        # # a) rollout mixture (mean local policy)
+        # exploration_policy = copy(local_mixture_policy)  # to overwrite .predict()
+        # exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
+        # for i in trange(n_pol_rollout_episodes):  # 80 % train
+        #     state = initial_state_distribution.sample()
+        #     s, a, ss = environment.run(state, exploration_policy, horizon)
+        #     pol_train_buffer.add(s, a)
+        # for i in trange(max(1, int(n_pol_rollout_episodes / 4))):  # 20 % test
+        #     state = initial_state_distribution.sample()
+        #     s, a, ss = environment.run(state, exploration_policy, horizon)
+        #     pol_test_buffer.add(s, a)
+        # b) rollout every local policy separately
+        n_rollouts_vectorized = int(n_pol_rollout_episodes / n_i2c_local_policies)
+        exploration_policy = copy(local_vectorized_policy)  # to overwrite .predict()
+        # exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
+        for i in trange(n_rollouts_vectorized):  # 80 % train
+            state = s0_dist.sample()
+            s, a, ss = environment.run(state, exploration_policy, horizon)
+            for i_local in range(n_i2c_local_policies):
+                pol_train_buffer.add(s[:, i_local, :], a[:, i_local, :])
+        for i in trange(max(1, int(n_rollouts_vectorized / 4))):  # 20 % test
+            state = s0_dist.sample()
+            s, a, ss = environment.run(state, exploration_policy, horizon)
+            for i_local in range(n_i2c_local_policies):
+                pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
+        logger.info("END Collecting Loca Policy Rollouts")
+
         # Fit global policy to local policy
         if policy_type == "tvlg":
             global_policy = deepcopy(local_mixture_policy)  # average gains
@@ -1903,36 +1935,6 @@ def experiment(
             # global_policy.model.k_opt = local_vectorized_policy.model.k_opt[:, 0, :]
             # global_policy.model.K_opt = local_vectorized_policy.model.K_opt[:, 0, :]
         else:
-            #### T: collect policy rollouts
-            # Roll out local policy mixture to get samples to train global policy
-            # train and test rollouts (env & exploration policy)
-            logger.weak_line()
-            logger.info("START Collecting Policy Rollouts")
-            # # a) rollout mixture (mean local policy)
-            # for i in trange(n_pol_rollout_episodes):  # 80 % train
-            #     state = initial_state_distribution.sample()
-            #     s, a, ss = environment.run(state, local_mixture_policy, horizon)
-            #     pol_train_buffer.add(s, a)
-            # for i in trange(max(1, int(n_pol_rollout_episodes / 4))):  # 20 % test
-            #     state = initial_state_distribution.sample()
-            #     s, a, ss = environment.run(state, local_mixture_policy, horizon)
-            #     pol_test_buffer.add(s, a)
-            # b) rollout every local policy separately
-            n_rollouts_vectorized = int(n_pol_rollout_episodes / n_i2c_local_policies)
-            for i in trange(n_rollouts_vectorized):  # 80 % train
-                state = s0_dist.sample()
-                s, a, ss = environment.run(state, local_vectorized_policy, horizon)
-                for i_local in range(n_i2c_local_policies):
-                    pol_train_buffer.add(s[:, i_local, :], a[:, i_local, :])
-            for i in trange(max(1, int(n_rollouts_vectorized / 4))):  # 20 % test
-                state = s0_dist.sample()
-                s, a, ss = environment.run(state, local_vectorized_policy, horizon)
-                for i_local in range(n_i2c_local_policies):
-                    pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
-            logger.info("END Collecting Policy Rollouts")
-
-            # min KL[mean local_policy || global_policy]
-            # should do: global_policy.predict(x, t)
             logger.weak_line()
             logger.info("START Training Policy")
             global_policy.to(device)  # in-place
@@ -2004,53 +2006,6 @@ def experiment(
                 results_dir / "pol_model_{i_iter}.pth",
             )
             logger.info("END Training policy")
-
-            ### tvlg vectorized vs env
-            xs, us, xxs = environment.run(
-                s0_dist.sample(), local_vectorized_policy, horizon
-            )
-            environment.plot(xs, us)
-            plt.suptitle(f"tvlg vec policy vs env")
-
-            ### tvlg vec vs dyn model
-            xs = torch.zeros((horizon, dim_x))
-            us = torch.zeros((horizon, dim_u))
-            state = initial_state[None, :]
-            for t in range(horizon):
-                action = local_vectorized_policy.predict(state, t=t)
-                # breakpoint()
-                xu = torch.cat((state, action), dim=-1)
-                xs[t, :] = state
-                us[t, :] = action
-                state = global_dynamics.predict(xu)
-            environment.plot(xs, us)  # env.plot does not use env, it only plots
-            plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
-
-            # ### local mixture vs env
-            # xs, us, xxs = environment.run(initial_state, local_mixture_policy, horizon)
-            # environment.plot(xs, us)
-            # plt.suptitle(f"tvlg mixture policy vs env")
-
-            ### global policy vs env
-            xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-            environment.plot(xs, us)
-            plt.suptitle(f"{policy_type} policy vs env")
-
-            ### global policy vs dyn model
-            xs = torch.zeros((horizon, dim_x))
-            us = torch.zeros((horizon, dim_u))
-            state = initial_state[None, :]
-            for t in range(horizon):
-                action = global_policy.predict(state, t=t)
-                xu = torch.cat((state, action), dim=-1)
-                xs[t, :] = state
-                us[t, :] = action
-                state = global_dynamics.predict(xu)
-            environment.plot(xs, us)  # env.plot does not use env, it only plots
-            plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-
-            plt.show()
-            breakpoint()
 
             #### T: plot policy
             if plot_policy:
@@ -2132,6 +2087,54 @@ def experiment(
                 plt.savefig(results_dir / f"pol_eval_{i_iter}.png", dpi=150)
                 if plotting:
                     plt.show()
+
+    # if plotting:  # TODO change to save plots and show if plotting
+    #     ### tvlg vectorized vs env
+    #     xs, us, xxs = environment.run(
+    #         s0_dist.sample(), local_vectorized_policy, horizon
+    #     )
+    #     environment.plot(xs, us)
+    #     plt.suptitle(f"tvlg vec policy vs env")
+
+    #     ### tvlg vec vs dyn model
+    #     xs = torch.zeros((horizon, dim_x))
+    #     us = torch.zeros((horizon, dim_u))
+    #     state = initial_state[None, :]
+    #     for t in range(horizon):
+    #         action = local_vectorized_policy.predict(state, t=t)
+    #         # breakpoint()
+    #         xu = torch.cat((state, action), dim=-1)
+    #         xs[t, :] = state
+    #         us[t, :] = action
+    #         state = global_dynamics.predict(xu)
+    #     environment.plot(xs, us)  # env.plot does not use env, it only plots
+    #     plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
+
+    #     # ### local mixture vs env
+    #     # xs, us, xxs = environment.run(initial_state, local_mixture_policy, horizon)
+    #     # environment.plot(xs, us)
+    #     # plt.suptitle(f"tvlg mixture policy vs env")
+
+    #     ### global policy vs env
+    #     xs, us, xxs = environment.run(initial_state, global_policy, horizon)
+    #     environment.plot(xs, us)
+    #     plt.suptitle(f"{policy_type} policy vs env")
+
+    #     ### global policy vs dyn model
+    #     xs = torch.zeros((horizon, dim_x))
+    #     us = torch.zeros((horizon, dim_u))
+    #     state = initial_state[None, :]
+    #     for t in range(horizon):
+    #         action = global_policy.predict(state, t=t)
+    #         xu = torch.cat((state, action), dim=-1)
+    #         xs[t, :] = state
+    #         us[t, :] = action
+    #         state = global_dynamics.predict(xu)
+    #     environment.plot(xs, us)  # env.plot does not use env, it only plots
+    #     plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+
+    #     # plt.show()
+    #     # breakpoint()
 
     ####################################################################################################################
     #### EVALUATION
