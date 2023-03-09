@@ -468,6 +468,10 @@ class StochasticModel(Model):
         else:
             return mu
 
+    def predict_dist(self, x: torch.Tensor, **kwargs) -> MultivariateGaussian:
+        mu, cov, x_ = self.call_and_inputs(x, **kwargs)
+        return MultivariateGaussian(mu, cov)
+
 
 @dataclass
 class StochasticPolicy(StochasticModel):
@@ -825,7 +829,7 @@ class PseudoPosteriorSolver(CudaAble):
                 # plot_trajectory_distribution(sa_filter, f"filter {i}")
                 plot_trajectory_distribution(sa_smoother, f"posterior {i}")
                 plt.show()
-        return policy
+        return policy, sa_smoother
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
         posterior_cost = self.cost.predict(
@@ -1511,6 +1515,32 @@ def experiment(
             cov_bij = einops.einsum(cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2")
             return mu, cov_bij
 
+    def m_projection_loss(
+        d_pred: MultivariateGaussian, d_target: MultivariateGaussian
+    ) -> torch.Tensor:
+        """
+        m-projection (moment matching): D_KL[d_target || d_pred]
+        when minimizing this w.r.t. d_target parameters (phi), the KL simplifies
+        note: with Identity pred cov (=eye), the loss becomes MSE(mean_pred, mean_target)
+        """
+        mu_pred = d_pred.mean
+        cov_pred = d_pred.covariance
+        mu_target = d_target.mean
+        cov_target = d_target.covariance
+        # part1: trace(cov_pred**-1 @ cov_target)
+        part1 = einops.einsum(
+            torch.linalg.solve(cov_pred, cov_target), "... a a -> ..."
+        )
+        # part2: (mu_pred - mu_target).T @ cov_pred.inverse() @ (mu_pred - mu_target)
+        mu_diff = mu_pred - mu_target
+        part2 = einops.einsum(
+            mu_diff, cov_pred.inverse(), mu_diff, "... x1, ... x1 x2, ... x2 -> ..."
+        )
+        part3 = torch.logdet(cov_pred)
+        # part1 = part3 = torch.zeros_like(part1)  # TODO debug
+        # part2 = torch.zeros_like(part2)  # TODO debug: match only cov
+        return sum(part1 + part2 + part3)  # sum over all batch dims
+
     if policy_type == "tvlg":
         global_policy = deepcopy(local_policy)
     elif policy_type == "mlp":
@@ -1524,7 +1554,6 @@ def experiment(
             approximate_inference=QuadratureInference(dim_x, quad_params),
         )
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
-        loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy.predict(x), y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "resnet":
         global_policy = DeterministicPolicy(
@@ -1537,7 +1566,6 @@ def experiment(
             approximate_inference=QuadratureInference(dim_x, quad_params),
         )
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
-        loss_fn_pol = lambda x, y: torch.nn.MSELoss()(global_policy.predict(x), y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm-mlp":
         global_policy = LBMPol(
@@ -1551,7 +1579,6 @@ def experiment(
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
-        loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm-resnet":
         global_policy = LBMPol(
@@ -1565,7 +1592,6 @@ def experiment(
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
-        loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "snngp":
         global_policy = LBMPol(
@@ -1579,7 +1605,6 @@ def experiment(
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
-        loss_fn_pol = lambda x, y: -global_policy.model.elbo(x, y)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
         approx_inf = QuadratureGaussianInference(dim_x, quad_params)
 
@@ -1848,7 +1873,7 @@ def experiment(
         init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
         s0_dist = MultivariateGaussian(init_mean, init_covar)
         # learn a batch of local policies
-        local_vectorized_policy = i2c_solver(
+        local_vectorized_policy, sa_posterior = i2c_solver(
             n_iteration=n_iter_solver,
             initial_state=s0_dist,
             policy_prior=global_policy if i_iter != 0 else None,
@@ -1891,38 +1916,6 @@ def experiment(
             plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
             plt.show()
 
-        #### T: collect local policy rollouts
-        # Roll out local policy mixture to get samples to train global policy
-        # train and test rollouts (env & local policy)
-        logger.weak_line()
-        logger.info("START Collecting Local Policy Rollouts")
-        # # a) rollout mixture (mean local policy)
-        # exploration_policy = copy(local_mixture_policy)  # to overwrite .predict()
-        # exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
-        # for i in trange(n_pol_rollout_episodes):  # 80 % train
-        #     state = initial_state_distribution.sample()
-        #     s, a, ss = environment.run(state, exploration_policy, horizon)
-        #     pol_train_buffer.add(s, a)
-        # for i in trange(max(1, int(n_pol_rollout_episodes / 4))):  # 20 % test
-        #     state = initial_state_distribution.sample()
-        #     s, a, ss = environment.run(state, exploration_policy, horizon)
-        #     pol_test_buffer.add(s, a)
-        # b) rollout every local policy separately
-        n_rollouts_vectorized = int(n_pol_rollout_episodes / n_i2c_local_policies)
-        exploration_policy = copy(local_vectorized_policy)  # to overwrite .predict()
-        # exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
-        for i in trange(n_rollouts_vectorized):  # 80 % train
-            state = s0_dist.sample()
-            s, a, ss = environment.run(state, exploration_policy, horizon)
-            for i_local in range(n_i2c_local_policies):
-                pol_train_buffer.add(s[:, i_local, :], a[:, i_local, :])
-        for i in trange(max(1, int(n_rollouts_vectorized / 4))):  # 20 % test
-            state = s0_dist.sample()
-            s, a, ss = environment.run(state, exploration_policy, horizon)
-            for i_local in range(n_i2c_local_policies):
-                pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
-        logger.info("END Collecting Loca Policy Rollouts")
-
         # ### plot data space coverage ###
         # if plot_data:
         #     cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
@@ -1963,15 +1956,57 @@ def experiment(
             global_policy.to(device)  # in-place
             torch.set_grad_enabled(True)
 
-            #### T: train policy
+            #### T: distill global policy
+            # store marginals of joint (smoothed) posterior in buffer
+            # (state covariance not needed for moment matchin: policy has no cov input)
+            # TODO vec?
+            for dist_vec_t in sa_posterior:
+                s_dist = dist_vec_t.marginalize(slice(0, dim_x))
+                a_dist = dist_vec_t.marginalize(slice(dim_x, None))
+                pol_train_buffer.add([s_dist.mean, a_dist.mean, a_dist.covariance])
+
             _train_losses = []
             for i_epoch_pol in trange(n_epochs_pol + 1):
                 for i_minibatch, minibatch in enumerate(pol_train_buffer):
-                    x, y = minibatch
+                    s_mean, a_mean, a_cov = minibatch
                     opt_pol.zero_grad()
-                    loss = loss_fn_pol(x, y)
+                    if isinstance(global_policy, StochasticPolicy):
+                        a_pred_dist = global_policy.predict_dist(s_mean)
+                        a_dist = MultivariateGaussian(a_mean, a_cov)
+                        loss = m_projection_loss(a_pred_dist, a_dist)
+                    else:
+                        a_pred_mean = global_policy.predict(s_mean)
+                        loss = torch.nn.MSELoss()(a_pred_mean, a_mean)
                     loss.backward()
                     opt_pol.step()
+
+                    def visualize_training():
+                        fig, axs = plt.subplots(2)
+                        s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
+                        if isinstance(global_policy, StochasticPolicy):
+                            a_pred_dist = global_policy.predict_dist(s_mean)
+                            a_pred_mean = a_pred_dist.mean
+                            a_pred_cov_diag = einops.einsum(
+                                a_pred_dist.covariance, "... x x -> ... x"
+                            )
+                        else:
+                            a_pred_mean = global_policy.predict(s_mean)
+                        axs[0].plot(a_mean.detach().cpu(), label="data")
+                        axs[0].plot(a_pred_mean.detach().cpu(), label="pred")
+                        axs[0].set_ylabel("mean")
+                        a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
+                        axs[1].plot(a_cov_diag.detach().cpu(), label="data")
+                        if isinstance(global_policy, StochasticPolicy):
+                            axs[1].plot(a_pred_cov_diag.detach().cpu(), label="pred")
+                        axs[1].set_ylabel("variance")
+                        axs[0].legend()
+                        fig.suptitle(
+                            f"{policy_type} moment matching (epoch {pol_epoch_counter})"
+                        )
+                        plt.show()
+
+                    visualize_training()
+
                     pol_loss_trace.append(loss.detach().item())
                     _train_losses.append(pol_loss_trace[-1])
                     logger.log_data(
