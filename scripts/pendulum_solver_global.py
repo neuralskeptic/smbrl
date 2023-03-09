@@ -7,7 +7,7 @@ from copy import copy, deepcopy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Sequence
 
 import einops
 import matplotlib.pyplot as plt
@@ -44,18 +44,15 @@ class MultivariateGaussian(Distribution):
 
     mean: torch.Tensor
     covariance: torch.Tensor
-    cross_covariance: torch.Tensor
-    previous_mean: torch.Tensor
-    previous_covariance: torch.Tensor
+    cross_covariance: torch.Tensor = None
+    previous_mean: torch.Tensor = None
+    previous_covariance: torch.Tensor = None
 
     def marginalize(self, indices):
         """Marginalize out indices"""
         return MultivariateGaussian(
             self.mean[..., indices],
             self.covariance[..., indices, indices],
-            None,
-            None,
-            None,
         )
 
     def full_joint(self, reverse=True):
@@ -85,7 +82,7 @@ class MultivariateGaussian(Distribution):
                 ),
                 axis=-2,
             )
-        return MultivariateGaussian(mean, covariance, None, None, None)
+        return MultivariateGaussian(mean, covariance)
 
     def get_previous_loglikelihood(self):
         dim = self.previous_mean.shape[0]
@@ -172,7 +169,7 @@ class LinearizationInnovation(LinearizationInference):
             import pdb
 
             pdb.set_trace()
-        return MultivariateGaussian(mean, covariance, None, None, None)
+        return MultivariateGaussian(mean, covariance)
 
 
 @dataclass
@@ -358,7 +355,7 @@ class QuadratureImportanceSamplingInnovation(QuadratureInference):
         )
         sigma_x_T = einops.rearrange(sigma_x, "... x1 x2 -> ... x2 x1")  # transpose
         sigma_x = 0.5 * (sigma_x + sigma_x_T)  # TODO why this?
-        return MultivariateGaussian(mu_x, sigma_x, None, None, None)
+        return MultivariateGaussian(mu_x, sigma_x)
 
 
 def linear_gaussian_smoothing(
@@ -427,7 +424,7 @@ class Model(CudaAble):
         """calls model on input x and returns result and (unmodified) input"""
         res = self.model_call(x)
         x_ = x  # overload to modify inputs in model (e.g. action constraints)
-        if type(res) in [tuple, list]:  # multiple return values
+        if isinstance(res, Sequence):  # multiple return values
             return (*res, x_)
         else:
             return res, x_
@@ -451,7 +448,7 @@ class Model(CudaAble):
 class InputModifyingModel(Model):
     def call_and_inputs(self, x, **kwargs):  # overload to use kwargs
         *res, x_ = self.model_call(x)  # modifies x (e.g. action constraints)
-        if type(res) in [tuple, list]:  # multiple return values
+        if isinstance(res, Sequence):  # multiple return values
             return (*res, x_)
         else:
             return res, x_
@@ -1314,9 +1311,6 @@ def experiment(
         initial_state,
         1e-6 * torch.eye(dim_x),
         # 1e-2 * torch.eye(dim_x),  # more exploration
-        None,
-        None,
-        None,
     )
 
     dyn_train_buffer = ReplayBuffer(
@@ -1849,7 +1843,7 @@ def experiment(
         # sample initial states for i2c mixture (batched init_state_dist)
         init_mean = initial_state_distribution.sample([n_i2c_local_policies])
         init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
-        s0_dist = MultivariateGaussian(init_mean, init_covar, None, None, None)
+        s0_dist = MultivariateGaussian(init_mean, init_covar)
         # learn a batch of local policies
         local_vectorized_policy = i2c_solver(
             n_iteration=n_iter_solver,
