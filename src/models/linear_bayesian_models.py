@@ -98,32 +98,22 @@ class LinearBayesianModel(nn.Module):
     def sample_function(self):
         raise NotImplementedError
 
-    def forward(self, x, covs=True):
+    def forward(self, x):
         """
         Returns predictive posterior sampled on x
 
         Parameter and return shapes see below.
         """
-        unsqueezed = False
-        if len(x.shape) == 1:  # needed because n=x.shape[-2] and .mT
-            x = x.unsqueeze(0)
-            unsqueezed = True
-        n = x.shape[-2]
         phi = self.features(x)
         mu = phi @ self.post_mean
-        if covs:
-            covariance_out = self.error_cov_out()
-            covariance_feat = phi @ self.post_cov_in() @ phi.mT
-            covariance_pred_in = torch.eye(n, device=x.device) + covariance_feat
-            covariance = torch.kron(
-                covariance_out, covariance_pred_in
-            )  # only useful for 1D?
-        if unsqueezed:
-            mu = mu.squeeze(0)
-        if covs:
-            return mu, covariance, covariance_pred_in, covariance_out
-        else:
-            return mu
+        # only compute diagonal (batch cross-covariance not used)
+        vars_feat = einops.einsum(
+            phi, self.post_cov_in(), phi, "... x1, x1 x2, ... x2 -> ..."
+        )
+        vars_pred_in = vars_feat + 1
+        cov_pred_out = self.error_cov_out()
+        vars_pred = einops.einsum(vars_pred_in, cov_pred_out, "..., o1 o2 -> ... o1 o2")
+        return mu, vars_pred
 
     def elbo(self, x, y):
         """

@@ -1397,11 +1397,9 @@ def experiment(
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
             xu_sincos = sincos_angle(xu)
             # output states are deltas
-            delta_mu, cov, cov_in, cov_out = self.model(xu_sincos)
-            # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
-            cov_bij = einops.einsum(cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2")
+            delta_mu, variances = self.model(xu_sincos)
             mu = x.detach() + delta_mu
-            return mu, cov_bij, xu
+            return mu, variances, xu
 
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
@@ -1507,13 +1505,6 @@ def experiment(
     )
 
     ### global policy model ###
-    @dataclass
-    class LBMPol(StochasticPolicy):
-        def model_call(self, x, **kwargs):
-            mu, cov, cov_in, cov_out = self.model(x)
-            # cov_bij = einops.einsum(cov_out, cov_in, "o o, ... i1 i2 -> ... o i1 i2")
-            cov_bij = einops.einsum(cov_out, cov_in, "o1 o2, ... i i -> ... i o1 o2")
-            return mu, cov_bij
 
     def m_projection_loss(
         d_pred: MultivariateGaussian, d_target: MultivariateGaussian
@@ -1566,7 +1557,7 @@ def experiment(
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm-mlp":
-        global_policy = LBMPol(
+        global_policy = StochasticPolicy(
             model=NeuralLinearModelMLP(
                 dim_x,
                 n_hidden_layers_pol,
@@ -1579,7 +1570,7 @@ def experiment(
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm-resnet":
-        global_policy = LBMPol(
+        global_policy = StochasticPolicy(
             model=NeuralLinearModelResNet(
                 dim_x,
                 n_hidden_layers_pol,
@@ -1592,7 +1583,7 @@ def experiment(
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "snngp":
-        global_policy = LBMPol(
+        global_policy = StochasticPolicy(
             model=SpectralNormalizedNeuralGaussianProcess(
                 dim_x,
                 n_hidden_layers_pol,
