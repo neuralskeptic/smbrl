@@ -1312,8 +1312,8 @@ def experiment(
     initial_state = torch.Tensor([torch.pi, 0.0])
     initial_state_distribution = MultivariateGaussian(
         initial_state,
-        # 1e-6 * torch.eye(dim_x),
-        1e-2 * torch.eye(dim_x),  # more exploration
+        1e-6 * torch.eye(dim_x),
+        # 1e-2 * torch.eye(dim_x),  # more exploration
         None,
         None,
         None,
@@ -1925,6 +1925,32 @@ def experiment(
             for i_local in range(n_i2c_local_policies):
                 pol_test_buffer.add(s[:, i_local, :], a[:, i_local, :])
         logger.info("END Collecting Loca Policy Rollouts")
+
+        # ### plot data space coverage ###
+        # if plot_data:
+        #     cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
+        #     # train data
+        #     states = pol_train_buffer.xs
+        #     df = pd.DataFrame()
+        #     df[cols] = np.array(states.cpu())
+        #     df["traj_id"] = df.index // horizon
+        #     g = sns.PairGrid(df, hue="traj_id")
+        #     # g = sns.PairGrid(df)
+        #     g.map_diag(sns.histplot, hue=None)
+        #     g.map_offdiag(plt.plot)
+        #     g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
+        #     g.savefig(results_dir / "train_data.png", dpi=150)
+        #     # test data
+        #     states = pol_test_buffer.xs
+        #     df = pd.DataFrame()
+        #     df[cols] = np.array(states.cpu())
+        #     df["traj_id"] = df.index // horizon
+        #     g = sns.PairGrid(df, hue="traj_id")
+        #     # g = sns.PairGrid(df)
+        #     g.map_diag(sns.histplot, hue=None)
+        #     g.map_offdiag(plt.plot)
+        #     g.fig.suptitle(f"test data ({df.shape[0] // horizon} episodes)", y=1.01)
+        #     g.savefig(results_dir / "test_data.png", dpi=150)
 
         # Fit global policy to local policy
         if policy_type == "tvlg":

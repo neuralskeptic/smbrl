@@ -98,7 +98,7 @@ class LinearBayesianModel(nn.Module):
     def sample_function(self):
         raise NotImplementedError
 
-    def forward(self, x, grad=False, covs=True):
+    def forward(self, x, covs=True):
         """
         Returns predictive posterior sampled on x
 
@@ -109,20 +109,19 @@ class LinearBayesianModel(nn.Module):
             x = x.unsqueeze(0)
             unsqueezed = True
         n = x.shape[-2]
-        with torch.set_grad_enabled(grad):
-            phi = self.features(x)
-            mu = phi @ self.post_mean
-            if covs:
-                covariance_out = self.error_cov_out()
-                covariance_feat = phi @ self.post_cov_in() @ phi.mT
-                covariance_pred_in = torch.eye(n, device=x.device) + covariance_feat
-                covariance = torch.kron(
-                    covariance_out, covariance_pred_in
-                )  # only useful for 1D?
+        phi = self.features(x)
+        mu = phi @ self.post_mean
+        if covs:
+            covariance_out = self.error_cov_out()
+            covariance_feat = phi @ self.post_cov_in() @ phi.mT
+            covariance_pred_in = torch.eye(n, device=x.device) + covariance_feat
+            covariance = torch.kron(
+                covariance_out, covariance_pred_in
+            )  # only useful for 1D?
         if unsqueezed:
             mu = mu.squeeze(0)
         if covs:
-            return mu, covariance, covariance_feat, covariance_out
+            return mu, covariance, covariance_pred_in, covariance_out
         else:
             return mu
 
