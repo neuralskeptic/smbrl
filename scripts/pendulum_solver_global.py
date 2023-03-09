@@ -1999,6 +1999,16 @@ def experiment(
                     def visualize_training():
                         fig, axs = plt.subplots(2)
                         s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
+                        a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
+                        s_mean = einops.rearrange(
+                            s_mean, "... (n T) s -> n ... T s", T=horizon
+                        )
+                        a_mean = einops.rearrange(
+                            a_mean, "... (n T) a -> n ... T a", T=horizon
+                        )
+                        a_cov_diag = einops.rearrange(
+                            a_cov_diag, "... (n T) a -> n ... T a", T=horizon
+                        )
                         if isinstance(global_policy, StochasticPolicy):
                             a_pred_dist = global_policy.predict_dist(s_mean)
                             a_pred_mean = a_pred_dist.mean
@@ -2007,17 +2017,31 @@ def experiment(
                             )
                         else:
                             a_pred_mean = global_policy.predict(s_mean)
-                        axs[0].plot(a_mean.detach().cpu(), label="data")
-                        axs[0].plot(a_pred_mean.detach().cpu(), label="pred")
+                        n = s_mean.shape[0]
+                        for i in range(n):
+                            axs[0].plot(
+                                a_mean[i, ...].detach().cpu(), label="data", c="C0"
+                            )
+                            axs[0].plot(
+                                a_pred_mean[i, ...].detach().cpu(), label="pred", c="C1"
+                            )
+                            axs[1].plot(
+                                a_cov_diag[i, ...].detach().cpu(), label="data", c="C0"
+                            )
+                            # breakpoint()
+                            if isinstance(global_policy, StochasticPolicy):
+                                axs[1].plot(
+                                    a_pred_cov_diag[i, ...].detach().cpu(),
+                                    label="pred",
+                                    c="C1",
+                                )
                         axs[0].set_ylabel("mean")
-                        a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
-                        axs[1].plot(a_cov_diag.detach().cpu(), label="data")
-                        if isinstance(global_policy, StochasticPolicy):
-                            axs[1].plot(a_pred_cov_diag.detach().cpu(), label="pred")
                         axs[1].set_ylabel("variance")
-                        axs[0].legend()
+                        handles, labels = axs[0].get_legend_handles_labels()
+                        fig.legend(handles[:2], labels[:2], loc="lower center", ncol=2)
+                        # axs[0].legend()
                         fig.suptitle(
-                            f"{policy_type} moment matching (epoch {pol_epoch_counter})"
+                            f"{policy_type} distilling {n} i2c solutions (epoch {pol_epoch_counter})"
                         )
                         plt.show()
 
