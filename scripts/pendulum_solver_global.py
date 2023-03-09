@@ -1537,8 +1537,6 @@ def experiment(
             mu_diff, cov_pred.inverse(), mu_diff, "... x1, ... x1 x2, ... x2 -> ..."
         )
         part3 = torch.logdet(cov_pred)
-        # part1 = part3 = torch.zeros_like(part1)  # TODO debug
-        # part2 = torch.zeros_like(part2)  # TODO debug: match only cov
         return sum(part1 + part2 + part3)  # sum over all batch dims
 
     if policy_type == "tvlg":
@@ -1673,7 +1671,7 @@ def experiment(
         # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
         # exploration_policy.predict = lambda *_: torch.randn(dim_u) * 3
 
-        exploration_policy = copy(global_policy)  # only shallow copy, so no mutation
+        exploration_policy = copy(global_policy)  # to overwrite .predict()
         exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
 
         # train and test rollouts (env & exploration policy)
@@ -2070,12 +2068,10 @@ def experiment(
                 ## test policy in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
-                # s_env = pol_test_buffer.data[0][:horizon, :].cpu()  # first
-                # s_env = pol_test_buffer.data[0][-horizon:, :].cpu()  # last
-                s_env = pol_train_buffer.data[0][-horizon:, :].cpu()  # DEBUG
-                # a_env = pol_test_buffer.data[1][:horizon, :].cpu()  # first
-                # a_env = pol_test_buffer.data[1][-horizon:, :].cpu()  # last
-                a_env = pol_train_buffer.data[1][-horizon:, :].cpu()  # DEBUG
+                # s_env = pol_train_buffer.data[0][:horizon, :].cpu()  # first
+                s_env = pol_train_buffer.data[0][-horizon:, :].cpu()  # last
+                # a_env = pol_train_buffer.data[1][:horizon, :].cpu()  # first
+                a_env = pol_train_buffer.data[1][-horizon:, :].cpu()  # last
                 a_pred_pw = torch.zeros((horizon, dim_u))
                 a_pred_roll = torch.zeros((horizon, dim_u))
                 s_pred_roll = torch.zeros((horizon, dim_x))
@@ -2086,14 +2082,12 @@ def experiment(
                         a_pred_pw[t, :], var = global_policy(s_env[t, :])
                     else:
                         a_pred_pw[t, :] = global_policy(s_env[t, :])
-                    # a_pred_pw[t, :], var = local_mixture_policy(s_env[t, :], t=t)  # DEBUG
                     # rollout
                     s_pred_roll[t, :] = state
                     if isinstance(global_policy, StochasticPolicy):
                         action, var = global_policy(state)
                     else:
                         action = global_policy(state)
-                    # action, var = local_mixture_policy(state, t=t)  # DEBUG
                     a_pred_roll[t, :] = action
                     # next state
                     state, _ = environment(torch.cat([state, action], dim=0))
@@ -2287,7 +2281,7 @@ def experiment(
         ax_loss_pol.set_ylabel("loss")
         ax_loss_pol.set_title(
             f"POL {policy_type} loss "
-            f"({int(pol_train_buffer.size/horizon)} episodes, lr={lr_pol:.0e})"
+            f"({int(pol_train_buffer.size/horizon)} local solutions, lr={lr_pol:.0e})"
         )
         ax_loss_pol.legend()
         plt.savefig(results_dir / "pol_loss.png", dpi=150)
