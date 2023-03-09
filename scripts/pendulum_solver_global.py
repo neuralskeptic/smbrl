@@ -1314,18 +1314,21 @@ def experiment(
     )
 
     dyn_train_buffer = ReplayBuffer(
-        dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
+        [dim_xu, dim_x], batchsize=batch_size, device=device, max_size=1e4
     )
     dyn_test_buffer = ReplayBuffer(
-        dim_xu, dim_x, batchsize=batch_size, device=device, max_size=1e4
+        [dim_xu, dim_x], batchsize=batch_size, device=device, max_size=1e4
     )
 
     pol_train_buffer = ReplayBuffer(
-        dim_x, dim_u, batchsize=batch_size, device=device, max_size=1e4
+        [dim_x, dim_u, (dim_u, dim_u)],  # [s_mean, a_mean, a_cov]
+        batchsize=batch_size,
+        device=device,
+        max_size=1e4,
     )
-    pol_test_buffer = ReplayBuffer(
-        dim_x, dim_u, batchsize=batch_size, device=device, max_size=1e4
-    )
+    # pol_test_buffer = ReplayBuffer(
+    #     [dim_x, dim_u], batchsize=batch_size, device=device, max_size=1e4
+    # )
 
     ### approximate inference params ###
     quad_params = CubatureQuadrature(1, 0, 0)
@@ -1654,11 +1657,11 @@ def experiment(
         for i in trange(n_dyn_rollout_episodes):  # 80 % train
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
-            dyn_train_buffer.add(torch.hstack([s, a]), ss)
+            dyn_train_buffer.add([torch.hstack([s, a]), ss])
         for i in trange(max(1, int(n_dyn_rollout_episodes / 4))):  # 20 % test
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
-            dyn_test_buffer.add(torch.hstack([s, a]), ss)
+            dyn_test_buffer.add([torch.hstack([s, a]), ss])
         logger.info("END Collecting Dynamics Rollouts")
 
         #### T: train dynamics model
@@ -1696,9 +1699,9 @@ def experiment(
             _train_losses = []
             for i_epoch_dyn in trange(n_epochs_dyn + 1):
                 for i_minibatch, minibatch in enumerate(dyn_train_buffer):
-                    x, y = minibatch
+                    sa, next_s = minibatch
                     opt_dyn.zero_grad()
-                    loss = loss_fn_dyn(x, y)
+                    loss = loss_fn_dyn(sa, next_s)
                     loss.backward()
                     opt_dyn.step()
                     dyn_loss_trace.append(loss.detach().item())
@@ -1719,8 +1722,8 @@ def experiment(
                         dyn_test_buffer.shuffling = False  # TODO only for plotting?
                         _test_losses = []
                         for minibatch in dyn_test_buffer:  # TODO not whole buffer!
-                            _x_test, _y_test = minibatch
-                            _test_loss = loss_fn_dyn(_x_test, _y_test)
+                            _sa_test, _next_s_test = minibatch
+                            _test_loss = loss_fn_dyn(_sa_test, _next_s_test)
                             _test_losses.append(_test_loss.item())
                         dyn_test_loss_trace.append(np.mean(_test_losses))
                         mean_train_loss = np.mean(_train_losses)
@@ -1763,11 +1766,11 @@ def experiment(
                 ## test dynamics model in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
-                # sa_env = dyn_test_buffer.xs[:horizon, :].cpu()  # first
-                sa_env = dyn_test_buffer.xs[-horizon:, :].cpu()  # last
+                # sa_env = dyn_test_buffer.data[0][:horizon, :].cpu()  # first
+                sa_env = dyn_test_buffer.data[0][-horizon:, :].cpu()  # last
                 s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                # ss_env = dyn_test_buffer.ys[:horizon, :].cpu()  # first
-                ss_env = dyn_test_buffer.ys[-horizon:, :].cpu()  # last
+                # ss_env = dyn_test_buffer.data[1][:horizon, :].cpu()  # first
+                ss_env = dyn_test_buffer.data[1][-horizon:, :].cpu()  # last
                 ss_pred_pw = torch.zeros((horizon, dim_x))
                 ss_pred_roll = torch.zeros((horizon, dim_x))
                 state = s_env[0, :]  # for rollouts: data init state
@@ -1924,7 +1927,7 @@ def experiment(
         # if plot_data:
         #     cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
         #     # train data
-        #     states = pol_train_buffer.xs
+        #     states = pol_train_buffer.data[0]
         #     df = pd.DataFrame()
         #     df[cols] = np.array(states.cpu())
         #     df["traj_id"] = df.index // horizon
@@ -1935,7 +1938,7 @@ def experiment(
         #     g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
         #     g.savefig(results_dir / "train_data.png", dpi=150)
         #     # test data
-        #     states = pol_test_buffer.xs
+        #     states = pol_test_buffer.data[0]
         #     df = pd.DataFrame()
         #     df[cols] = np.array(states.cpu())
         #     df["traj_id"] = df.index // horizon
@@ -1984,34 +1987,34 @@ def experiment(
                 if i_epoch_pol % min(n_epochs_pol * log_frequency, log_period) == 0:
                     with torch.no_grad():
                         # test loss
-                        pol_test_buffer.shuffling = False  # TODO only for plotting?
-                        _test_losses = []
-                        for minibatch in pol_test_buffer:  # TODO not whole buffer!
-                            _x_test, _y_test = minibatch
-                            _test_loss = loss_fn_pol(_x_test, _y_test)
-                            _test_losses.append(_test_loss.item())
-                        pol_test_loss_trace.append(np.mean(_test_losses))
+                        # pol_test_buffer.shuffling = False  # TODO only for plotting?
+                        # _test_losses = []
+                        # for minibatch in pol_test_buffer:  # TODO not whole buffer!
+                        #     _x_test, _y_test = minibatch
+                        #     _test_loss = loss_fn_pol(_x_test, _y_test)
+                        #     _test_losses.append(_test_loss.item())
+                        # pol_test_loss_trace.append(np.mean(_test_losses))
                         mean_train_loss = np.mean(_train_losses)
                         _train_losses = []
                         logger.log_data(
                             step=logger._step,  # in sync with training loss
                             **{
                                 "policy/train/loss_mean": mean_train_loss,
-                                "policy/eval/loss": pol_test_loss_trace[-1],
+                                # "policy/eval/loss": pol_test_loss_trace[-1],
                             },
                         )
 
                         logstring = (
                             f"POL: Epoch {i_epoch_pol} ({pol_epoch_counter}), "
                             f"Train Loss={mean_train_loss:.2}, "
-                            f"Test Loss={pol_test_loss_trace[-1]:.2}"
+                            # f"Test Loss={pol_test_loss_trace[-1]:.2}"
                         )
                         logger.info(logstring)
 
-                # stop condition
-                if i_epoch_pol >= min_epochs_per_train:
-                    if pol_test_loss_trace[-1] < early_stop_thresh:
-                        break  # stop if test loss good
+                # # stop condition
+                # if i_epoch_pol >= min_epochs_per_train:
+                #     if pol_test_loss_trace[-1] < early_stop_thresh:
+                #         break  # stop if test loss good
 
                 # TODO save model more often than in each global iter?
                 # if n % min(n_epochs * model_save_frequency, model_save_period) == 0:
@@ -2032,10 +2035,12 @@ def experiment(
                 ## test policy in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
-                # s_env = pol_test_buffer.xs[:horizon, :].cpu()  # first
-                s_env = pol_test_buffer.xs[-horizon:, :].cpu()  # last
-                # a_env = pol_test_buffer.ys[:horizon, :].cpu()  # first
-                a_env = pol_test_buffer.ys[-horizon:, :].cpu()  # last
+                # s_env = pol_test_buffer.data[0][:horizon, :].cpu()  # first
+                # s_env = pol_test_buffer.data[0][-horizon:, :].cpu()  # last
+                s_env = pol_train_buffer.data[0][-horizon:, :].cpu()  # DEBUG
+                # a_env = pol_test_buffer.data[1][:horizon, :].cpu()  # first
+                # a_env = pol_test_buffer.data[1][-horizon:, :].cpu()  # last
+                a_env = pol_train_buffer.data[1][-horizon:, :].cpu()  # DEBUG
                 a_pred_pw = torch.zeros((horizon, dim_u))
                 a_pred_roll = torch.zeros((horizon, dim_u))
                 s_pred_roll = torch.zeros((horizon, dim_x))
@@ -2192,7 +2197,7 @@ def experiment(
     if plot_data:
         cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
         # train data
-        xs = dyn_train_buffer.xs[:, :dim_x]  # only states
+        xs = dyn_train_buffer.data[0][:, :dim_x]  # only states
         df = pd.DataFrame()
         df[cols] = np.array(xs.cpu())
         df["traj_id"] = df.index // horizon
@@ -2203,7 +2208,7 @@ def experiment(
         g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
         g.savefig(results_dir / "train_data.png", dpi=150)
         # test data
-        xs = dyn_test_buffer.xs[:, :dim_x]  # only states
+        xs = dyn_test_buffer.data[0][:, :dim_x]  # only states
         df = pd.DataFrame()
         df[cols] = np.array(xs.cpu())
         df["traj_id"] = df.index // horizon
