@@ -55,6 +55,24 @@ class MultivariateGaussian(Distribution):
             self.covariance[..., indices, indices],
         )
 
+    def condition(self, indices):
+        """Condition on means of indices"""
+        # get list of complement indices
+        other_indices = list(range(self.mean.shape[-1]))  # add all
+        other_indices[indices] = []  # remove passed indices
+        conditional_mean = self.mean[..., indices]  # ...(x - mean) cancels -> marginal!
+        this_cov = self.covariance[..., indices, indices]
+        # we can only use one complement index list at once, so we slice twice
+        other_cov = self.covariance[..., :, other_indices][..., other_indices, :]
+        cross_cov = self.covariance[..., indices, other_indices]  # Cov[this, other]
+        conditional_cov = this_cov - cross_cov @ torch.linalg.solve(
+            other_cov, cross_cov.mT
+        )
+        return MultivariateGaussian(
+            conditional_mean,
+            conditional_cov,
+        )
+
     def full_joint(self, reverse=True):
         """Convert Markovian structure into the joint multivariate Gaussian and forget history."""
         if reverse:
@@ -1946,13 +1964,22 @@ def experiment(
             torch.set_grad_enabled(True)
 
             #### T: distill global policy
-            # store marginals of joint (smoothed) posterior in buffer
-            # (state covariance not needed for moment matchin: policy has no cov input)
-            # TODO vec?
-            for dist_vec_t in sa_posterior:
+            # store marginal state and conditional action of joint (smoothed) posterior
+            # (state covariance not needed for moment matching: policy has no cov input)
+            s_means = torch.empty([horizon, n_i2c_local_policies, dim_x])
+            a_means = torch.empty([horizon, n_i2c_local_policies, dim_u])
+            a_covs = torch.empty([horizon, n_i2c_local_policies, dim_u, dim_u])
+            for t, dist_vec_t in enumerate(sa_posterior):
                 s_dist = dist_vec_t.marginalize(slice(0, dim_x))
-                a_dist = dist_vec_t.marginalize(slice(dim_x, None))
-                pol_train_buffer.add([s_dist.mean, a_dist.mean, a_dist.covariance])
+                a_dist = dist_vec_t.condition(slice(dim_x, None))
+                s_means[t, ...] = s_dist.mean
+                a_means[t, ...] = a_dist.mean
+                a_covs[t, ...] = a_dist.covariance
+            # add local solutions sequentially (not interleaved)
+            s_means = einops.rearrange(s_means, "T n ... -> (n T) ...")
+            a_means = einops.rearrange(a_means, "T n ... -> (n T) ...")
+            a_covs = einops.rearrange(a_covs, "T n ... -> (n T) ...")
+            pol_train_buffer.add([s_means, a_means, a_covs])
 
             _train_losses = []
             for i_epoch_pol in trange(n_epochs_pol + 1):
