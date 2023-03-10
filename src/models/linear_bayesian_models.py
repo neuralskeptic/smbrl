@@ -149,49 +149,46 @@ class LinearBayesianModel(nn.Module):
             prior_cov_out = self.prior_cov_out  # const
             post_cov_out = self.post_cov_out()  # learn
 
-        with torch.set_grad_enabled(True):
-            n = x.shape[0]
-            check_shape([x], [(n, self.dim_x.item())])
-            check_shape([y], [(n, self.dim_y.item())])
+        n = x.shape[0]
+        check_shape([x], [(n, self.dim_x.item())])
+        check_shape([y], [(n, self.dim_y.item())])
 
-            phi = self.features(x)
-            # expected log likelihood
-            part1a = -n / 2 * self.dim_y * math.log(2 * math.pi)
-            part1b = -n / 2 * self.error_cov_out().logdet()
-            y_pred = phi @ self.post_mean
-            part2 = -0.5 * torch.trace(
-                (1 / self.error_vars_out()).diag()
-                * (y.T @ y - 2 * y.T @ y_pred + y_pred.T @ y_pred)
-            )
-            part3 = -0.5 * (
-                torch.trace(
-                    (1 / self.error_vars_out()).diag() @ post_cov_out
-                )  # = dim_y
-                * torch.trace(self.post_cov_in() @ phi.T @ phi)
-            )
-            # kl of posterior from prior (vec kl works too: check speed?)
-            part4 = (
-                0.5
-                * torch.trace(self.prior_cov_in_inverse @ self.post_cov_in())
-                * torch.trace(prior_cov_out.inverse() @ post_cov_out)  # = dim_y
-            )
-            part5 = 0.5 * torch.trace(
-                (self.prior_mean - self.post_mean).T
-                @ self.prior_cov_in_inverse
-                @ (self.prior_mean - self.post_mean)
-                @ post_cov_out.inverse()
-            )
-            part6 = -0.5 * (
-                self.dim_features * self.dim_y
-                + self.dim_y * self.post_cov_in().logdet()
-                - self.dim_y * self.prior_cov_in_logdet
-                # + self.dim_features * post_cov_out.logdet()  # cancels...
-                # - self.dim_features * prior_cov_out.logdet()  # ... with this
-            )
+        phi = self.features(x)
+        # expected log likelihood
+        part1a = -n / 2 * self.dim_y * math.log(2 * math.pi)
+        part1b = -n / 2 * self.error_cov_out().logdet()
+        y_pred = phi @ self.post_mean
+        part2 = -0.5 * torch.trace(
+            (1 / self.error_vars_out()).diag()
+            * (y.T @ y - 2 * y.T @ y_pred + y_pred.T @ y_pred)
+        )
+        part3 = -0.5 * (
+            torch.trace((1 / self.error_vars_out()).diag() @ post_cov_out)  # = dim_y
+            * torch.trace(self.post_cov_in() @ phi.T @ phi)
+        )
+        # kl of posterior from prior (vec kl works too: check speed?)
+        part4 = (
+            0.5
+            * torch.trace(self.prior_cov_in_inverse @ self.post_cov_in())
+            * torch.trace(prior_cov_out.inverse() @ post_cov_out)  # = dim_y
+        )
+        part5 = 0.5 * torch.trace(
+            (self.prior_mean - self.post_mean).T
+            @ self.prior_cov_in_inverse
+            @ (self.prior_mean - self.post_mean)
+            @ post_cov_out.inverse()
+        )
+        part6 = -0.5 * (
+            self.dim_features * self.dim_y
+            + self.dim_y * self.post_cov_in().logdet()
+            - self.dim_y * self.prior_cov_in_logdet
+            # + self.dim_features * post_cov_out.logdet()  # cancels...
+            # - self.dim_features * prior_cov_out.logdet()  # ... with this
+        )
 
-            ellh = part1a + part1b + part2 + part3
-            kl = part4 + part5 + part6
-            return ellh - kl
+        ellh = part1a + part1b + part2 + part3
+        kl = part4 + part5 + part6
+        return ellh - kl
 
 
 @data_whitening
