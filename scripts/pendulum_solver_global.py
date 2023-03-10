@@ -1339,17 +1339,17 @@ def experiment(
     )
 
     dyn_train_buffer = ReplayBuffer(
-        [dim_xu, dim_x], batchsize=batch_size, device=device, max_size=1e4
+        [dim_xu, dim_x], batchsize=batch_size, device=device, max_size=50 * horizon
     )
     dyn_test_buffer = ReplayBuffer(
-        [dim_xu, dim_x], batchsize=batch_size, device=device, max_size=1e4
+        [dim_xu, dim_x], batchsize=batch_size, device=device, max_size=50 * horizon
     )
 
     pol_train_buffer = ReplayBuffer(
         [dim_x, dim_u, (dim_u, dim_u)],  # [s_mean, a_mean, a_cov]
         batchsize=batch_size,
         device=device,
-        max_size=1e4,
+        max_size=50 * horizon,
     )
     # pol_test_buffer = ReplayBuffer(
     #     [dim_x, dim_u], batchsize=batch_size, device=device, max_size=1e4
@@ -1418,9 +1418,9 @@ def experiment(
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
             xu_sincos = sincos_angle(xu)
             # output states are deltas
-            delta_mu, variances = self.model(xu_sincos)
+            delta_mu, cov = self.model(xu_sincos)
             mu = x.detach() + delta_mu
-            return mu, variances, xu
+            return mu, cov, xu
 
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
@@ -1548,7 +1548,7 @@ def experiment(
         part2 = einops.einsum(
             mu_diff, torch.linalg.solve(cov_pred, mu_diff), "... x, ... x -> ..."
         )
-        part3 = torch.logdet(cov_pred)
+        part3 = cov_pred.logdet()
         return sum(part1 + part2 + part3)  # sum over all batch dims
 
     if policy_type == "tvlg":
@@ -1986,6 +1986,7 @@ def experiment(
             s_means = einops.rearrange(s_means, "T n ... -> (n T) ...")
             a_means = einops.rearrange(a_means, "T n ... -> (n T) ...")
             a_covs = einops.rearrange(a_covs, "T n ... -> (n T) ...")
+            pol_train_buffer.clear()  # TODO good?
             pol_train_buffer.add([s_means, a_means, a_covs])
 
             _train_losses = []
