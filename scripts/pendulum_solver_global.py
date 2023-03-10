@@ -1163,7 +1163,7 @@ def compose(wrapper, func):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_dyn_rollout_episodes: int = 10,
+    n_dyn_rollout_episodes: int = 5,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_iter: int = 10,  # outer loop
     ## frequency or period: whichever is lower dominates
@@ -1208,9 +1208,9 @@ def experiment(
     dyn_model_type: str = "snngp",
     n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     n_hidden_dyn: int = 128,
-    n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    n_hidden_layers_dyn: int = 5,  # 2 ~ [in, h, h, out]
     lr_dyn: float = 5e-4,
-    n_epochs_dyn: int = 10,
+    n_epochs_dyn: int = 500,
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
@@ -1231,7 +1231,7 @@ def experiment(
     # # D4) linear regression w/ mlp features
     # policy_type: str = "nlm-mlp",
     # n_features_pol: int = 128,
-    # n_hidden_pol: int = 128,
+    # n_hidden_pol: int = 512,
     # n_hidden_layers_pol: int = 4,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 1000,
@@ -1239,24 +1239,24 @@ def experiment(
     # policy_type: str = "nlm-resnet",
     # n_features_pol: int = 128,
     # n_hidden_pol: int = 128,
-    # n_hidden_layers_pol: int = 4,  # 2 ~ [in, h, h, out]
+    # n_hidden_layers_pol: int = 15,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 1000,
     # D6) linear regression w/ spec.norm.-resnet & rf features
     policy_type: str = "snngp",
-    n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     n_hidden_pol: int = 128,
-    n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    n_hidden_layers_pol: int = 5,  # 2 ~ [in, h, h, out]
     lr_pol: float = 5e-4,
-    n_epochs_pol: int = 1000,
+    n_epochs_pol: int = 500,
     ############
     ## i2c solver ##
-    n_iter_solver: int = 5,  # how many i2c solver iterations to do
+    n_iter_solver: int = 10,  # how many i2c solver iterations to do
     n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
     s0_area_var: float = 1e-6,  # how much the initial states in a batch of i2c should vary
     s0_i2c_var: float = 1e-2,  # how much initial state variance i2c should start with
+    # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
-    # plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     # plot_local_policy_metrics: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
