@@ -394,9 +394,6 @@ def linear_gaussian_smoothing(
     mean = current_prior.mean + einops.einsum(J, diff_mean, "... xu u, ... u -> ... xu")
     diff_cov = future_posterior.covariance - predicted_prior.covariance
     covariance = current_prior.covariance + J.matmul(diff_cov).matmul(J.mT)
-    # if covariance.det() <= 0:  # TODO debug
-    #     # covariance = nearest_spd(covariance)
-    #     breakpoint()
     return MultivariateGaussian(
         mean,
         covariance,
@@ -847,6 +844,10 @@ class PseudoPosteriorSolver(CudaAble):
                 # plot_trajectory_distribution(sa_filter, f"filter {i}")
                 plot_trajectory_distribution(sa_smoother, f"posterior {i}")
                 plt.show()
+        # if plot_posterior:
+        #     # plot_trajectory_distribution(sa_filter, f"filter")
+        #     plot_trajectory_distribution(sa_smoother, f"posterior")
+        #     plt.show()
         return policy, sa_smoother
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
@@ -1163,7 +1164,6 @@ def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
     n_dyn_rollout_episodes: int = 10,
-    n_pol_rollout_episodes: int = 10,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_iter: int = 10,  # outer loop
     ## frequency or period: whichever is lower dominates
@@ -1543,7 +1543,7 @@ def experiment(
         # part2: (mu_pred - mu_target).T @ cov_pred.inverse() @ (mu_pred - mu_target)
         mu_diff = mu_pred - mu_target
         part2 = einops.einsum(
-            mu_diff, cov_pred.inverse(), mu_diff, "... x1, ... x1 x2, ... x2 -> ..."
+            mu_diff, torch.linalg.solve(cov_pred, mu_diff), "... x, ... x -> ..."
         )
         part3 = torch.logdet(cov_pred)
         return sum(part1 + part2 + part3)  # sum over all batch dims
@@ -1996,57 +1996,6 @@ def experiment(
                     loss.backward()
                     opt_pol.step()
 
-                    def visualize_training():
-                        fig, axs = plt.subplots(2)
-                        s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
-                        a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
-                        s_mean = einops.rearrange(
-                            s_mean, "... (n T) s -> n ... T s", T=horizon
-                        )
-                        a_mean = einops.rearrange(
-                            a_mean, "... (n T) a -> n ... T a", T=horizon
-                        )
-                        a_cov_diag = einops.rearrange(
-                            a_cov_diag, "... (n T) a -> n ... T a", T=horizon
-                        )
-                        if isinstance(global_policy, StochasticPolicy):
-                            a_pred_dist = global_policy.predict_dist(s_mean)
-                            a_pred_mean = a_pred_dist.mean
-                            a_pred_cov_diag = einops.einsum(
-                                a_pred_dist.covariance, "... x x -> ... x"
-                            )
-                        else:
-                            a_pred_mean = global_policy.predict(s_mean)
-                        n = s_mean.shape[0]
-                        for i in range(n):
-                            axs[0].plot(
-                                a_mean[i, ...].detach().cpu(), label="data", c="C0"
-                            )
-                            axs[0].plot(
-                                a_pred_mean[i, ...].detach().cpu(), label="pred", c="C1"
-                            )
-                            axs[1].plot(
-                                a_cov_diag[i, ...].detach().cpu(), label="data", c="C0"
-                            )
-                            # breakpoint()
-                            if isinstance(global_policy, StochasticPolicy):
-                                axs[1].plot(
-                                    a_pred_cov_diag[i, ...].detach().cpu(),
-                                    label="pred",
-                                    c="C1",
-                                )
-                        axs[0].set_ylabel("mean")
-                        axs[1].set_ylabel("variance")
-                        handles, labels = axs[0].get_legend_handles_labels()
-                        fig.legend(handles[:2], labels[:2], loc="lower center", ncol=2)
-                        # axs[0].legend()
-                        fig.suptitle(
-                            f"{policy_type} distilling {n} i2c solutions (epoch {pol_epoch_counter})"
-                        )
-                        plt.show()
-
-                    visualize_training()
-
                     pol_loss_trace.append(loss.detach().item())
                     _train_losses.append(pol_loss_trace[-1])
                     logger.log_data(
@@ -2055,6 +2004,60 @@ def experiment(
                             "policy/train/loss": pol_loss_trace[-1],
                         },
                     )
+
+                def visualize_training():
+                    fig, axs = plt.subplots(2)
+                    s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
+                    a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
+                    s_mean = einops.rearrange(
+                        s_mean, "... (n T) s -> n ... T s", T=horizon
+                    )
+                    a_mean = einops.rearrange(
+                        a_mean, "... (n T) a -> n ... T a", T=horizon
+                    )
+                    a_cov_diag = einops.rearrange(
+                        a_cov_diag, "... (n T) a -> n ... T a", T=horizon
+                    )
+                    if isinstance(global_policy, StochasticPolicy):
+                        a_pred_dist = global_policy.predict_dist(s_mean)
+                        a_pred_mean = a_pred_dist.mean
+                        a_pred_cov_diag = einops.einsum(
+                            a_pred_dist.covariance, "... x x -> ... x"
+                        )
+                    else:
+                        a_pred_mean = global_policy.predict(s_mean)
+                    n = s_mean.shape[0]
+                    for i in range(n):
+                        axs[0].plot(a_mean[i, ...].detach().cpu(), label="data", c="C0")
+                        axs[0].plot(
+                            a_pred_mean[i, ...].detach().cpu(), label="pred", c="C1"
+                        )
+                        axs[1].plot(
+                            a_cov_diag[i, ...].detach().cpu(), label="data", c="C0"
+                        )
+                        # breakpoint()
+                        if isinstance(global_policy, StochasticPolicy):
+                            axs[1].plot(
+                                a_pred_cov_diag[i, ...].detach().cpu(),
+                                label="pred",
+                                c="C1",
+                            )
+                    axs[0].set_ylabel("mean")
+                    axs[1].set_ylabel("variance")
+                    handles, labels = axs[0].get_legend_handles_labels()
+                    fig.legend(handles[:2], labels[:2], loc="lower center", ncol=2)
+                    # axs[0].legend()
+                    fig.suptitle(
+                        f"{policy_type} distilling {n} i2c solutions (epoch {pol_epoch_counter})"
+                    )
+                    plt.show()
+                    # TODO debug
+                    bias = global_policy.model.pred_var_bias().detach().cpu().item()
+                    error = global_policy.model.error_cov_out().detach().cpu().item()
+                    logger.info(f"bias={bias}, error={error}")
+
+                if i_epoch_pol % 100 == 0:
+                    visualize_training()
                 pol_epoch_counter += 1
 
                 # save logs & test
