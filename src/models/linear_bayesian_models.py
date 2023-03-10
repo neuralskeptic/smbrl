@@ -196,14 +196,8 @@ class LinearBayesianModel(nn.Module):
 
 @data_whitening
 class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
-    # d_approx = 512  # RFFs require ~512-1024 for accuracy
-
     def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
-        # super().__init__(dim_x, dim_y, self.d_approx)
         super().__init__(dim_x, dim_y, dim_features)
-        # self.features = NormalizedResidualNetwork(
-        # dim_x, self.d_approx, dim_features, n_hidden
-        # )
         self.features = SpectralNormResidualNetwork(
             dim_x,
             n_hidden_layers,
