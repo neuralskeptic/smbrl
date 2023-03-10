@@ -29,6 +29,9 @@ class LinearBayesianModel(nn.Module):
         self.register_buffer(
             "prior_cov_in", self.prior_var_in * torch.eye(dim_features)
         )
+        # caching
+        self.register_buffer("prior_cov_in_inverse", self.prior_cov_in.inverse())
+        self.register_buffer("prior_cov_in_logdet", self.prior_cov_in.logdet())
 
         # parameters (saved)
         self.post_mean = nn.Parameter(torch.zeros(dim_features, dim_y))
@@ -90,6 +93,9 @@ class LinearBayesianModel(nn.Module):
     def post_cov_out(self):
         lower_triangular = self.post_cov_out_tril()
         return lower_triangular @ lower_triangular.mT
+
+    def error_vars_out(self):
+        return torch.pow(self.error_vars_out_sqrt, 2)
 
     def error_cov_out(self):
         return torch.diag(torch.pow(self.error_vars_out_sqrt, 2))
@@ -154,31 +160,33 @@ class LinearBayesianModel(nn.Module):
             part1b = -n / 2 * self.error_cov_out().logdet()
             y_pred = phi @ self.post_mean
             part2 = -0.5 * torch.trace(
-                self.error_cov_out().inverse()
+                (1 / self.error_vars_out()).diag()
                 * (y.T @ y - 2 * y.T @ y_pred + y_pred.T @ y_pred)
             )
             part3 = -0.5 * (
-                torch.trace(self.error_cov_out().inverse() @ post_cov_out)  # = dim_y
+                torch.trace(
+                    (1 / self.error_vars_out()).diag() @ post_cov_out
+                )  # = dim_y
                 * torch.trace(self.post_cov_in() @ phi.T @ phi)
             )
             # kl of posterior from prior (vec kl works too: check speed?)
             part4 = (
                 0.5
-                * (torch.trace(self.prior_cov_in.inverse() @ self.post_cov_in()))
+                * torch.trace(self.prior_cov_in_inverse @ self.post_cov_in())
                 * torch.trace(prior_cov_out.inverse() @ post_cov_out)  # = dim_y
             )
             part5 = 0.5 * torch.trace(
                 (self.prior_mean - self.post_mean).T
-                @ self.prior_cov_in.inverse()
+                @ self.prior_cov_in_inverse
                 @ (self.prior_mean - self.post_mean)
                 @ post_cov_out.inverse()
             )
             part6 = -0.5 * (
                 self.dim_features * self.dim_y
                 + self.dim_y * self.post_cov_in().logdet()
-                - self.dim_y * self.prior_cov_in.logdet()
-                + self.dim_features * post_cov_out.logdet()  # cancels...
-                - self.dim_features * prior_cov_out.logdet()  # ... with this
+                - self.dim_y * self.prior_cov_in_logdet
+                # + self.dim_features * post_cov_out.logdet()  # cancels...
+                # - self.dim_features * prior_cov_out.logdet()  # ... with this
             )
 
             ellh = part1a + part1b + part2 + part3
