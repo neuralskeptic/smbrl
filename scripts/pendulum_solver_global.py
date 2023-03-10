@@ -1252,7 +1252,9 @@ def experiment(
     ############
     ## i2c solver ##
     n_iter_solver: int = 5,  # how many i2c solver iterations to do
-    n_i2c_local_policies: int = 1,  # how many local policies in the mixture i2c
+    n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
+    s0_area_var: float = 1e-6,  # how much the initial states in a batch of i2c should vary
+    s0_i2c_var: float = 1e-2,  # how much initial state variance i2c should start with
     plot_posterior: bool = True,  # plot state-action-posterior over time
     # plot_posterior: bool = True,  # plot state-action-posterior over time
     plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
@@ -1329,9 +1331,10 @@ def experiment(
     dim_x = environment.dim_x
     dim_u = environment.dim_u
     initial_state = torch.Tensor([torch.pi, 0.0])
+    # initial state variance is part of env, thus should not be hyperparam
     initial_state_distribution = MultivariateGaussian(
         initial_state,
-        1e-6 * torch.eye(dim_x),
+        1e-6 * torch.eye(dim_x),  # original
         # 1e-2 * torch.eye(dim_x),  # more exploration
     )
 
@@ -1875,14 +1878,18 @@ def experiment(
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
-        # sample initial states for i2c mixture (batched init_state_dist)
-        init_mean = initial_state_distribution.sample([n_i2c_local_policies])
-        init_covar = 1e-6 * torch.eye(dim_x).repeat(n_i2c_local_policies, 1, 1)
-        s0_dist = MultivariateGaussian(init_mean, init_covar)
+        # choose starting area for all i2c solutions
+        s0_area_mean = initial_state_distribution.sample()
+        s0_area_cov = s0_area_var * torch.eye(dim_x)
+        s0_area_dist = MultivariateGaussian(s0_area_mean, s0_area_cov)
+        # sample (similar) init state distributions for all i2c solutions
+        s0_vec_mean = s0_area_dist.sample([n_i2c_vec])
+        s0_vec_cov = s0_i2c_var * torch.eye(dim_x).repeat(n_i2c_vec, 1, 1)
+        s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
         # learn a batch of local policies
         local_vectorized_policy, sa_posterior = i2c_solver(
             n_iteration=n_iter_solver,
-            initial_state=s0_dist,
+            initial_state=s0_vec_dist,
             policy_prior=global_policy if i_iter != 0 else None,
             plot_posterior=plot_posterior and plotting,
         )
@@ -1966,9 +1973,9 @@ def experiment(
             #### T: distill global policy
             # store marginal state and conditional action of joint (smoothed) posterior
             # (state covariance not needed for moment matching: policy has no cov input)
-            s_means = torch.empty([horizon, n_i2c_local_policies, dim_x])
-            a_means = torch.empty([horizon, n_i2c_local_policies, dim_u])
-            a_covs = torch.empty([horizon, n_i2c_local_policies, dim_u, dim_u])
+            s_means = torch.empty([horizon, n_i2c_vec, dim_x])
+            a_means = torch.empty([horizon, n_i2c_vec, dim_u])
+            a_covs = torch.empty([horizon, n_i2c_vec, dim_u, dim_u])
             for t, dist_vec_t in enumerate(sa_posterior):
                 s_dist = dist_vec_t.marginalize(slice(0, dim_x))
                 a_dist = dist_vec_t.condition(slice(dim_x, None))
