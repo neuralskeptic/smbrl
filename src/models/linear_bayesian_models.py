@@ -36,6 +36,8 @@ class LinearBayesianModel(nn.Module):
         self.post_cov_in_chol = nn.Parameter(torch.eye(dim_features))
         ## parameterize in square root form to ensure positive definiteness
         self.error_vars_out_sqrt = nn.Parameter(1e-2 * torch.ones(dim_y))
+        ## parameterize in square root form to ensure positive definiteness
+        self.pred_var_bias_sqrt = nn.Parameter(1e-2 * torch.ones(dim_y))
 
         # assumptions/simplifications
         # 1: LEARN (diag) error output covariance = post out cov = prior out cov
@@ -92,6 +94,9 @@ class LinearBayesianModel(nn.Module):
     def error_cov_out(self):
         return torch.diag(torch.pow(self.error_vars_out_sqrt, 2))
 
+    def pred_var_bias(self):
+        return torch.pow(self.pred_var_bias_sqrt, 2)
+
     def error_cov_out_tril(self):
         return torch.diag(self.error_vars_out_sqrt)
 
@@ -113,6 +118,7 @@ class LinearBayesianModel(nn.Module):
         vars_pred_in = vars_feat + 1
         cov_pred_out = self.error_cov_out()
         vars_pred = einops.einsum(vars_pred_in, cov_pred_out, "..., o1 o2 -> ... o1 o2")
+        vars_pred += self.pred_var_bias()
         return mu, vars_pred
 
     def elbo(self, x, y):
