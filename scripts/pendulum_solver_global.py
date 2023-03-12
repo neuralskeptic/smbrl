@@ -18,6 +18,7 @@ import torch
 from experiment_launcher import run_experiment
 from experiment_launcher.utils import save_args
 from mushroom_rl.core.logger.logger import Logger
+from overrides import override
 from pytorch_minimize.optim import MinimizeWrapper
 from torch.autograd.functional import hessian, jacobian
 from tqdm import trange
@@ -29,6 +30,7 @@ from src.models.linear_bayesian_models import (
     NeuralLinearModelResNet,
     SpectralNormalizedNeuralGaussianProcess,
 )
+from src.utils.decorator_factory import Decorator
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
 
@@ -123,11 +125,11 @@ class MultivariateGaussian(Distribution):
             self.covariance,
         )
 
-    def sample(self, *args, **kwargs):
+    def sample(self, *args, **kw):
         """Works for batched mean and covariance"""
         return torch.distributions.MultivariateNormal(
             self.mean, self.covariance
-        ).sample(*args, **kwargs)
+        ).sample(*args, **kw)
 
     def to(self, device):
         self.mean = self.mean.to(device)
@@ -406,7 +408,7 @@ def linear_gaussian_smoothing(
 class CudaAble(ABC):
     @abstractmethod
     def to(self, device):
-        pass
+        raise NotImplementedError
 
     def cpu(self):
         self.to("cpu")
@@ -422,47 +424,59 @@ class Stateless:
 
 @dataclass
 class Model(CudaAble):
-    approximate_inference: QuadratureInference
-    """QuadratureInference.__call__:
-    (x -> x_mu, x_cov, x_), MultivariateGaussian -> MultivariateGaussian
-    => takes function that also returns (possibly) clamped input x_"""
+    r"""Abstract callable Model wrapper
+
+    Dataclass objects:
+
+    - Callable approx.inf. method which a takes function that also returns (possibly)
+      clamped input x_:
+        __call__: Callable(x -> x_mu, x_cov, x_), MultivariateGaussian -> MultivariateGaussian
+    - Callable model which takes an input x and has a variable interface.
+      Implement the interface by wrapping or overwriting __call__
+        model.__call__: x, **_ -> *_
+    """
+    approximate_inference: Callable
     model: Callable
-    """model.__call__: x, **_ -> ???"""
 
-    def __call__(self, x, **kwargs):
-        return self.model_call(x, **kwargs)
+    def __call__(self, x: torch.Tensor, **kw):
+        """calls model on input x \n
+        override to use kwargs"""
+        return self.model(x)
 
-    def model_call(self, x, **kwargs):  # override to wrap call to model
-        return self.model(x, **kwargs)
-
-    def call_and_inputs(self, x, **kwargs):  # overload to use kwargs
-        """calls model on input x and returns result and (unmodified) input"""
-        res = self.model_call(x)
-        x_ = x  # overload to modify inputs in model (e.g. action constraints)
-        if isinstance(res, Sequence):  # multiple return values
-            return (*res, x_)
+    def call_and_inputs(self, x: torch.Tensor, **kw):  # override to use kwargs
+        """calls model on input x and returns result and (unmodified) input \n
+        override to use kwargs & to modify input x"""
+        res = self.__call__(x, **kw)
+        x_ = x  # override to modify inputs in model (e.g. action constraints)
+        if isinstance(res, Sequence):  # prevent nested tuples
+            return *res, x_
         else:
             return res, x_
 
-    def propagate(self, dist: MultivariateGaussian, **kwargs) -> MultivariateGaussian:
-        """propagate dist through model using approximate inference"""
-        fun = partial(self.call_and_inputs, **kwargs)
+    def propagate(self, dist: MultivariateGaussian, **kw) -> MultivariateGaussian:
+        """propagate dist through model using approximate inference \n
+        override to use kwargs"""
+        fun = partial(self.call_and_inputs, **kw)
         return self.approximate_inference(fun, dist)
 
-    def predict(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
-        """predict with model (default: not stochastic)"""
-        y, x_ = self.call_and_inputs(x, **kwargs)
-        return y
+    @abstractmethod
+    def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
+        """returns single prediction for input x \n
+        abstract method: override"""
+        raise NotImplementedError
 
     def to(self, device):
+        """returns single prediction for input x \n
+        override to add or remove fields"""
         self.model.to(device)
         self.approximate_inference.to(device)
 
 
 @dataclass
 class InputModifyingModel(Model):
-    def call_and_inputs(self, x, **kwargs):  # overload to use kwargs
-        *res, x_ = self.model_call(x)  # modifies x (e.g. action constraints)
+    @override
+    def call_and_inputs(self, x, **kw):  # overload to use kwargs
+        *res, x_ = self.__call__(x, **kw)  # modifies x (e.g. action constraints)
         return *res, x_
 
 
@@ -473,15 +487,16 @@ class DeterministicModel(Model):
 
 @dataclass
 class StochasticModel(Model):
-    def predict(self, x: torch.Tensor, *, stoch=False, **kwargs) -> torch.Tensor:
-        mu, cov, x_ = self.call_and_inputs(x, **kwargs)
+    @override
+    def predict(self, x: torch.Tensor, *, stoch=False, **kw) -> torch.Tensor:
+        mu, cov, x_ = self.call_and_inputs(x, **kw)
         if stoch:
             return torch.distributions.MultivariateNormal(mu, cov).sample()
         else:
             return mu
 
-    def predict_dist(self, x: torch.Tensor, **kwargs) -> MultivariateGaussian:
-        mu, cov, x_ = self.call_and_inputs(x, **kwargs)
+    def predict_dist(self, x: torch.Tensor, **kw) -> MultivariateGaussian:
+        mu, cov, x_ = self.call_and_inputs(x, **kw)
         return MultivariateGaussian(mu, cov)
 
 
@@ -507,6 +522,7 @@ class DeterministicDynamics(DeterministicModel, InputModifyingModel):
 
 @dataclass
 class TimeVaryingStochasticPolicy(StochasticPolicy):
+    @override
     def __call__(self, x, *, t: int, open_loop=False, **kw):
         mean, cov = self.model.__call__(x, t=t, open_loop=open_loop)
         return mean, cov
@@ -577,7 +593,7 @@ class TimeVaryingLinearGaussian(CudaAble):
     #     eps = torch.randn(self.dim_u)
     #     return mu + self.chol[t, :, :] @ eps
 
-    def update_from_distribution(self, distribution, *args, **kwargs):
+    def update_from_distribution(self, distribution, *args, **kw):
         assert len(distribution) == self.horizon
         if isinstance(distribution[0], MultivariateGaussian):
             # recreate weights with correct batch dimensions
@@ -1357,37 +1373,62 @@ def experiment(
     # if deterministic -> QuadratureInference (unscented gaussian approx)
     # if gaussian -> QuadratureGaussianInference (unscented gaussian approx)
 
-    def sincos_angle(xu):
+    def sincos1(x):
         # input angles get split sin/cos
-        xu_sincos_shape = list(xu.shape)
-        xu_sincos_shape[-1] += 1  # add another x dimension
-        xu_sincos = torch.empty(xu_sincos_shape, device=xu.device)
-        xu_sincos[..., 0] = xu[..., 0].sin()
-        xu_sincos[..., 1] = xu[..., 0].cos()
-        xu_sincos[..., 2] = xu[..., 1]
-        xu_sincos[..., 3] = xu[..., 2]
-        return xu_sincos
+        x_sincos_shape = list(x.shape)
+        x_sincos_shape[-1] += 1  # add another x dimension
+        x_sincos = torch.empty(x_sincos_shape, device=x.device)
+        x_sincos[..., 0] = x[..., 0].sin()
+        x_sincos[..., 1] = x[..., 0].cos()
+        x_sincos[..., 2:] = x[..., 1:]
+        return x_sincos
 
-    ### cost (model) ###
+    class Input1SinCos(Decorator[Model]):
+        @override
+        def __call__(self, x, **kw):
+            x_sincos = sincos1(x)
+            return self.decorated.__call__(x_sincos, **kw)
+
+    class InputUClamped(Decorator[Model]):
+        @override
+        def __call__(self, x, **kw):
+            u_min, u_max = -environment.u_mx, +environment.u_mx
+            x[..., dim_x] = torch.clamp(x[..., dim_x], u_min, u_max)
+            res = self.decorated.__call__(x, **kw)
+            if isinstance(res, Sequence):  # prevent nested tuples
+                return *res, x
+            else:
+                return res, x
+
+    class PredictDeltaX(Decorator[Model]):
+        @override
+        def __call__(self, x, **kw):
+            delta, *rest = self.decorated.__call__(x, **kw)
+            pred = x[..., :dim_x].detach() + delta
+            return pred, *rest
+
+    #### cost (model) ####
     @dataclass
     class CostModel(DeterministicModel):
         model: Callable = None  # unused in model_call
         approximate_inference: QuadratureImportanceSamplingInnovation
 
-        def model_call(self, xu, **kwargs):
+        @override
+        def __call__(self, x, **kw):
             """batched version (batch dims first)"""
             # swing-up: \theta = \pi -> 0
-            theta, theta_dot, u = xu[..., 0], xu[..., 1], xu[..., 2]
+            theta, theta_dot, u = x[..., 0], x[..., 1], x[..., 2]
             theta_cost = (torch.cos(theta) - 1.0) ** 2
             theta_dot_cost = 1e-2 * theta_dot**2
             u_cost = 1e-2 * u**2
             total_cost = theta_cost + theta_dot_cost + u_cost
             return total_cost
 
+        @override
         def propagate(
-            self, dist: MultivariateGaussian, *, alpha, **kwargs
+            self, dist: MultivariateGaussian, *, alpha, **kw
         ) -> MultivariateGaussian:
-            fun = partial(self.call_and_inputs, **kwargs)
+            fun = partial(self.call_and_inputs, **kw)
             return self.approximate_inference(fun, alpha, dist)
 
     cost = CostModel(
@@ -1398,61 +1439,43 @@ def experiment(
     )
 
     ### global dynamics model ###
-    @dataclass
-    class DetDyn_SinCos1_Uclamp(DeterministicDynamics):
-        def model_call(self, xu, **kwargs):
-            x, u = xu[..., :dim_x], xu[..., dim_x]
-            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-            xu_sincos = sincos_angle(xu)
-            delta_x = self.model(xu_sincos)  # output states are deltas
-            return x.detach() + delta_x, xu
-
-    @dataclass
-    class LBMDyn_SinCos1_Uclamp(StochasticDynamics):
-        def model_call(self, xu, **kwargs):
-            x, u = xu[..., :dim_x], xu[..., dim_x]
-            u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-            xu_sincos = sincos_angle(xu)
-            # output states are deltas
-            delta_mu, cov = self.model(xu_sincos)
-            mu = x.detach() + delta_mu
-            return mu, cov, xu
-
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
             model=environment,
             approximate_inference=QuadratureInference(dim_xu, quad_params),
         )
     elif dyn_model_type == "mlp":
-        global_dynamics = DetDyn_SinCos1_Uclamp(
+        global_dynamics = DeterministicDynamics(
             model=MultiLayerPerceptron(
-                dim_xu + 1,  # sin,cos of theta
+                dim_xu + 1,  # Input1SinCos
                 n_hidden_layers_dyn,
                 n_hidden_dyn,
                 dim_x,
             ),
             approximate_inference=QuadratureInference(dim_xu, quad_params),
         )
+        global_dynamics = PredictDeltaX(InputUClamped(Input1SinCos(global_dynamics)))
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics.predict(x), y)
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "resnet":
-        global_dynamics = DetDyn_SinCos1_Uclamp(
+        global_dynamics = DeterministicDynamics(
             model=ResidualNetwork(
-                dim_xu + 1,  # sin,cos of theta
+                dim_xu + 1,  # Input1SinCos
                 n_hidden_layers_dyn,
                 n_hidden_dyn,
                 dim_x,
             ),
             approximate_inference=QuadratureInference(dim_xu, quad_params),
         )
+        global_dynamics = PredictDeltaX(InputUClamped(Input1SinCos(global_dynamics)))
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         loss_fn_dyn = lambda x, y: torch.nn.MSELoss()(global_dynamics.predict(x), y)
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "nlm-mlp":
-        global_dynamics = LBMDyn_SinCos1_Uclamp(
+        global_dynamics = StochasticDynamics(
             model=NeuralLinearModelMLP(
-                dim_xu + 1,  # sin,cos of theta
+                dim_xu + 1,  # Input1SinCos
                 n_hidden_layers_dyn,
                 n_hidden_dyn,
                 n_features_dyn,
@@ -1460,19 +1483,20 @@ def experiment(
             ),
             approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
         )
+        global_dynamics = PredictDeltaX(InputUClamped(Input1SinCos(global_dynamics)))
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         def loss_fn_dyn(xu, x_next):
             x, u = xu[..., :dim_x], xu[..., dim_x]
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-            xu_sincos = sincos_angle(xu)
+            xu_sincos = sincos1(xu)
             delta_x = x_next - x
             return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "nlm-resnet":
-        global_dynamics = LBMDyn_SinCos1_Uclamp(
+        global_dynamics = StochasticDynamics(
             model=NeuralLinearModelResNet(
-                dim_xu + 1,  # sin,cos of theta
+                dim_xu + 1,  # Input1SinCos
                 n_hidden_layers_dyn,
                 n_hidden_dyn,
                 n_features_dyn,
@@ -1480,19 +1504,21 @@ def experiment(
             ),
             approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
         )
+        global_dynamics = PredictDeltaX(InputUClamped(Input1SinCos(global_dynamics)))
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         def loss_fn_dyn(xu, x_next):
             x, u = xu[..., :dim_x], xu[..., dim_x]
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-            xu_sincos = sincos_angle(xu)
+            xu_sincos = sincos1(xu)
             delta_x = x_next - x
             return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
     elif dyn_model_type == "snngp":
-        global_dynamics = LBMDyn_SinCos1_Uclamp(
+        global_dynamics = StochasticDynamics(
+            # global_dynamics = LBMDyn_SinCos1_Uclamp(
             model=SpectralNormalizedNeuralGaussianProcess(
-                dim_xu + 1,  # sin,cos of theta
+                dim_xu + 1,  # Input1SinCos
                 n_hidden_layers_dyn,
                 n_hidden_dyn,
                 n_features_dyn,
@@ -1500,11 +1526,12 @@ def experiment(
             ),
             approximate_inference=QuadratureGaussianInference(dim_xu, quad_params),
         )
+        global_dynamics = PredictDeltaX(InputUClamped(Input1SinCos(global_dynamics)))
         # global_dynamics.model.init_whitening(dyn_train_buffer.xs, dyn_train_buffer.ys)
         def loss_fn_dyn(xu, x_next):
             x, u = xu[..., :dim_x], xu[..., dim_x]
             u = torch.clamp(u, -environment.u_mx, +environment.u_mx)
-            xu_sincos = sincos_angle(xu)
+            xu_sincos = sincos1(xu)
             delta_x = x_next - x
             return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
@@ -1520,8 +1547,7 @@ def experiment(
         ),
         approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
     )
-
-    ### global policy model ###
+    local_policy = InputUClamped(Input1SinCos(local_policy))
 
     def m_projection_loss(
         d_pred: MultivariateGaussian, d_target: MultivariateGaussian
@@ -1547,36 +1573,39 @@ def experiment(
         part3 = cov_pred.logdet()
         return sum(part1 + part2 + part3)  # sum over all batch dims
 
+    #### global policy model ####
     if policy_type == "tvlg":
         global_policy = deepcopy(local_policy)
     elif policy_type == "mlp":
         global_policy = DeterministicPolicy(
             model=MultiLayerPerceptron(
-                dim_x,
+                dim_x + 1,  # Input1SinCos
                 n_hidden_layers_pol,
                 n_hidden_pol,
                 dim_u,
             ),
             approximate_inference=QuadratureInference(dim_x, quad_params),
         )
+        global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "resnet":
         global_policy = DeterministicPolicy(
             model=ResidualNetwork(
-                dim_x,
+                dim_x + 1,  # Input1SinCos
                 n_hidden_layers_pol,
                 n_hidden_pol,
                 dim_u,
             ),
             approximate_inference=QuadratureInference(dim_x, quad_params),
         )
+        global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm-mlp":
         global_policy = StochasticPolicy(
             model=NeuralLinearModelMLP(
-                dim_x,
+                dim_x + 1,  # Input1SinCos
                 n_hidden_layers_pol,
                 n_hidden_pol,
                 n_features_pol,
@@ -1584,12 +1613,13 @@ def experiment(
             ),
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
+        global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "nlm-resnet":
         global_policy = StochasticPolicy(
             model=NeuralLinearModelResNet(
-                dim_x,
+                dim_x + 1,  # Input1SinCos
                 n_hidden_layers_pol,
                 n_hidden_pol,
                 n_features_pol,
@@ -1597,12 +1627,13 @@ def experiment(
             ),
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
+        global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
     elif policy_type == "snngp":
         global_policy = StochasticPolicy(
             model=SpectralNormalizedNeuralGaussianProcess(
-                dim_x,
+                dim_x + 1,  # Input1SinCos
                 n_hidden_layers_pol,
                 n_hidden_pol,
                 n_features_pol,
@@ -1610,9 +1641,9 @@ def experiment(
             ),
             approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
         )
+        global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
-        approx_inf = QuadratureGaussianInference(dim_x, quad_params)
 
     ### i2c solver ###
     i2c_solver = PseudoPosteriorSolver(
