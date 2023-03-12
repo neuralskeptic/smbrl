@@ -1547,7 +1547,6 @@ def experiment(
         ),
         approximate_inference=QuadratureGaussianInference(dim_x, quad_params),
     )
-    local_policy = InputUClamped(Input1SinCos(local_policy))
 
     def m_projection_loss(
         d_pred: MultivariateGaussian, d_target: MultivariateGaussian
