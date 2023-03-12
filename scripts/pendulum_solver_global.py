@@ -1340,7 +1340,7 @@ def experiment(
     torch.set_printoptions(precision=7)
     torch.set_default_dtype(torch.float64)
 
-    ### mdp, initial state, cost ###
+    #### mdp, initial state, cost ####
     if env_type == "localPendulum":
         environment = Pendulum()  # local seed
     dim_xu = environment.dim_xu
@@ -1371,7 +1371,7 @@ def experiment(
     #     [dim_x, dim_u], batchsize=batch_size, device=device, max_size=1e4
     # )
 
-    ### approximate inference params ###
+    #### approximate inference params ####
     quad_params = CubatureQuadrature(1, 0, 0)
     gh_params = GaussHermiteQuadrature(degree=3)
     # if deterministic -> QuadratureInference (unscented gaussian approx)
@@ -1435,6 +1435,11 @@ def experiment(
             fun = partial(self.call_and_inputs, **kw)
             return self.approximate_inference(fun, alpha, dist)
 
+        @override
+        def to(self, device):
+            self.approximate_inference = self.approximate_inference.to(device)
+            return self  # no model!
+
     cost = CostModel(
         approximate_inference=QuadratureImportanceSamplingInnovation(
             dim_xu,
@@ -1442,7 +1447,7 @@ def experiment(
         ),
     )
 
-    ### global dynamics model ###
+    #### global dynamics model ####
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
             model=environment,
@@ -1541,7 +1546,7 @@ def experiment(
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
 
-    ### local (i2c) policy ###
+    #### local (i2c) policy ####
     local_policy = TimeVaryingStochasticPolicy(
         model=TimeVaryingLinearGaussian(
             horizon,
@@ -1699,23 +1704,25 @@ def experiment(
 
         # 50-50 %: tvgl-fb or gaussian noise
 
-        def add_dithering(y):
-            return y + torch.randn_like(y)
+        class AddDithering(Decorator[Model]):
+            @override
+            def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
+                y = self.decorated.predict(x, **kw)
+                return y + torch.randn_like(y)
 
             # # if torch.randn(1) > 0.5:
             # #     # return global_policy.predict(x, t)  # TODO actual makes no difference?
             # #     return global_policy.actual().predict(x, t) + dithering
             # # else:
             # #     return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
-            # return global_policy.predict(x, **kwargs) + dithering
+            # return global_policy.predict(x, **kw) + dithering
             # # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
 
         # # random gaussian
         # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
         # exploration_policy.predict = lambda *_: torch.randn(dim_u) * 3
 
-        exploration_policy = copy(global_policy)  # to overwrite .predict()
-        exploration_policy.predict = compose(add_dithering, exploration_policy.predict)
+        exploration_policy = AddDithering(global_policy)  # decorate w/o changing policy
 
         # train and test rollouts (env & exploration policy)
         logger.weak_line()
