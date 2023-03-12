@@ -510,10 +510,9 @@ class DeterministicDynamics(DeterministicModel, InputModifyingModel):
 
 @dataclass
 class TimeVaryingStochasticPolicy(StochasticPolicy):
-    def call_and_inputs(self, x, *, t: int, open_loop=False):
-        mean, cov = self.model_call(x, t=t, open_loop=open_loop)
-        x_ = x
-        return mean, cov, x_
+    def __call__(self, x, *, t: int, open_loop=False, **kw):
+        mean, cov = self.model.__call__(x, t=t, open_loop=open_loop)
+        return mean, cov
 
 
 class TimeVaryingLinearGaussian(CudaAble):
