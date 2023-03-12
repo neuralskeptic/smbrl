@@ -255,7 +255,6 @@ class QuadratureInference(object):
         try:
             sqrt = torch.linalg.cholesky(sigma_x)  # TODO full cuda version?
         except torch.linalg.LinAlgError:
-            # breakpoint()
             print(
                 f"ERROR: singular covariance: {torch.linalg.eigvalsh(sigma_x)}, state: {mu_x}"
             )
@@ -1153,27 +1152,19 @@ class Annealing(TemperatureStrategy):
         return next(self.schedule)
 
 
-class HitCounter:
-    spd_counter = 0  # static
+# class HitCounter:
+#     spd_counter = 0  # static
 
-    def spd_fix():
-        HitCounter.spd_counter += 1
-
-
-def nearest_spd(covariance):
-    return covariance  # do nothing
-    HitCounter.spd_fix()
-    L, V = torch.linalg.eig(covariance)
-    L[L.real <= 1e-10] = 1e-6  # is it safe to do real?
-    return V @ torch.diag(L) @ V.T
+#     def spd_fix():
+#         HitCounter.spd_counter += 1
 
 
-def compose(wrapper, func):
-    @functools.wraps(func)
-    def composed(*args, **kwargs):
-        return wrapper(func(*args, **kwargs))
-
-    return composed
+# def nearest_spd(covariance):
+#     return covariance  # do nothing
+#     HitCounter.spd_fix()
+#     L, V = torch.linalg.eig(covariance)
+#     L[L.real <= 1e-10] = 1e-6  # is it safe to do real?
+#     return V @ torch.diag(L) @ V.T
 
 
 def experiment(
@@ -2081,7 +2072,6 @@ def experiment(
                         axs[1].plot(
                             a_cov_diag[i, ...].detach().cpu(), label="data", c="C0"
                         )
-                        # breakpoint()
                         if isinstance(global_policy, StochasticPolicy):
                             axs[1].plot(
                                 a_pred_cov_diag[i, ...].detach().cpu(),
