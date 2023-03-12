@@ -482,7 +482,11 @@ class InputModifyingModel(Model):
 
 @dataclass
 class DeterministicModel(Model):
-    pass  # identical to Model
+    @override
+    def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
+        """predict with model (default: not stochastic)"""
+        y, x_ = self.call_and_inputs(x, **kw)
+        return y
 
 
 @dataclass
@@ -744,7 +748,7 @@ class PseudoPosteriorSolver(CudaAble):
         dim_x: int,
         dim_u: int,
         horizon: int,
-        dynamics: InputModifyingModel,
+        dynamics: Model,
         cost: Model,
         policy_template: TimeVaryingStochasticPolicy,
         smoother: Callable,
