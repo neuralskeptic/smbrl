@@ -463,10 +463,7 @@ class Model(CudaAble):
 class InputModifyingModel(Model):
     def call_and_inputs(self, x, **kwargs):  # overload to use kwargs
         *res, x_ = self.model_call(x)  # modifies x (e.g. action constraints)
-        if isinstance(res, Sequence):  # multiple return values
-            return (*res, x_)
-        else:
-            return res, x_
+        return *res, x_
 
 
 @dataclass
