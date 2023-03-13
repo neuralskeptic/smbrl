@@ -708,20 +708,31 @@ class Pendulum(Stateless):
             state = xxs[t, ...]
         return xs, us, xxs
 
-    def plot(self, xs, us):
+    def plot(self, xs, us, xvars=None, uvars=None):
         fig, axs = plt.subplots(self.dim_x + self.dim_u, figsize=(12, 9))
         xs = einops.rearrange(xs, "t ... x -> t (...) x")
         us = einops.rearrange(us, "t ... u -> t (...) u")
+        if xvars is not None:
+            xvars = einops.rearrange(xvars, "t ... x -> t (...) x")
+        if uvars is not None:
+            uvars = einops.rearrange(uvars, "t ... u -> t (...) u")
         n_batches = xs.shape[-2]
+        colors = plt.cm.brg(np.linspace(0, 1, n_batches))
         for i in range(self.dim_x):
-            for ib in range(n_batches):
-                axs[i].plot(xs[:, ib, i])
+            for ib, c in zip(range(n_batches), colors):
+                if xvars is not None:
+                    plot_gp(axs[i], xs[:, ib, i], xvars[:, ib, i], color=c)
+                else:
+                    axs[i].plot(xs[:, ib, i], color=c)
             axs[i].set_ylabel(f"x{i}")
             axs[i].grid(True)
         for i in range(self.dim_u):
             j = self.dim_x + i
-            for ib in range(n_batches):
-                axs[j].plot(us[:, ib, i])
+            for ib, c in zip(range(n_batches), colors):
+                if uvars is not None:
+                    plot_gp(axs[j], us[:, ib, i], uvars[:, ib, i], color=c)
+                else:
+                    axs[j].plot(us[:, ib, i], color=c)
             axs[j].plot(self.u_mx * torch.ones_like(us[:, i]), "k--")
             axs[j].plot(-self.u_mx * torch.ones_like(us[:, i]), "k--")
             axs[j].set_ylabel(f"u{i}")
@@ -1968,6 +1979,18 @@ def experiment(
             logger.log_data(log_dict)
 
         #### T: plot i2c opt. controller
+        ## plot batch of tvlg vs env
+        xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
+        u_pred_dists = [
+            local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+            for t in range(horizon)
+        ]
+        uvars = torch.stack(
+            [d.covariance.diagonal(dim1=-2, dim2=-1) for d in u_pred_dists]
+        )
+        environment.plot(xs, us, uvars=uvars)
+        plt.suptitle("tvlg vec policy vs env")
+
         ## plot current i2c optimal controller
         if plot_local_policy_metrics and plotting:
             fix, axs = plt.subplots(3)
