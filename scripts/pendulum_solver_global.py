@@ -740,17 +740,8 @@ def plot_gp(axis, mean, variance, color="b"):
 
 def plot_mvn(axis, dists: Sequence[MultivariateGaussian], dim=slice(None), color=None):
     means = torch.stack([d.mean[..., dim] for d in dists])
-    stds = torch.stack([d.covariance[..., dim, dim].sqrt() for d in dists])
-    axis.plot(means, color=color)
-    upper, lower = means + stds, means - stds
-    axis.fill_between(
-        range(means.shape[0]),
-        upper,
-        lower,
-        where=upper >= lower,
-        color=color,
-        alpha=0.3,
-    )
+    variances = torch.stack([d.covariance[..., dim, dim].sqrt() for d in dists])
+    plot_gp(axis, means, variances, color=color)
 
 
 def plot_trajectory_distribution(list_of_distributions, title=""):
