@@ -50,6 +50,11 @@ class MultivariateGaussian(Distribution):
     previous_mean: torch.Tensor = None
     previous_covariance: torch.Tensor = None
 
+    @classmethod
+    def from_deterministic(cls, mean: torch.Tensor):
+        minimal_cov = torch.diag(1e-8 * torch.ones_like(mean))
+        return MultivariateGaussian(mean, minimal_cov)
+
     def marginalize(self, indices):
         """Marginalize out indices"""
         return MultivariateGaussian(
@@ -464,6 +469,12 @@ class Model(CudaAble):
         abstract method: override"""
         raise NotImplementedError
 
+    @abstractmethod
+    def predict_dist(self, x: torch.Tensor, **kw) -> MultivariateGaussian:
+        """returns prediction distribution (mean and cov) for input x \n
+        abstract method: override"""
+        raise NotImplementedError
+
     def to(self, device):
         """returns single prediction for input x \n
         override to add or remove fields"""
@@ -483,9 +494,15 @@ class InputModifyingModel(Model):
 class DeterministicModel(Model):
     @override
     def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
-        """predict with model (default: not stochastic)"""
+        """deterministic model prediction"""
         y, x_ = self.call_and_inputs(x, **kw)
         return y
+
+    @override
+    def predict_dist(self, x: torch.Tensor, **kw) -> MultivariateGaussian:
+        """prediction distribution with zero (!) covariance"""
+        y, x_ = self.call_and_inputs(x, **kw)
+        return MultivariateGaussian(y, torch.diag(torch.zeros_like(y)))
 
 
 @dataclass
@@ -498,6 +515,7 @@ class StochasticModel(Model):
         else:
             return mu
 
+    @override
     def predict_dist(self, x: torch.Tensor, **kw) -> MultivariateGaussian:
         mu, cov, x_ = self.call_and_inputs(x, **kw)
         return MultivariateGaussian(mu, cov)
@@ -717,6 +735,21 @@ def plot_gp(axis, mean, variance, color="b"):
     upper, lower = mean + sqrt, mean - sqrt
     axis.fill_between(
         range(mean.shape[0]), upper, lower, where=upper >= lower, color=color, alpha=0.2
+    )
+
+
+def plot_mvn(axis, dists: Sequence[MultivariateGaussian], dim=slice(None), color=None):
+    means = torch.stack([d.mean[..., dim] for d in dists])
+    stds = torch.stack([d.covariance[..., dim, dim].sqrt() for d in dists])
+    axis.plot(means, color=color)
+    upper, lower = means + stds, means - stds
+    axis.fill_between(
+        range(means.shape[0]),
+        upper,
+        lower,
+        where=upper >= lower,
+        color=color,
+        alpha=0.3,
     )
 
 
@@ -1834,18 +1867,22 @@ def experiment(
                 s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
                 # ss_env = dyn_test_buffer.data[1][:horizon, :].cpu()  # first
                 ss_env = dyn_test_buffer.data[1][-horizon:, :].cpu()  # last
+                ss_pred_pw_dists = []
                 ss_pred_pw = torch.zeros((horizon, dim_x))
+                ss_pred_roll_dists = []
                 ss_pred_roll = torch.zeros((horizon, dim_x))
                 state = s_env[0, :]  # for rollouts: data init state
                 for t in range(horizon):
                     # pointwise
-                    xu = torch.cat((s_env[t, :], a_env[t, :]))[None, :]  # pred traj
+                    xu = torch.cat((s_env[t, :], a_env[t, :]))  # pred traj
                     if isinstance(global_dynamics, StochasticDynamics):
                         ss_pred_pw[t, :], var, xu_ = global_dynamics(xu)
                     else:
                         ss_pred_pw[t, :], xu_ = global_dynamics(xu)
+                    ss_pred_pw_dists.append(global_dynamics.predict_dist(xu))
                     # rollout (replay action)
-                    xu = torch.cat((state, a_env[t, :]))[None, :]
+                    xu = torch.cat((state, a_env[t, :]))
+                    ss_pred_roll_dists.append(global_dynamics.predict_dist(xu))
                     if isinstance(global_dynamics, StochasticDynamics):
                         ss_pred_roll[t, :], var, xu = global_dynamics(xu)
                     else:
@@ -1883,11 +1920,11 @@ def experiment(
                     xi_ = xi + dim_u + 1  # plotting offset
                     # plot pointwise state predictions
                     axs[xi_, 0].plot(steps, ss_env[:, xi], color="b")
-                    axs[xi_, 0].plot(steps, ss_pred_pw[:, xi], color="r")
+                    plot_mvn(axs[xi_, 0], ss_pred_pw_dists, dim=xi, color="r")
                     axs[xi_, 0].set_ylabel(f"ss[{xi}]")
                     # plot rollout state predictions
                     axs[xi_, 1].plot(steps, ss_env[:, xi], color="b")
-                    axs[xi_, 1].plot(steps, ss_pred_roll[:, xi], color="r")
+                    plot_mvn(axs[xi_, 1], ss_pred_roll_dists, dim=xi, color="r")
                     axs[xi_, 1].set_ylabel(f"ss[{xi}]")
                 axs[-1, 0].set_xlabel("steps")
                 axs[-1, 1].set_xlabel("steps")
@@ -2152,18 +2189,22 @@ def experiment(
                 s_env = pol_train_buffer.data[0][-horizon:, :].cpu()  # last
                 # a_env = pol_train_buffer.data[1][:horizon, :].cpu()  # first
                 a_env = pol_train_buffer.data[1][-horizon:, :].cpu()  # last
+                a_pred_pw_dists = []
                 a_pred_pw = torch.zeros((horizon, dim_u))
+                a_pred_roll_dists = []
                 a_pred_roll = torch.zeros((horizon, dim_u))
                 s_pred_roll = torch.zeros((horizon, dim_x))
                 state = s_env[0, :]  # for rollouts: data init state
                 for t in range(horizon):
                     # pointwise
+                    a_pred_pw_dists.append(global_policy.predict_dist(s_env[t, :]))
                     if isinstance(global_policy, StochasticPolicy):
                         a_pred_pw[t, :], var = global_policy(s_env[t, :])
                     else:
                         a_pred_pw[t, :] = global_policy(s_env[t, :])
                     # rollout
                     s_pred_roll[t, :] = state
+                    a_pred_roll_dists.append(global_policy.predict_dist(state))
                     if isinstance(global_policy, StochasticPolicy):
                         action, var = global_policy(state)
                     else:
@@ -2187,10 +2228,10 @@ def experiment(
                 # plot actions (twice: left & right)
                 for ui in range(dim_u):
                     axs[ui, 0].plot(steps, a_env[:, ui], color="b")
-                    axs[ui, 0].plot(steps, a_pred_pw[:, ui], color="r")
+                    plot_mvn(axs[ui, 0], a_pred_pw_dists, dim=ui, color="r")
                     axs[ui, 0].set_ylabel("action")
                     axs[ui, 1].plot(steps, a_env[:, ui], color="b")
-                    axs[ui, 1].plot(steps, a_pred_roll[:, ui], color="r")
+                    plot_mvn(axs[ui, 1], a_pred_roll_dists, dim=ui, color="r")
                     axs[ui, 1].set_ylabel("action")
                 # plot cost
                 ri = dim_u
