@@ -1211,13 +1211,13 @@ def experiment(
     # dyn_model_type: str = "env",
     # #  D2) mlp model
     # dyn_model_type: str = "mlp",
-    # dim_hidden_dyn: int = 256,
+    # n_hidden_dyn: int = 256,
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 1000,
     # #  D3) resnet model
     # dyn_model_type: str = "resnet",
-    # dim_hidden_dyn: int = 256,
+    # n_hidden_dyn: int = 256,
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 1000,
