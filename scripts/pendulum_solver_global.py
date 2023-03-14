@@ -1299,8 +1299,8 @@ def experiment(
     s0_i2c_var: float = 1e-2,  # how much initial state variance i2c should start with
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
-    plot_local_policy_metrics: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
-    # plot_local_policy_metrics: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
+    # plot_local_policy: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
+    plot_local_policy: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
     ## general ##
     plotting: bool = True,  # if False overrides all other flags
@@ -1978,7 +1978,18 @@ def experiment(
                 log_dict[k] = v[i_]  # one key, n_iter_solver values
             logger.log_data(log_dict)
 
-        #### T: plot i2c opt. controller
+        #### T: plot i2c local controller
+        ## plot (batch) i2c metrics
+        fix, axs = plt.subplots(3)
+        temp_strategy_name = i2c_solver.update_temperature_strategy.__class__.__name__
+        for i, (k, v) in enumerate(i2c_solver.metrics.items()):
+            v = torch.stack(v)
+            colors = plt.cm.brg(np.linspace(0, 1, n_i2c_vec))
+            for b, c in zip(range(n_i2c_vec), colors):
+                axs[i].plot(v[b, :], color=c)
+            axs[i].set_ylabel(k)
+        plt.suptitle(f"i2c metrics (temp.strategy: {temp_strategy_name})")
+        plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
         ## plot local policies vs env
         xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
         uvars = []
@@ -2010,22 +2021,7 @@ def experiment(
         environment.plot(xs, us, xvars=xvars, uvars=uvars)
         plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
 
-        ## plot current i2c optimal controller
-        if plot_local_policy_metrics and plotting:
-            fix, axs = plt.subplots(3)
-            for i, (k, v) in enumerate(i2c_solver.metrics.items()):
-                v = torch.tensor(v)
-                # axs[i].plot(v, label=f"$\epsilon={kl_bound}$")
-                # axs[i].plot(v, label=f"$\\alpha={alpha}$")
-                axs[i].plot(v, label=f"$Polyak$")
-                # axs[i].plot(v, label=f"Maximum Likelihood")
-                # axs[i].plot(v, label="Quadratic Model")
-                # axs[i].plot(v, label="Annealing")
-                axs[i].set_ylabel(k)
-            for ax in axs:
-                ax.legend()
-            # TODO clean up plot
-            plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
+        if plot_local_policy and plotting:
             plt.show()
 
         # ### plot data space coverage ###
