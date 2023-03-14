@@ -2019,7 +2019,11 @@ def experiment(
             s_dist = global_dynamics.predict_dist(xu)
         # env.plot does not use env, it only plots
         environment.plot(xs, us, xvars=xvars, uvars=uvars)
-        plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
+        plt.suptitle(f"{n_i2c_vec} local policies vs {dyn_model_type} dynamics")
+        plt.savefig(
+            results_dir / f"{n_i2c_vec}_tvlgs_vs_{dyn_model_type}-dyn_{i_iter}.png",
+            dpi=150,
+        )
 
         if plot_local_policy and plotting:
             plt.show()
