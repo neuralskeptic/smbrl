@@ -638,7 +638,7 @@ class TimeVaryingLinearGaussian(CudaAble):
             self.K_opt = K_opt
             for t, dist in enumerate(distribution):
                 x = dist.marginalize(slice(0, self.dim_x))
-                u = dist.marginalize(slice(self.dim_x, self.dim_x + self.dim_u))
+                u = dist.marginalize(slice(self.dim_x, None))
                 K = torch.linalg.solve(
                     x.covariance, dist.covariance[..., : self.dim_x, self.dim_x :]
                 ).mT
