@@ -1979,19 +1979,19 @@ def experiment(
             logger.log_data(log_dict)
 
         #### T: plot i2c opt. controller
-        ## plot batch of tvlg vs env
+        ## plot local policies vs env
         xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
-        # get predicted variance
         uvars = []
         for t in range(horizon):
-            dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
-            variance = dist.covariance.diagonal(dim1=-2, dim2=-1)
-            uvars.append(variance)
+            u_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+            u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
+            uvars.append(u_var)
         uvars = torch.stack(uvars)
         environment.plot(xs, us, uvars=uvars)
-        plt.suptitle("tvlg vec policy vs env")
+        plt.suptitle(f"{n_i2c_vec} local policies vs env")
+        plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}.png", dpi=150)
 
-        ### tvlg vec vs dyn model
+        ## tvlg vec vs dyn model
         xs = torch.zeros((horizon, n_i2c_vec, dim_x))
         xvars = torch.zeros((horizon, n_i2c_vec, dim_x))
         us = torch.zeros((horizon, n_i2c_vec, dim_u))
