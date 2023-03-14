@@ -2007,8 +2007,7 @@ def experiment(
         xvars = torch.zeros((horizon, n_i2c_vec, dim_x))
         us = torch.zeros((horizon, n_i2c_vec, dim_u))
         uvars = torch.zeros((horizon, n_i2c_vec, dim_u))
-        state = initial_state_distribution.sample([n_i2c_vec])
-        s_dist = MultivariateGaussian.from_deterministic(state)
+        s_dist = MultivariateGaussian.from_deterministic(s0_vec_mean)
         for t in range(horizon):
             xs[t, ...] = s_dist.mean
             xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
