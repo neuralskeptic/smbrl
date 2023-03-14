@@ -2268,10 +2268,10 @@ def experiment(
                     axs[ui, 1].set_ylabel("action")
                 # plot cost
                 ri = dim_u
-                axs[ri, 0].plot(steps, c_env, color="b", label="data")
+                axs[ri, 0].plot(steps, c_env, color="b", label="i2c")
                 axs[ri, 0].plot(steps, c_pw, color="r", label=policy_type)
                 axs[ri, 0].set_ylabel("cost")
-                axs[ri, 1].plot(steps, c_env, color="b", label="data")
+                axs[ri, 1].plot(steps, c_env, color="b", label="i2c")
                 axs[ri, 1].plot(steps, c_roll, color="r", label=policy_type)
                 axs[ri, 1].set_ylabel("cost")
                 for xi in range(dim_x):
