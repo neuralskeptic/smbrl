@@ -1990,6 +1990,7 @@ def experiment(
             axs[i].set_ylabel(k)
         plt.suptitle(f"i2c metrics (temp.strategy: {temp_strategy_name})")
         plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
+
         ## plot local policies vs env
         xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
         uvars = []
