@@ -1981,15 +1981,34 @@ def experiment(
         #### T: plot i2c opt. controller
         ## plot batch of tvlg vs env
         xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
-        u_pred_dists = [
-            local_vectorized_policy.predict_dist(xs[t, ...], t=t)
-            for t in range(horizon)
-        ]
-        uvars = torch.stack(
-            [d.covariance.diagonal(dim1=-2, dim2=-1) for d in u_pred_dists]
-        )
+        # get predicted variance
+        uvars = []
+        for t in range(horizon):
+            dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+            variance = dist.covariance.diagonal(dim1=-2, dim2=-1)
+            uvars.append(variance)
+        uvars = torch.stack(uvars)
         environment.plot(xs, us, uvars=uvars)
         plt.suptitle("tvlg vec policy vs env")
+
+        ### tvlg vec vs dyn model
+        xs = torch.zeros((horizon, n_i2c_vec, dim_x))
+        xvars = torch.zeros((horizon, n_i2c_vec, dim_x))
+        us = torch.zeros((horizon, n_i2c_vec, dim_u))
+        uvars = torch.zeros((horizon, n_i2c_vec, dim_u))
+        state = initial_state_distribution.sample([n_i2c_vec])
+        s_dist = MultivariateGaussian.from_deterministic(state)
+        for t in range(horizon):
+            xs[t, ...] = s_dist.mean
+            xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
+            a_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+            us[t, ...] = a_dist.mean
+            uvars[t, ...] = a_dist.covariance.diagonal(dim1=-2, dim2=-1)
+            xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
+            s_dist = global_dynamics.predict_dist(xu)
+        # env.plot does not use env, it only plots
+        environment.plot(xs, us, xvars=xvars, uvars=uvars)
+        plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
 
         ## plot current i2c optimal controller
         if plot_local_policy_metrics and plotting:
