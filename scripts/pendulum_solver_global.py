@@ -56,14 +56,14 @@ class MultivariateGaussian(Distribution):
         return MultivariateGaussian(mean, minimal_cov)
 
     def marginalize(self, indices):
-        """Marginalize out indices"""
+        """Marginal of indices"""
         return MultivariateGaussian(
             self.mean[..., indices],
             self.covariance[..., indices, indices],
         )
 
     def condition(self, indices):
-        """Condition on means of indices"""
+        """Conditional of indices conditioned on means (!) of other indices"""
         # get list of complement indices
         other_indices = list(range(self.mean.shape[-1]))  # add all
         other_indices[indices] = []  # remove passed indices
