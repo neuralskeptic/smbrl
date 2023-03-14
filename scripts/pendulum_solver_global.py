@@ -903,10 +903,10 @@ class PseudoPosteriorSolver(CudaAble):
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
         posterior_cost = self.cost.predict(
             torch.stack(tuple(d.mean for d in posterior_distribution), dim=0)
-        )[0].sum(dim=0)
+        ).sum(dim=0)
         policy_cost = self.cost.predict(
             torch.stack(tuple(d.mean for d in policy_distribution), dim=0)
-        )[0].sum(dim=0)
+        ).sum(dim=0)
         self.metrics["posterior_cost"] += [posterior_cost.flatten().cpu()]
         self.metrics["policy_cost"] += [policy_cost.flatten().cpu()]
         self.metrics["alpha"] += [alpha.flatten().cpu()]
