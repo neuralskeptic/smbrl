@@ -52,7 +52,7 @@ class MultivariateGaussian(Distribution):
 
     @classmethod
     def from_deterministic(cls, mean: torch.Tensor):
-        minimal_cov = torch.diag(1e-8 * torch.ones_like(mean))
+        minimal_cov = torch.diag_embed(1e-8 * torch.ones_like(mean))
         return MultivariateGaussian(mean, minimal_cov)
 
     def marginalize(self, indices):
@@ -502,7 +502,7 @@ class DeterministicModel(Model):
     def predict_dist(self, x: torch.Tensor, **kw) -> MultivariateGaussian:
         """prediction distribution with zero (!) covariance"""
         y, x_ = self.call_and_inputs(x, **kw)
-        return MultivariateGaussian(y, torch.diag(torch.zeros_like(y)))
+        return MultivariateGaussian(y, torch.diag_embed(torch.zeros_like(y)))
 
 
 @dataclass
