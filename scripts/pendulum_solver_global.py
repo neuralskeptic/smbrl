@@ -1986,7 +1986,7 @@ def experiment(
             v = torch.stack(v)
             colors = plt.cm.brg(np.linspace(0, 1, n_i2c_vec))
             for b, c in zip(range(n_i2c_vec), colors):
-                axs[i].plot(v[b, :], color=c)
+                axs[i].plot(v[:, b], color=c)
             axs[i].set_ylabel(k)
         plt.suptitle(f"{n_i2c_vec} i2c metrics (temp.strategy: {temp_strategy_name})")
         plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
