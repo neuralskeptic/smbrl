@@ -31,8 +31,8 @@ class ReplayBuffer(object):
                 shape = (self.max_size, *dim)
             else:
                 shape = (self.max_size, dim)
-            self._data[i] = torch.empty(shape).to(self.device)
-        self._perm = torch.empty((self.max_size), dtype=torch.long).to(self.device)
+            self._data[i] = torch.empty(shape, device=self.device)
+        self._perm = torch.empty((self.max_size), dtype=torch.long, device=self.device)
 
     def add(self, new_list: List[torch.tensor]):
         for new, dim in zip(new_list, self.dim_list):
@@ -78,3 +78,11 @@ class ReplayBuffer(object):
             return batch_list
         else:
             raise StopIteration
+
+    def to(self, device):
+        for i, _ in enumerate(self.dim_list):
+            self._data[i].to(device)
+        return self
+
+    def cpu(self):
+        return self.to("cpu")

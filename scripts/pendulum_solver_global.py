@@ -1713,11 +1713,12 @@ def experiment(
     for i_iter in range(n_iter):
         logger.strong_line()
         logger.info(f"ITERATION {i_iter + 1}/{n_iter}")
-        if dyn_model_type != "env":
-            global_dynamics.cpu()  # in-place
-            torch.set_grad_enabled(False)
 
         #### T: global policy rollouts
+        logger.weak_line()
+        logger.info("START Collecting Dynamics Rollouts")
+        global_dynamics.cpu()  # in-place
+        torch.set_grad_enabled(False)
         # # global policy (tvlg with feedback)
         # exploration_policy = compose(lambda _: _[0], global_policy)
 
@@ -1750,8 +1751,6 @@ def experiment(
         exploration_policy = AddDithering(global_policy)  # decorate w/o changing policy
 
         # train and test rollouts (env & exploration policy)
-        logger.weak_line()
-        logger.info("START Collecting Dynamics Rollouts")
         for i in trange(n_dyn_rollout_episodes):  # 80 % train
             state = initial_state_distribution.sample()
             s, a, ss = environment.run(state, exploration_policy, horizon)
