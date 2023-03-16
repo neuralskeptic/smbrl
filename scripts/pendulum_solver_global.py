@@ -1303,7 +1303,8 @@ def experiment(
     plot_local_policy: bool = True,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
     ############
     ## general ##
-    plotting: bool = True,  # if False overrides all other flags
+    show_plots: bool = True,  # if False never plt.show(), but creates and saves
+    plotting: bool = True,  # if False not plot creation
     plot_data: bool = True,  # visualize data trajectories (sns => very slow!)
     log_console: bool = True,  # also log to console (not just log file); FORCE on if debug
     log_wandb: bool = True,  # off if debug
@@ -1859,7 +1860,7 @@ def experiment(
             logger.info("END Training Dynamics")
 
             #### T: plot dynamics model
-            if plot_dyn:
+            if plot_dyn and plotting:
                 ## test dynamics model in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
@@ -1937,7 +1938,7 @@ def experiment(
                     f"{dyn_epoch_counter} epochs, lr={lr_dyn:.0e})"
                 )
                 plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
-                if plotting:
+                if show_plots:
                     plt.show()
 
         #### T: i2c
@@ -1957,7 +1958,7 @@ def experiment(
             n_iteration=n_iter_solver,
             initial_state=s0_vec_dist,
             policy_prior=global_policy if i_iter != 0 else None,
-            plot_posterior=plot_posterior and plotting,
+            plot_posterior=plot_posterior and show_plots and plotting,
         )
         # create mixture (mean) policy
         local_mixture_policy = deepcopy(local_vectorized_policy)
@@ -1978,54 +1979,59 @@ def experiment(
             logger.log_data(log_dict)
 
         #### T: plot i2c local controller
-        ## plot (batch) i2c metrics
-        fix, axs = plt.subplots(3)
-        temp_strategy_name = i2c_solver.update_temperature_strategy.__class__.__name__
-        for i, (k, v) in enumerate(i2c_solver.metrics.items()):
-            v = torch.stack(v)
-            colors = plt.cm.brg(np.linspace(0, 1, n_i2c_vec))
-            for b, c in zip(range(n_i2c_vec), colors):
-                axs[i].plot(v[:, b], color=c)
-            axs[i].set_ylabel(k)
-        plt.suptitle(f"{n_i2c_vec} i2c metrics (temp.strategy: {temp_strategy_name})")
-        plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
+        if plotting:
+            ## plot (batch) i2c metrics
+            fix, axs = plt.subplots(3)
+            temp_strategy_name = (
+                i2c_solver.update_temperature_strategy.__class__.__name__
+            )
+            for i, (k, v) in enumerate(i2c_solver.metrics.items()):
+                v = torch.stack(v)
+                colors = plt.cm.brg(np.linspace(0, 1, n_i2c_vec))
+                for b, c in zip(range(n_i2c_vec), colors):
+                    axs[i].plot(v[:, b], color=c)
+                axs[i].set_ylabel(k)
+            plt.suptitle(
+                f"{n_i2c_vec} i2c metrics (temp.strategy: {temp_strategy_name})"
+            )
+            plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
 
-        ## plot local policies vs env
-        xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
-        uvars = []
-        for t in range(horizon):
-            u_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
-            u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
-            uvars.append(u_var)
-        uvars = torch.stack(uvars)
-        environment.plot(xs, us, uvars=uvars)
-        plt.suptitle(f"{n_i2c_vec} local policies vs env")
-        plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}.png", dpi=150)
+            ## plot local policies vs env
+            xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
+            uvars = []
+            for t in range(horizon):
+                u_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+                u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
+                uvars.append(u_var)
+            uvars = torch.stack(uvars)
+            environment.plot(xs, us, uvars=uvars)
+            plt.suptitle(f"{n_i2c_vec} local policies vs env")
+            plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}.png", dpi=150)
 
-        ## tvlg vec vs dyn model
-        xs = torch.zeros((horizon, n_i2c_vec, dim_x))
-        xvars = torch.zeros((horizon, n_i2c_vec, dim_x))
-        us = torch.zeros((horizon, n_i2c_vec, dim_u))
-        uvars = torch.zeros((horizon, n_i2c_vec, dim_u))
-        s_dist = MultivariateGaussian.from_deterministic(s0_vec_mean)
-        for t in range(horizon):
-            xs[t, ...] = s_dist.mean
-            xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
-            a_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
-            us[t, ...] = a_dist.mean
-            uvars[t, ...] = a_dist.covariance.diagonal(dim1=-2, dim2=-1)
-            xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
-            s_dist = global_dynamics.predict_dist(xu)
-        # env.plot does not use env, it only plots
-        environment.plot(xs, us, xvars=xvars, uvars=uvars)
-        plt.suptitle(f"{n_i2c_vec} local policies vs {dyn_model_type} dynamics")
-        plt.savefig(
-            results_dir / f"{n_i2c_vec}_tvlgs_vs_{dyn_model_type}-dyn_{i_iter}.png",
-            dpi=150,
-        )
+            ## tvlg vec vs dyn model
+            xs = torch.zeros((horizon, n_i2c_vec, dim_x))
+            xvars = torch.zeros((horizon, n_i2c_vec, dim_x))
+            us = torch.zeros((horizon, n_i2c_vec, dim_u))
+            uvars = torch.zeros((horizon, n_i2c_vec, dim_u))
+            s_dist = MultivariateGaussian.from_deterministic(s0_vec_mean)
+            for t in range(horizon):
+                xs[t, ...] = s_dist.mean
+                xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
+                a_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+                us[t, ...] = a_dist.mean
+                uvars[t, ...] = a_dist.covariance.diagonal(dim1=-2, dim2=-1)
+                xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
+                s_dist = global_dynamics.predict_dist(xu)
+            # env.plot does not use env, it only plots
+            environment.plot(xs, us, xvars=xvars, uvars=uvars)
+            plt.suptitle(f"{n_i2c_vec} local policies vs {dyn_model_type} dynamics")
+            plt.savefig(
+                results_dir / f"{n_i2c_vec}_tvlgs_vs_{dyn_model_type}-dyn_{i_iter}.png",
+                dpi=150,
+            )
 
-        if plot_local_policy and plotting:
-            plt.show()
+            if plot_local_policy and show_plots:
+                plt.show()
 
         # ### plot data space coverage ###
         # if plot_data:
@@ -2111,6 +2117,8 @@ def experiment(
                     )
 
                 def visualize_training():
+                    if not plotting:
+                        return
                     fig, axs = plt.subplots(2)
                     s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
                     a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
@@ -2213,7 +2221,7 @@ def experiment(
             logger.info("END Training policy")
 
             #### T: plot policy
-            if plot_policy:
+            if plot_policy and plotting:
                 ## test policy in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
@@ -2292,7 +2300,7 @@ def experiment(
                     f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
                 )
                 plt.savefig(results_dir / f"pol_eval_{i_iter}.png", dpi=150)
-                if plotting:
+                if show_plots:
                     plt.show()
 
     # if plotting:  # TODO change to save plots and show if plotting
@@ -2350,97 +2358,106 @@ def experiment(
     initial_state = torch.Tensor([torch.pi, 0.0])
     # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
 
-    ### policy vs env
-    # TODO label plot
-    # TODO sample action?
-    xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-    environment.plot(xs, us)
-    plt.suptitle(f"{policy_type} policy vs env")
-    plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
-
-    ### policy vs dyn model
-    xs = torch.zeros((horizon, dim_x))
-    us = torch.zeros((horizon, dim_u))
-    state = initial_state
-    for t in range(horizon):
-        action = global_policy.predict(state, t=t)
-        xu = torch.cat((state, action))[None, :]
-        x_ = global_dynamics.predict(xu)
-        xs[t, :] = state
-        us[t, :] = action
-        state = x_[0, :]
-    environment.plot(xs, us)  # env.plot does not use env, it only plots
-    plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-    plt.savefig(
-        results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
-    )
-
-    ### plot data space coverage ###
-    if plot_data:
-        cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
-        # train data
-        xs = dyn_train_buffer.data[0][:, :dim_x]  # only states
-        df = pd.DataFrame()
-        df[cols] = np.array(xs.cpu())
-        df["traj_id"] = df.index // horizon
-        g = sns.PairGrid(df, hue="traj_id")
-        # g = sns.PairGrid(df)
-        g.map_diag(sns.histplot, hue=None)
-        g.map_offdiag(plt.plot)
-        g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
-        g.savefig(results_dir / "train_data.png", dpi=150)
-        # test data
-        xs = dyn_test_buffer.data[0][:, :dim_x]  # only states
-        df = pd.DataFrame()
-        df[cols] = np.array(xs.cpu())
-        df["traj_id"] = df.index // horizon
-        g = sns.PairGrid(df, hue="traj_id")
-        # g = sns.PairGrid(df)
-        g.map_diag(sns.histplot, hue=None)
-        g.map_offdiag(plt.plot)
-        g.fig.suptitle(f"test data ({df.shape[0] // horizon} episodes)", y=1.01)
-        g.savefig(results_dir / "test_data.png", dpi=150)
-
-    # plot training loss
-    def scaled_xaxis(y_points, n_on_axis):
-        return np.arange(len(y_points)) / len(y_points) * n_on_axis
-
-    if dyn_model_type != "env":
-        fig_loss_dyn, ax_loss_dyn = plt.subplots()
-        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
-        ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
-        x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
-        ax_loss_dyn.plot(x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss")
-        if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
-            ax_loss_dyn.set_yscale("symlog")
-        ax_loss_dyn.set_xlabel("epochs")
-        ax_loss_dyn.set_ylabel("loss")
-        ax_loss_dyn.set_title(
-            f"DYN {dyn_model_type} loss "
-            f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
-        )
-        ax_loss_dyn.legend()
-        plt.savefig(results_dir / "dyn_loss.png", dpi=150)
-
-    if policy_type != "tvlg":
-        fig_loss_pol, ax_loss_pol = plt.subplots()
-        x_train_loss_pol = scaled_xaxis(pol_loss_trace, pol_epoch_counter)
-        ax_loss_pol.plot(x_train_loss_pol, pol_loss_trace, c="k", label="train loss")
-        x_test_loss_pol = scaled_xaxis(pol_test_loss_trace, pol_epoch_counter)
-        ax_loss_pol.plot(x_test_loss_pol, pol_test_loss_trace, c="g", label="test loss")
-        if pol_loss_trace[0] > 1 and pol_loss_trace[-1] < 0.1:
-            ax_loss_pol.set_yscale("symlog")
-        ax_loss_pol.set_xlabel("epochs")
-        ax_loss_pol.set_ylabel("loss")
-        ax_loss_pol.set_title(
-            f"POL {policy_type} loss "
-            f"({int(pol_train_buffer.size/horizon)} local solutions, lr={lr_pol:.0e})"
-        )
-        ax_loss_pol.legend()
-        plt.savefig(results_dir / "pol_loss.png", dpi=150)
-
     if plotting:
-        plt.show()
+        ### policy vs env
+        # TODO label plot
+        # TODO sample action?
+        xs, us, xxs = environment.run(initial_state, global_policy, horizon)
+        environment.plot(xs, us)
+        plt.suptitle(f"{policy_type} policy vs env")
+        plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
+
+        ### policy vs dyn model
+        xs = torch.zeros((horizon, dim_x))
+        us = torch.zeros((horizon, dim_u))
+        state = initial_state
+        for t in range(horizon):
+            action = global_policy.predict(state, t=t)
+            xu = torch.cat((state, action))[None, :]
+            x_ = global_dynamics.predict(xu)
+            xs[t, :] = state
+            us[t, :] = action
+            state = x_[0, :]
+        environment.plot(xs, us)  # env.plot does not use env, it only plots
+        plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+        plt.savefig(
+            results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
+        )
+
+        ### plot data space coverage ###
+        if plot_data and plotting:
+            cols = ["theta", "theta_dot"]  # TODO useful to also plot actions?
+            # train data
+            xs = dyn_train_buffer.data[0][:, :dim_x]  # only states
+            df = pd.DataFrame()
+            df[cols] = np.array(xs.cpu())
+            df["traj_id"] = df.index // horizon
+            g = sns.PairGrid(df, hue="traj_id")
+            # g = sns.PairGrid(df)
+            g.map_diag(sns.histplot, hue=None)
+            g.map_offdiag(plt.plot)
+            g.fig.suptitle(f"train data ({df.shape[0] // horizon} episodes)", y=1.01)
+            g.savefig(results_dir / "train_data.png", dpi=150)
+            # test data
+            xs = dyn_test_buffer.data[0][:, :dim_x]  # only states
+            df = pd.DataFrame()
+            df[cols] = np.array(xs.cpu())
+            df["traj_id"] = df.index // horizon
+            g = sns.PairGrid(df, hue="traj_id")
+            # g = sns.PairGrid(df)
+            g.map_diag(sns.histplot, hue=None)
+            g.map_offdiag(plt.plot)
+            g.fig.suptitle(f"test data ({df.shape[0] // horizon} episodes)", y=1.01)
+            g.savefig(results_dir / "test_data.png", dpi=150)
+
+        # plot training loss
+        def scaled_xaxis(y_points, n_on_axis):
+            return np.arange(len(y_points)) / len(y_points) * n_on_axis
+
+        if dyn_model_type != "env":
+            fig_loss_dyn, ax_loss_dyn = plt.subplots()
+            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
+            ax_loss_dyn.plot(
+                x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
+            )
+            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
+            ax_loss_dyn.plot(
+                x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss"
+            )
+            if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
+                ax_loss_dyn.set_yscale("symlog")
+            ax_loss_dyn.set_xlabel("epochs")
+            ax_loss_dyn.set_ylabel("loss")
+            ax_loss_dyn.set_title(
+                f"DYN {dyn_model_type} loss "
+                f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
+            )
+            ax_loss_dyn.legend()
+            plt.savefig(results_dir / "dyn_loss.png", dpi=150)
+
+        if policy_type != "tvlg":
+            fig_loss_pol, ax_loss_pol = plt.subplots()
+            x_train_loss_pol = scaled_xaxis(pol_loss_trace, pol_epoch_counter)
+            ax_loss_pol.plot(
+                x_train_loss_pol, pol_loss_trace, c="k", label="train loss"
+            )
+            x_test_loss_pol = scaled_xaxis(pol_test_loss_trace, pol_epoch_counter)
+            ax_loss_pol.plot(
+                x_test_loss_pol, pol_test_loss_trace, c="g", label="test loss"
+            )
+            if pol_loss_trace[0] > 1 and pol_loss_trace[-1] < 0.1:
+                ax_loss_pol.set_yscale("symlog")
+            ax_loss_pol.set_xlabel("epochs")
+            ax_loss_pol.set_ylabel("loss")
+            ax_loss_pol.set_title(
+                f"POL {policy_type} loss "
+                f"({int(pol_train_buffer.size/horizon)} local solutions, lr={lr_pol:.0e})"
+            )
+            ax_loss_pol.legend()
+            plt.savefig(results_dir / "pol_loss.png", dpi=150)
+
+        if show_plots:
+            plt.show()
 
     logger.strong_line()
     logger.info(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")
