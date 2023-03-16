@@ -1720,34 +1720,12 @@ def experiment(
         logger.info("START Collecting Dynamics Rollouts")
         global_dynamics.cpu()  # in-place
         torch.set_grad_enabled(False)
-        # # global policy (tvlg with feedback)
-        # exploration_policy = compose(lambda _: _[0], global_policy)
-
-        # # tvlg (only!!!) without feedback
-        # exploration_policy = compose(
-        #     lambda _: _[0],
-        #     partial(global_policy.__call__, with_feedback=False)
-        # )
-
-        # 50-50 %: tvgl-fb or gaussian noise
 
         class AddDithering(Decorator[Model]):
             @override
             def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
                 y = self.decorated.predict(x, **kw)
                 return y + torch.randn_like(y)
-
-            # # if torch.randn(1) > 0.5:
-            # #     # return global_policy.predict(x, t)  # TODO actual makes no difference?
-            # #     return global_policy.actual().predict(x, t) + dithering
-            # # else:
-            # #     return torch.normal(torch.zeros(dim_u), 3 * torch.ones(dim_u))
-            # return global_policy.predict(x, **kw) + dithering
-            # # return torch.normal(0.0 * torch.ones(dim_u), 1e-2 * torch.ones(dim_u))
-
-        # # random gaussian
-        # exploration_policy.predict = lambda *_: torch.randn(dim_u)  # N(0,1)
-        # exploration_policy.predict = lambda *_: torch.randn(dim_u) * 3
 
         exploration_policy = AddDithering(global_policy)  # decorate w/o changing policy
 
@@ -2302,54 +2280,6 @@ def experiment(
                 plt.savefig(results_dir / f"pol_eval_{i_iter}.png", dpi=150)
                 if show_plots:
                     plt.show()
-
-    # if plotting:  # TODO change to save plots and show if plotting
-    #     ### tvlg vectorized vs env
-    #     xs, us, xxs = environment.run(
-    #         s0_dist.sample(), local_vectorized_policy, horizon
-    #     )
-    #     environment.plot(xs, us)
-    #     plt.suptitle(f"tvlg vec policy vs env")
-
-    #     ### tvlg vec vs dyn model
-    #     xs = torch.zeros((horizon, dim_x))
-    #     us = torch.zeros((horizon, dim_u))
-    #     state = initial_state[None, :]
-    #     for t in range(horizon):
-    #         action = local_vectorized_policy.predict(state, t=t)
-    #         # breakpoint()
-    #         xu = torch.cat((state, action), dim=-1)
-    #         xs[t, :] = state
-    #         us[t, :] = action
-    #         state = global_dynamics.predict(xu)
-    #     environment.plot(xs, us)  # env.plot does not use env, it only plots
-    #     plt.suptitle(f"tvlg vec policy vs {dyn_model_type} dynamics")
-
-    #     # ### local mixture vs env
-    #     # xs, us, xxs = environment.run(initial_state, local_mixture_policy, horizon)
-    #     # environment.plot(xs, us)
-    #     # plt.suptitle(f"tvlg mixture policy vs env")
-
-    #     ### global policy vs env
-    #     xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-    #     environment.plot(xs, us)
-    #     plt.suptitle(f"{policy_type} policy vs env")
-
-    #     ### global policy vs dyn model
-    #     xs = torch.zeros((horizon, dim_x))
-    #     us = torch.zeros((horizon, dim_u))
-    #     state = initial_state[None, :]
-    #     for t in range(horizon):
-    #         action = global_policy.predict(state, t=t)
-    #         xu = torch.cat((state, action), dim=-1)
-    #         xs[t, :] = state
-    #         us[t, :] = action
-    #         state = global_dynamics.predict(xu)
-    #     environment.plot(xs, us)  # env.plot does not use env, it only plots
-    #     plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-
-    #     # plt.show()
-    #     # breakpoint()
 
     ####################################################################################################################
     #### EVALUATION
