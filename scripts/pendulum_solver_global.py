@@ -1284,17 +1284,17 @@ def experiment(
     # n_hidden_layers_pol: int = 15,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 1000,
-    # D6) linear regression w/ spec.norm.-resnet & rf features
-    policy_type: str = "snngp",
-    n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    n_hidden_pol: int = 128,
-    n_hidden_layers_pol: int = 5,  # 2 ~ [in, h, h, out]
-    lr_pol: float = 5e-4,
-    n_epochs_pol: int = 500,
+    # # D6) linear regression w/ spec.norm.-resnet & rf features
+    # policy_type: str = "snngp",
+    # n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    # n_hidden_pol: int = 64,
+    # n_hidden_layers_pol: int = 10,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 5e-4,
+    # n_epochs_pol: int = 100,
     ############
     ## i2c solver ##
-    n_iter_solver: int = 10,  # how many i2c solver iterations to do
-    n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
+    n_iter_solver: int = 20,  # how many i2c solver iterations to do
+    n_i2c_vec: int = 5,  # how many local policies in the vectorized i2c batch
     s0_area_var: float = 1e-6,  # how much the initial states in a batch of i2c should vary
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
     # plot_posterior: bool = False,  # plot state-action-posterior over time
@@ -1305,7 +1305,7 @@ def experiment(
     ## general ##
     show_plots: bool = True,  # if False never plt.show(), but creates and saves
     plotting: bool = True,  # if False not plot creation
-    plot_data: bool = True,  # visualize data trajectories (sns => very slow!)
+    plot_data: bool = False,  # visualize data trajectories (sns => very slow!)
     log_console: bool = True,  # also log to console (not just log file); FORCE on if debug
     log_wandb: bool = True,  # off if debug
     wandb_project: str = "smbrl_i2c",
@@ -1935,7 +1935,7 @@ def experiment(
         local_vec_policy, sa_posterior = i2c_solver(
             n_iteration=n_iter_solver,
             initial_state=s0_vec_dist,
-            policy_prior=global_policy if i_iter != 0 else None,
+            policy_prior=global_policy if i_iter != 0 else None,  # always start clean
             plot_posterior=plot_posterior and show_plots and plotting,
         )
         # create mixture (mean) policy
@@ -2146,10 +2146,9 @@ def experiment(
                         f"{policy_type} distilling {n} i2c solutions (epoch {pol_epoch_counter})"
                     )
                     plt.show()
-                    # TODO debug
-                    bias = global_policy.model.pred_var_bias().detach().cpu().item()
-                    error = global_policy.model.error_cov_out().detach().cpu().item()
-                    logger.info(f"bias={bias}, error={error}")
+                    # bias = global_policy.model.pred_var_bias().detach().cpu().item()
+                    # error = global_policy.model.error_cov_out().detach().cpu().item()
+                    # logger.info(f"bias={bias}, error={error}")
 
                 if i_epoch_pol % 100 == 0:
                     visualize_training()
