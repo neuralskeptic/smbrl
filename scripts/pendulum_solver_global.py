@@ -891,7 +891,7 @@ class PseudoPosteriorSolver(CudaAble):
                 current_alpha=alpha,  # unused for Polyak
             )
             if plot_posterior:
-                # plot_trajectory_distribution(sa_filter, f"filter {i}")
+                plot_trajectory_distribution(sa_policy_fb, f"rollout {i}")
                 plot_trajectory_distribution(sa_smoother, f"posterior {i}")
                 plt.show()
         # if plot_posterior:
@@ -1205,9 +1205,9 @@ class Annealing(TemperatureStrategy):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_dyn_rollout_episodes: int = 5,
+    n_dyn_rollout_episodes: int = 50,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
-    n_iter: int = 10,  # outer loop
+    n_iter: int = 1,  # outer loop
     ## frequency or period: whichever is lower dominates
     log_frequency: float = 0.1,  # every p-th of n_epochs
     log_period: int = 100,  # every N epochs
@@ -1256,8 +1256,8 @@ def experiment(
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
-    # #  D1) local time-varying linear gaussian controllers (i2c)
-    # policy_type: str = "tvlg",
+    #  D1) local time-varying linear gaussian controllers (i2c)
+    policy_type: str = "tvlg",
     # #  D2) mlp model
     # policy_type: str = "mlp",
     # n_hidden_pol: int = 128,
@@ -1367,7 +1367,7 @@ def experiment(
     torch.set_printoptions(precision=7)
     torch.set_default_dtype(torch.float64)
 
-    #### mdp, initial state, cost ####
+    #### S: mdp, initial state, cost
     if env_type == "localPendulum":
         environment = Pendulum()  # local seed
     dim_xu = environment.dim_xu
@@ -1398,7 +1398,7 @@ def experiment(
     #     [dim_x, dim_u], batchsize=batch_size, device=device, max_size=1e4
     # )
 
-    #### approximate inference params ####
+    #### S: approximate inference params
     quad_params = CubatureQuadrature(1, 0, 0)
     gh_params = GaussHermiteQuadrature(degree=3)
     # if deterministic -> QuadratureInference (unscented gaussian approx)
@@ -1438,7 +1438,7 @@ def experiment(
             pred = x[..., :dim_x].detach() + delta
             return pred, *rest
 
-    #### cost (model) ####
+    #### S: cost (model)
     @dataclass
     class CostModel(DeterministicModel):
         model: Callable = None  # unused in model_call
@@ -1474,7 +1474,7 @@ def experiment(
         ),
     )
 
-    #### global dynamics model ####
+    #### S: global dynamics model
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
             model=environment,
@@ -1573,7 +1573,7 @@ def experiment(
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
 
-    #### local (i2c) policy ####
+    #### S: local (i2c) policy
     local_policy = TimeVaryingStochasticPolicy(
         model=TimeVaryingLinearGaussian(
             horizon,
@@ -1608,7 +1608,7 @@ def experiment(
         part3 = cov_pred.logdet()
         return sum(part1 + part2 + part3)  # sum over all batch dims
 
-    #### global policy model ####
+    #### S: global policy model
     if policy_type == "tvlg":
         global_policy = deepcopy(local_policy)
     elif policy_type == "mlp":
@@ -1680,7 +1680,7 @@ def experiment(
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
 
-    ### i2c solver ###
+    #### S: i2c solver
     i2c_solver = PseudoPosteriorSolver(
         dim_x=dim_x,
         dim_u=dim_u,
