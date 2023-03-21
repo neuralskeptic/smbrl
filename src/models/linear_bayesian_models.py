@@ -163,14 +163,16 @@ class LinearBayesianModel(nn.Module):
             * (y.T @ y - 2 * y.T @ y_pred + y_pred.T @ y_pred)
         )
         part3 = -0.5 * (
-            torch.trace((1 / self.error_vars_out()).diag() @ post_cov_out)  # = dim_y
+            # torch.trace((1 / self.error_vars_out()).diag() @ post_cov_out)  # = dim_y
+            self.dim_y
             * torch.trace(self.post_cov_in() @ phi.T @ phi)
         )
         # kl of posterior from prior (vec kl works too: check speed?)
         part4 = (
             0.5
             * torch.trace(self.prior_cov_in_inverse @ self.post_cov_in())
-            * torch.trace(prior_cov_out.inverse() @ post_cov_out)  # = dim_y
+            # * torch.trace(prior_cov_out.inverse() @ post_cov_out)  # = dim_y
+            * self.dim_y
         )
         part5 = 0.5 * torch.trace(
             (self.prior_mean - self.post_mean).T

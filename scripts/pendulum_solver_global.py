@@ -1296,7 +1296,7 @@ def experiment(
     n_iter_solver: int = 10,  # how many i2c solver iterations to do
     n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
     s0_area_var: float = 1e-6,  # how much the initial states in a batch of i2c should vary
-    s0_i2c_var: float = 1e-2,  # how much initial state variance i2c should start with
+    s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
     # plot_local_policy: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
@@ -1932,22 +1932,25 @@ def experiment(
         s0_vec_cov = s0_i2c_var * torch.eye(dim_x).repeat(n_i2c_vec, 1, 1)
         s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
         # learn a batch of local policies
-        local_vectorized_policy, sa_posterior = i2c_solver(
+        local_vec_policy, sa_posterior = i2c_solver(
             n_iteration=n_iter_solver,
             initial_state=s0_vec_dist,
             policy_prior=global_policy if i_iter != 0 else None,
             plot_posterior=plot_posterior and show_plots and plotting,
         )
         # create mixture (mean) policy
-        local_mixture_policy = deepcopy(local_vectorized_policy)
-        local_mixture_policy.model.k_actual = (
-            local_vectorized_policy.model.k_actual.mean(1)
-        )
-        local_mixture_policy.model.K_actual = (
-            local_vectorized_policy.model.K_actual.mean(1)
-        )
-        local_mixture_policy.model.k_opt = local_vectorized_policy.model.k_opt.mean(1)
-        local_mixture_policy.model.K_opt = local_vectorized_policy.model.K_opt.mean(1)
+        local_mixture_policy = deepcopy(local_vec_policy)
+        local_mixture_policy.model.k_actual = local_vec_policy.model.k_actual.mean(1)
+        local_mixture_policy.model.K_actual = local_vec_policy.model.K_actual.mean(1)
+        local_mixture_policy.model.k_opt = local_vec_policy.model.k_opt.mean(1)
+        local_mixture_policy.model.K_opt = local_vec_policy.model.K_opt.mean(1)
+        local_mixture_policy.model.K_opt = local_vec_policy.model.sigma.mean(1)
+        local_mixture_policy.model.K_opt = local_vec_policy.model.chol.mean(1)
+        # local_mixture_policy.model.k_actual = local_vec_policy.model.k_actual[:, -1, :]
+        # local_mixture_policy.model.K_actual = local_vec_policy.model.K_actual[:, -1, :]
+        # local_mixture_policy.model.k_opt = local_vec_policy.model.k_opt[:, -1, :]
+        # local_mixture_policy.model.K_opt = local_vec_policy.model.K_opt[:, -1, :]
+
         logger.info("END i2c")
         # log i2c metrics
         for i_ in range(n_iter_solver):
@@ -1975,10 +1978,10 @@ def experiment(
             plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
 
             ## plot local policies vs env
-            xs, us, xxs = environment.run(s0_vec_mean, local_vectorized_policy, horizon)
+            xs, us, xxs = environment.run(s0_vec_mean, local_vec_policy, horizon)
             uvars = []
             for t in range(horizon):
-                u_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+                u_dist = local_vec_policy.predict_dist(xs[t, ...], t=t)
                 u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 uvars.append(u_var)
             uvars = torch.stack(uvars)
@@ -1995,7 +1998,7 @@ def experiment(
             for t in range(horizon):
                 xs[t, ...] = s_dist.mean
                 xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
-                a_dist = local_vectorized_policy.predict_dist(xs[t, ...], t=t)
+                a_dist = local_vec_policy.predict_dist(xs[t, ...], t=t)
                 us[t, ...] = a_dist.mean
                 uvars[t, ...] = a_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
@@ -2041,10 +2044,12 @@ def experiment(
         if policy_type == "tvlg":
             global_policy = deepcopy(local_mixture_policy)  # average gains
             # # else) take first gains
-            # global_policy.model.k_actual = local_vectorized_policy.model.k_actual[:, 0, :]
-            # global_policy.model.K_actual = local_vectorized_policy.model.K_actual[:, 0, :]
-            # global_policy.model.k_opt = local_vectorized_policy.model.k_opt[:, 0, :]
-            # global_policy.model.K_opt = local_vectorized_policy.model.K_opt[:, 0, :]
+            global_policy.model.k_actual = local_vec_policy.model.k_actual[:, 0, ...]
+            global_policy.model.K_actual = local_vec_policy.model.K_actual[:, 0, ...]
+            global_policy.model.k_opt = local_vec_policy.model.k_opt[:, 0, ...]
+            global_policy.model.K_opt = local_vec_policy.model.K_opt[:, 0, ...]
+            global_policy.model.sigma = local_vec_policy.model.sigma[:, 0, ...]
+            global_policy.model.chol = local_vec_policy.model.chol[:, 0, ...]
         else:
             logger.weak_line()
             logger.info("START Training Policy")
