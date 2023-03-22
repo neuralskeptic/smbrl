@@ -891,8 +891,8 @@ class PseudoPosteriorSolver(CudaAble):
                 current_alpha=alpha,  # unused for Polyak
             )
             if plot_posterior:
-                plot_trajectory_distribution(sa_policy_fb, f"rollout {i}")
                 plot_trajectory_distribution(sa_smoother, f"posterior {i}")
+                plot_trajectory_distribution(sa_policy_fb, f"rollout {i}")
                 plt.show()
         # if plot_posterior:
         #     # plot_trajectory_distribution(sa_filter, f"filter")
@@ -933,7 +933,7 @@ class PseudoPosteriorSolver(CudaAble):
         return self
 
 
-class TemperatureStrategy(CudaAble):
+class TemperatureStrategy:
 
     _alpha: torch.float32
 
@@ -948,11 +948,11 @@ class TemperatureStrategy(CudaAble):
         pass
 
 
-class Constant(TemperatureStrategy):
+class Constant(TemperatureStrategy, CudaAble):
     """."""
 
     def __init__(self, alpha):
-        assert alpha >= 0.0
+        assert torch.all(alpha >= 0.0)
         self._alpha = alpha
 
     def __call__(
@@ -960,9 +960,13 @@ class Constant(TemperatureStrategy):
         cost: Callable,
         state_action_distribution,
         state_action_policy,
-        current_alpha: float,
+        current_alpha: torch.Tensor,
     ):
         return self._alpha
+
+    def to(self, device):
+        self._alpha.to(device)
+        return self
 
 
 class MaximumLikelihood(TemperatureStrategy):
@@ -1163,7 +1167,7 @@ class QuadraticModel(TemperatureStrategy):
         return new_alpha
 
 
-class Annealing(TemperatureStrategy):
+class Annealing(TemperatureStrategy, Stateless):
     def __init__(self, start, end, iterations):
         assert start > 0.0
         assert end > start
@@ -1184,7 +1188,7 @@ class Annealing(TemperatureStrategy):
         state_action_policy,
         current_alpha: float,
     ):
-        return next(self.schedule)
+        return next(self.schedule) * torch.ones_like(current_alpha)
 
 
 # class HitCounter:
@@ -1689,14 +1693,14 @@ def experiment(
         cost=cost,
         policy_template=local_policy,
         smoother=linear_gaussian_smoothing,
-        # update_temperature_strategy=Constant(alpha),
         # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
+        update_temperature_strategy=Constant(0.2 * torch.ones(n_i2c_vec, 1)),
+        # update_temperature_strategy=Annealing(1e-2, 3, n_iter_solver),
         # update_temperature_strategy=KullbackLeiblerDivergence(QuadratureInference(dim_xu, gh_params), epsilon=kl_bound),
-        # update_temperature_strategy=Annealing(1e-2, 5e1, 15+1),
-        update_temperature_strategy=PolyakStepSize(
-            QuadratureInference(dim_xu, quad_params)
-        ),
+        # update_temperature_strategy=PolyakStepSize(
+        #     QuadratureInference(dim_xu, quad_params)
+        # ),
     )
 
     ####################################################################################################################
