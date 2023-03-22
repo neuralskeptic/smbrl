@@ -1305,7 +1305,8 @@ def experiment(
     ## i2c solver ##
     n_iter_solver: int = 20,  # how many i2c solver iterations to do
     n_i2c_vec: int = 5,  # how many local policies in the vectorized i2c batch
-    s0_area_var: float = 1e-6,  # how much the initial states in a batch of i2c should vary
+    s0dot_var: float = 1e-6,  # very low initial velocity variance (low energy)
+    s0_area_var: float = 1e-2,  # how much the initial states in a batch of i2c should vary
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
@@ -1387,8 +1388,9 @@ def experiment(
     # initial state variance is part of env, thus should not be hyperparam
     initial_state_distribution = MultivariateGaussian(
         initial_state,
-        1e-6 * torch.eye(dim_x),  # original
-        # 1e-2 * torch.eye(dim_x),  # more exploration
+        # low initial velocity variance!!!
+        # 1e-6 * torch.eye(dim_x),  # original
+        torch.diag_embed(torch.Tensor([1e-2, 1e-6])),  # more exploration
     )
 
     dyn_train_buffer = ReplayBuffer(
@@ -1701,8 +1703,8 @@ def experiment(
         smoother=linear_gaussian_smoothing,
         # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
-        update_temperature_strategy=Constant(0.2 * torch.ones(n_i2c_vec, 1)),
-        # update_temperature_strategy=Annealing(1e-2, 3, n_iter_solver),
+        # update_temperature_strategy=Constant(0.2 * torch.ones(n_i2c_vec, 1)),
+        update_temperature_strategy=Annealing(1e-2, 5, n_iter_solver),
         # update_temperature_strategy=KullbackLeiblerDivergence(QuadratureInference(dim_xu, gh_params), epsilon=kl_bound),
         # update_temperature_strategy=PolyakStepSize(
         #     QuadratureInference(dim_xu, quad_params)
@@ -1933,13 +1935,15 @@ def experiment(
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
-        # choose starting area for all i2c solutions
+        # choose starting area for all i2c solutions (low inital velocity var)
         s0_area_mean = initial_state_distribution.sample()
-        s0_area_cov = s0_area_var * torch.eye(dim_x)
+        s0_area_cov = torch.diag_embed(torch.tensor([s0_area_var, s0dot_var]))
         s0_area_dist = MultivariateGaussian(s0_area_mean, s0_area_cov)
         # sample (similar) init state distributions for all i2c solutions
+        # (low inital velocity var)
         s0_vec_mean = s0_area_dist.sample([n_i2c_vec])
-        s0_vec_cov = s0_i2c_var * torch.eye(dim_x).repeat(n_i2c_vec, 1, 1)
+        s0_i2c_cov = torch.diag_embed(torch.tensor([s0_i2c_var, s0dot_var]))
+        s0_vec_cov = s0_i2c_cov.repeat(n_i2c_vec, 1, 1)
         s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
         # learn a batch of local policies
         local_vec_policy, sa_posterior = i2c_solver(
