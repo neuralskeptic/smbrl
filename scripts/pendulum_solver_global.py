@@ -1176,8 +1176,14 @@ class Annealing(TemperatureStrategy, Stateless):
             (
                 start
                 + (end - start)
-                * torch.sqrt(torch.linspace(0, iterations, iterations))
-                / math.sqrt(iterations)
+                ### linear schedule
+                * (torch.linspace(0, iterations, iterations)) / (iterations)
+                # ### quadratic schedule
+                # * (torch.linspace(0, iterations, iterations)) ** 2
+                # / (iterations) ** 2
+                # ### square root schedule
+                # * torch.sqrt(torch.linspace(0, iterations, iterations))
+                # / math.sqrt(iterations)
             ).tolist()
         )
 
