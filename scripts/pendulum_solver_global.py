@@ -1952,18 +1952,6 @@ def experiment(
             policy_prior=global_policy if i_iter != 0 else None,  # always start clean
             plot_posterior=plot_posterior and show_plots and plotting,
         )
-        # create mixture (mean) policy
-        local_mixture_policy = deepcopy(local_vec_policy)
-        local_mixture_policy.model.k_actual = local_vec_policy.model.k_actual.mean(1)
-        local_mixture_policy.model.K_actual = local_vec_policy.model.K_actual.mean(1)
-        local_mixture_policy.model.k_opt = local_vec_policy.model.k_opt.mean(1)
-        local_mixture_policy.model.K_opt = local_vec_policy.model.K_opt.mean(1)
-        local_mixture_policy.model.K_opt = local_vec_policy.model.sigma.mean(1)
-        local_mixture_policy.model.K_opt = local_vec_policy.model.chol.mean(1)
-        # local_mixture_policy.model.k_actual = local_vec_policy.model.k_actual[:, -1, :]
-        # local_mixture_policy.model.K_actual = local_vec_policy.model.K_actual[:, -1, :]
-        # local_mixture_policy.model.k_opt = local_vec_policy.model.k_opt[:, -1, :]
-        # local_mixture_policy.model.K_opt = local_vec_policy.model.K_opt[:, -1, :]
 
         logger.info("END i2c")
         # log i2c metrics
@@ -2056,8 +2044,16 @@ def experiment(
 
         # Fit global policy to local policy
         if policy_type == "tvlg":
-            global_policy = deepcopy(local_mixture_policy)  # average gains
-            # # else) take first gains
+            # create mixture (mean) policy
+            global_policy = deepcopy(local_vec_policy)
+            # # a) average gains
+            # global_policy.model.k_actual = local_vec_policy.model.k_actual.mean(1)
+            # global_policy.model.K_actual = local_vec_policy.model.K_actual.mean(1)
+            # global_policy.model.k_opt = local_vec_policy.model.k_opt.mean(1)
+            # global_policy.model.K_opt = local_vec_policy.model.K_opt.mean(1)
+            # global_policy.model.K_opt = local_vec_policy.model.sigma.mean(1)
+            # global_policy.model.K_opt = local_vec_policy.model.chol.mean(1)
+            # b) take first gains
             global_policy.model.k_actual = local_vec_policy.model.k_actual[:, 0, ...]
             global_policy.model.K_actual = local_vec_policy.model.K_actual[:, 0, ...]
             global_policy.model.k_opt = local_vec_policy.model.k_opt[:, 0, ...]
@@ -2231,23 +2227,30 @@ def experiment(
                 a_pred_roll = torch.zeros((horizon, dim_u))
                 s_pred_roll = torch.zeros((horizon, dim_x))
                 state = s_env[0, :]  # for rollouts: data init state
+                # pointwise
+                _a_pw_vec = global_policy.predict_dist(s_env[...])
                 for t in range(horizon):
-                    # pointwise
-                    a_pred_pw_dists.append(global_policy.predict_dist(s_env[t, :]))
-                    if isinstance(global_policy, StochasticPolicy):
-                        a_pred_pw[t, :], var = global_policy(s_env[t, :])
-                    else:
-                        a_pred_pw[t, :] = global_policy(s_env[t, :])
+                    a_pred_pw_dists.append(
+                        MultivariateGaussian(
+                            _a_pw_vec.mean[t, ...], _a_pw_vec.covariance[t, ...]
+                        )
+                    )
+                a_pred_pw = _a_pw_vec.mean
+                # if isinstance(global_policy, StochasticPolicy):
+                #     a_pred_pw[t, :], var = global_policy(s_env[t, :])
+                # else:
+                #     a_pred_pw[t, :] = global_policy(s_env[t, :])
+                for t in range(horizon):
                     # rollout
                     s_pred_roll[t, :] = state
                     a_pred_roll_dists.append(global_policy.predict_dist(state))
-                    if isinstance(global_policy, StochasticPolicy):
-                        action, var = global_policy(state)
-                    else:
-                        action = global_policy(state)
-                    a_pred_roll[t, :] = action
+                    a_pred_roll[t, :] = a_pred_roll_dists[-1].mean
+                    # if isinstance(global_policy, StochasticPolicy):
+                    #     a_pred_roll[t, :], var = global_policy(state)
+                    # else:
+                    #     a_pred_roll[t, :] = global_policy(state)
                     # next state
-                    state, _ = environment(torch.cat([state, action], dim=0))
+                    state, _ = environment(torch.cat([state, a_pred_roll[t, :]], dim=0))
                 # compute costs (except init state use pred next state)
                 sa_env = torch.cat([s_env, a_env], dim=1)
                 c_env = cost.predict(sa_env)
