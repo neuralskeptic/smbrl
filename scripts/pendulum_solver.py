@@ -522,19 +522,8 @@ class PseudoPosteriorSolver(object):
         self.alpha = 0.0
         self.init_metrics()
         policy = self.policy_prior
-        state_action_policy, _, _ = self.forward_pass(
-            self.env, self.cost, policy, self.initial_state, alpha=0.0
-        )
-        self.compute_metrics(state_action_policy, state_action_policy, alpha=0.0)
-        self.alpha = self.update_temperature_strategy(
-            self.cost,
-            None,  # unused
-            # forward_distribution,
-            state_action_policy,
-            current_alpha=0.0,  # unused
-        )
-        print(self.alpha)
-        for i in range(n_iteration):
+
+        for i in range(n_iteration + 1):
             print(f"{i} {self.alpha:.2f}")
             (
                 forward_state_action_prior,
