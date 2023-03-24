@@ -12,18 +12,6 @@ def df2torch(df):
     return torch.tensor(df.values)
 
 
-def vec(x):
-    return x.T.reshape(-1)
-
-
-def autograd_tensor(x):
-    """
-    Same as torch.Tensor(x, requires_grad=True), but does not cause warnings.
-    detach first and then clonw removes the clone from the computation graph
-    """
-    return x.detach().clone().requires_grad_(True)
-
-
 def qube_rollout2df(data):
     s, a, r, ss, absorb, last = parse_dataset(data)
     N = len(a)
@@ -64,7 +52,3 @@ def dataset2df_4(data):
             cur_id += 1
     df["traj_id"] = traj_ids
     return df
-
-
-def map_cpu(iterable):
-    return map(lambda x: x.to("cpu"), iterable)
