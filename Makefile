@@ -29,7 +29,7 @@ externals: quanser_robots mushroom_rl experiment_launcher i2c FORCE
 
 lint: FORCE
 	$(CONDA_ACTIVATE)
-	black . && isort --gitignore .
+	black . && isort .
 
 .PHONY: yml, src, lint, externals, quanser_robots, mushroom_rl, experiment_launcher, FORCE
 FORCE:
