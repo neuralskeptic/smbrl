@@ -2160,14 +2160,13 @@ def experiment(
                     # error = global_policy.model.error_cov_out().detach().cpu().item()
                     # logger.info(f"bias={bias}, error={error}")
 
-                if i_epoch_pol % 100 == 0:
-                    visualize_training()
                 pol_epoch_counter += 1
 
                 # save logs & test
                 logger.save_logs()
                 if i_epoch_pol % min(n_epochs_pol * log_frequency, log_period) == 0:
                     with torch.no_grad():
+                        visualize_training()
                         # test loss
                         # pol_test_buffer.shuffling = False  # TODO only for plotting?
                         # _test_losses = []
