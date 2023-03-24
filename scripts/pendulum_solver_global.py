@@ -1176,11 +1176,10 @@ class Annealing(TemperatureStrategy, Stateless):
             (
                 start
                 + (end - start)
-                ### linear schedule
-                * (torch.linspace(0, iterations, iterations)) / (iterations)
-                # ### quadratic schedule
-                # * (torch.linspace(0, iterations, iterations)) ** 2
-                # / (iterations) ** 2
+                # ### linear schedule
+                # * (torch.linspace(0, iterations, iterations)) / (iterations)
+                ### quadratic schedule
+                * (torch.linspace(0, iterations, iterations)) ** 2 / (iterations) ** 2
                 # ### square root schedule
                 # * torch.sqrt(torch.linspace(0, iterations, iterations))
                 # / math.sqrt(iterations)
@@ -1215,7 +1214,7 @@ class Annealing(TemperatureStrategy, Stateless):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_dyn_rollout_episodes: int = 50,
+    n_dyn_rollout_episodes: int = 1,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_iter: int = 1,  # outer loop
     ## frequency or period: whichever is lower dominates
@@ -1228,8 +1227,8 @@ def experiment(
     early_stop_thresh: float = -3e3,  # stop training when validation loss lower
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
-    # #  D1) true dynamics
-    # dyn_model_type: str = "env",
+    #  D1) true dynamics
+    dyn_model_type: str = "env",
     # #  D2) mlp model
     # dyn_model_type: str = "mlp",
     # n_hidden_dyn: int = 256,
@@ -1256,13 +1255,13 @@ def experiment(
     # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
-    # D6) linear regression w/ spec.norm.-resnet & rf features
-    dyn_model_type: str = "snngp",
-    n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    n_hidden_dyn: int = 128,
-    n_hidden_layers_dyn: int = 5,  # 2 ~ [in, h, h, out]
-    lr_dyn: float = 5e-4,
-    n_epochs_dyn: int = 500,
+    # # D6) linear regression w/ spec.norm.-resnet & rf features
+    # dyn_model_type: str = "snngp",
+    # n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    # n_hidden_dyn: int = 128,
+    # n_hidden_layers_dyn: int = 5,  # 2 ~ [in, h, h, out]
+    # lr_dyn: float = 5e-4,
+    # n_epochs_dyn: int = 500,
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
@@ -1303,8 +1302,8 @@ def experiment(
     # n_epochs_pol: int = 100,
     ############
     ## i2c solver ##
-    n_iter_solver: int = 20,  # how many i2c solver iterations to do
-    n_i2c_vec: int = 5,  # how many local policies in the vectorized i2c batch
+    n_iter_solver: int = 30,  # how many i2c solver iterations to do
+    n_i2c_vec: int = 1,  # how many local policies in the vectorized i2c batch
     s0dot_var: float = 1e-6,  # very low initial velocity variance (low energy)
     s0_area_var: float = 1e-2,  # how much the initial states in a batch of i2c should vary
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
@@ -1945,13 +1944,28 @@ def experiment(
         s0_i2c_cov = torch.diag_embed(torch.tensor([s0_i2c_var, s0dot_var]))
         s0_vec_cov = s0_i2c_cov.repeat(n_i2c_vec, 1, 1)
         s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
-        # learn a batch of local policies
-        local_vec_policy, sa_posterior = i2c_solver(
-            n_iteration=n_iter_solver,
-            initial_state=s0_vec_dist,
-            policy_prior=global_policy if i_iter != 0 else None,  # always start clean
-            plot_posterior=plot_posterior and show_plots and plotting,
-        )
+        # # learn a batch of local policies
+        # local_vec_policy, sa_posterior = i2c_solver(
+        #     n_iteration=n_iter_solver,
+        #     initial_state=s0_vec_dist,
+        #     # initial_state=initial_state_distribution,  # TODO debug
+        #     policy_prior=global_policy if i_iter != 0 else None,  # always start clean
+        #     plot_posterior=plot_posterior and show_plots and plotting,
+        # )
+
+        # TODO debug
+        prefix = f"scripts/_dbg{n_i2c_vec}_"
+        # # save i2c
+        # torch.save(local_vec_policy, repo_dir / f'{prefix}local_vec_i2c.obj')
+        # torch.save(sa_posterior, repo_dir / f'{prefix}sa_posterior.obj')
+        # torch.save(i2c_solver.metrics, repo_dir / f'{prefix}i2c_solver-metrics.obj')
+        # torch.save(s0_vec_mean, repo_dir / f'{prefix}s0_vec_mean.obj')
+        # load (saved) i2c
+        local_vec_policy = torch.load(repo_dir / f"{prefix}local_vec_i2c.obj")
+        sa_posterior = torch.load(repo_dir / f"{prefix}sa_posterior.obj")
+        i2c_solver.metrics = torch.load(repo_dir / f"{prefix}i2c_solver-metrics.obj")
+        s0_vec_mean = torch.load(repo_dir / f"{prefix}s0_vec_mean.obj")
+        plot_trajectory_distribution(sa_posterior, "sa_posterior")
 
         logger.info("END i2c")
         # log i2c metrics
