@@ -62,7 +62,7 @@ class MultivariateGaussian(Distribution):
             self.covariance[..., indices, indices],
         )
 
-    def condition(self, indices):
+    def condition_on_mean(self, indices):
         """Conditional of indices conditioned on means (!) of other indices"""
         # get list of complement indices
         other_indices = list(range(self.mean.shape[-1]))  # add all
@@ -79,6 +79,36 @@ class MultivariateGaussian(Distribution):
             conditional_mean,
             conditional_cov,
         )
+
+    def conditional(self, indices):
+        """Conditional function takes value on which to condition indices"""
+        # get list of complement indices
+        other_indices = list(range(self.mean.shape[-1]))  # add all
+        other_indices[indices] = []  # remove passed indices
+        this_cov = self.covariance[..., indices, indices]
+        # we can only use one complement index list at once, so we slice twice
+        other_cov = self.covariance[..., :, other_indices][..., other_indices, :]
+        cross_cov = self.covariance[..., indices, other_indices]  # Cov[this, other]
+        conditional_cov = this_cov - cross_cov @ torch.linalg.solve(
+            other_cov, cross_cov.mT
+        )
+        cross_inv_other = torch.linalg.solve(other_cov.mT, cross_cov.mT).mT
+
+        def conditional_f(x: torch.Tensor):
+            # mu_y_cond_x = y_mean + Cov[this, other] @ other_cov**-1 @ (x - x_mean)
+            this_mean = self.mean[..., indices]
+            other_mean = self.mean[..., other_indices]
+            other_mean = einops.rearrange(other_mean, "... x -> ... 1 x")  # unsqueeze
+            this_mean = einops.rearrange(this_mean, "... y -> ... 1 y")  # unsqueeze
+            conditional_mean = this_mean + einops.einsum(
+                cross_inv_other, (x - other_mean), "b y x, b p x -> b p y"
+            )
+            conditional_cov_p = einops.repeat(
+                conditional_cov, "b y1 y2 -> b p y1 y2", p=x.shape[1]
+            )
+            return MultivariateGaussian(conditional_mean, conditional_cov_p)
+
+        return conditional_f
 
     def full_joint(self, reverse=True):
         """Convert Markovian structure into the joint multivariate Gaussian and forget history."""
@@ -1265,8 +1295,8 @@ def experiment(
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
-    #  D1) local time-varying linear gaussian controllers (i2c)
-    policy_type: str = "tvlg",
+    # #  D1) local time-varying linear gaussian controllers (i2c)
+    # policy_type: str = "tvlg",
     # #  D2) mlp model
     # policy_type: str = "mlp",
     # n_hidden_pol: int = 128,
@@ -1293,13 +1323,13 @@ def experiment(
     # n_hidden_layers_pol: int = 15,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 1000,
-    # # D6) linear regression w/ spec.norm.-resnet & rf features
-    # policy_type: str = "snngp",
-    # n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    # n_hidden_pol: int = 64,
-    # n_hidden_layers_pol: int = 10,  # 2 ~ [in, h, h, out]
-    # lr_pol: float = 5e-4,
-    # n_epochs_pol: int = 100,
+    # D6) linear regression w/ spec.norm.-resnet & rf features
+    policy_type: str = "snngp",
+    n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    n_hidden_pol: int = 64,
+    n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    lr_pol: float = 5e-4,
+    n_epochs_pol: int = 100,
     ############
     ## i2c solver ##
     n_iter_solver: int = 30,  # how many i2c solver iterations to do
@@ -2083,21 +2113,25 @@ def experiment(
             #### T: distill global policy
             # store marginal state and conditional action of joint (smoothed) posterior
             # (state covariance not needed for moment matching: policy has no cov input)
-            s_means = torch.empty([horizon, n_i2c_vec, dim_x])
-            a_means = torch.empty([horizon, n_i2c_vec, dim_u])
-            a_covs = torch.empty([horizon, n_i2c_vec, dim_u, dim_u])
+            # sample multiple values using quadrature (feedback behaviour)
+            quad_s = QuadratureInference(dim_x, quad_params)
+            n_samples = quad_s.n_points
+            s_pts = torch.empty([horizon, n_i2c_vec, n_samples, dim_x])
+            a_means = torch.empty([horizon, n_i2c_vec, n_samples, dim_u])
+            a_covs = torch.empty([horizon, n_i2c_vec, n_samples, dim_u, dim_u])
             for t, dist_vec_t in enumerate(sa_posterior):
                 s_dist = dist_vec_t.marginalize(slice(0, dim_x))
-                a_dist = dist_vec_t.condition(slice(dim_x, None))
-                s_means[t, ...] = s_dist.mean
+                s_pts[t, ...] = quad_s.get_x_pts(s_dist.mean, s_dist.covariance)
+                a_dist_f = dist_vec_t.conditional(slice(dim_x, None))
+                a_dist = a_dist_f(s_pts[t, ...])
                 a_means[t, ...] = a_dist.mean
                 a_covs[t, ...] = a_dist.covariance
             # add local solutions sequentially (not interleaved)
-            s_means = einops.rearrange(s_means, "T n ... -> (n T) ...")
-            a_means = einops.rearrange(a_means, "T n ... -> (n T) ...")
-            a_covs = einops.rearrange(a_covs, "T n ... -> (n T) ...")
-            pol_train_buffer.clear()  # TODO good?
-            pol_train_buffer.add([s_means, a_means, a_covs])
+            s_pts = einops.rearrange(s_pts, "T v n ... -> (v n T) ...")
+            a_means = einops.rearrange(a_means, "T v n ... -> (v n T) ...")
+            a_covs = einops.rearrange(a_covs, "T v n ... -> (v n T) ...")
+            pol_train_buffer.clear()  # only train policy on last controller
+            pol_train_buffer.add([s_pts, a_means, a_covs])
 
             _train_losses = []
             for i_epoch_pol in trange(n_epochs_pol + 1):
@@ -2312,6 +2346,22 @@ def experiment(
                     f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
                 )
                 plt.savefig(results_dir / f"pol_eval_{i_iter}.png", dpi=150)
+
+                # plot policy rollouts
+                # a) from i2c mixture starting positions
+                xs, us, xxs = environment.run(s0_vec_mean, global_policy, horizon)
+                environment.plot(xs, us)
+                plt.suptitle(f"{policy_type} policy vs env (from i2c init state)")
+                plt.savefig(
+                    results_dir / f"{policy_type}_vs_env_from_s0i2c_{i_iter}.png",
+                    dpi=150,
+                )
+                # # b) from env starting position
+                # xs, us, xxs = environment.run(initial_state, global_policy, horizon)
+                # environment.plot(xs, us)
+                # plt.suptitle(f"{policy_type} policy vs env")
+                # plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
+
                 if show_plots:
                     plt.show()
 
@@ -2324,29 +2374,28 @@ def experiment(
 
     if plotting:
         ### policy vs env
-        # TODO label plot
-        # TODO sample action?
         xs, us, xxs = environment.run(initial_state, global_policy, horizon)
         environment.plot(xs, us)
         plt.suptitle(f"{policy_type} policy vs env")
         plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
 
         ### policy vs dyn model
-        xs = torch.zeros((horizon, dim_x))
-        us = torch.zeros((horizon, dim_u))
-        state = initial_state
-        for t in range(horizon):
-            action = global_policy.predict(state, t=t)
-            xu = torch.cat((state, action))[None, :]
-            x_ = global_dynamics.predict(xu)
-            xs[t, :] = state
-            us[t, :] = action
-            state = x_[0, :]
-        environment.plot(xs, us)  # env.plot does not use env, it only plots
-        plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-        plt.savefig(
-            results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
-        )
+        if dyn_model_type != "env":
+            xs = torch.zeros((horizon, dim_x))
+            us = torch.zeros((horizon, dim_u))
+            state = initial_state
+            for t in range(horizon):
+                action = global_policy.predict(state, t=t)
+                xu = torch.cat((state, action))[None, :]
+                x_ = global_dynamics.predict(xu)
+                xs[t, :] = state
+                us[t, :] = action
+                state = x_[0, :]
+            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+            plt.savefig(
+                results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
+            )
 
         ### plot data space coverage ###
         if plot_data and plotting:
