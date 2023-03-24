@@ -1,9 +1,8 @@
-import functools
 import math
 import os
 import time
 from abc import ABC, abstractmethod
-from copy import copy, deepcopy
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
