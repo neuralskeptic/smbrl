@@ -444,15 +444,15 @@ class CudaAble(ABC):
         raise NotImplementedError
 
     def cpu(self):
-        self.to("cpu")
+        return self.to("cpu")
 
 
 class Stateless:
     def to(self, device):
-        pass
+        return self
 
     def cpu(self):
-        pass
+        return self
 
 
 class NoTraining:
@@ -517,6 +517,7 @@ class Model(CudaAble):
         override to add or remove fields"""
         self.model.to(device)
         self.approximate_inference.to(device)
+        return self
 
     def eval(self):
         self.model.eval()
@@ -1520,8 +1521,9 @@ def experiment(
 
         @override
         def to(self, device):
+            # no model!
             self.approximate_inference = self.approximate_inference.to(device)
-            return self  # no model!
+            return self
 
     cost = CostModel(
         approximate_inference=QuadratureImportanceSamplingInnovation(
