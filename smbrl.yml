@@ -55,6 +55,7 @@ dependencies:
       - check-shape==0.2
       - click==8.1.3
       - cloudpickle==1.2.2
+      - comm==0.1.2
       - conda-env-export==0.4.3
       - cookiecutter==2.1.1
       - cryptography==37.0.4
@@ -62,21 +63,23 @@ dependencies:
       - Cython==0.29.30
       - cytoolz==0.12.0
       - dataclasses==0.6
-      - debugpy==1.6.2
+      - debugpy==1.6.6
       - decorator==5.1.1
       - defusedxml==0.7.1
       - diff-match-patch==20200713
       - dill==0.3.2
       - distlib==0.3.4
       - docker-pycreds==0.4.0
+      - docstring-to-markdown==0.11
       - docutils==0.18.1
-      - einops==0.4.1
+      - einops==0.6.0
       - entrypoints==0.4
       - evdev==1.5.0
       - fasteners==0.17.3
       - fastjsonschema==2.15.3
       - filelock==3.7.1
-      - flake8==4.0.1
+      - filprofiler==2023.3.0
+      - flake8==6.0.0
       - fonttools==4.34.4
       - frozenlist==1.3.0
       - future==0.18.2
@@ -101,11 +104,11 @@ dependencies:
       - inflection==0.5.1
       - iniconfig==1.1.1
       - intervaltree==3.1.0
-      - ipykernel==6.15.1
+      - ipykernel==6.21.2
       - ipython==7.34.0
       - ipython-genutils==0.2.0
       - ipywidgets==7.7.1
-      - isort==5.10.1
+      - isort==5.12.0
       - jedi==0.18.1
       - jeepney==0.8.0
       - jellyfish==0.9.0
@@ -114,9 +117,9 @@ dependencies:
       - joblib==1.1.0
       - jsonschema==4.7.2
       - jupyter==1.0.0
-      - jupyter-client==7.3.4
+      - jupyter-client==7.4.9
       - jupyter-console==6.4.4
-      - jupyter-core==4.11.1
+      - jupyter-core==5.2.0
       - jupyter-server==1.18.1
       - jupyter-server-proxy==3.2.1
       - jupyterlab-pygments==0.2.2
@@ -128,7 +131,7 @@ dependencies:
       - MarkupSafe==2.1.1
       - matplotlib==3.5.2
       - matplotlib-inline==0.1.3
-      - mccabe==0.6.1
+      - mccabe==0.7.0
       - mistune==0.8.4
       - mujoco-py==2.1.2.14
       - multidict==6.0.2
@@ -145,7 +148,8 @@ dependencies:
       - numpydoc==1.4.0
       - oauthlib==3.2.0
       - opencv-python==4.6.0.66
-      - packaging==21.3
+      - overrides==7.3.1
+      - packaging==23.0
       - pandas==1.4.3
       - pandocfilters==1.5.0
       - paramz==0.9.5
@@ -169,15 +173,16 @@ dependencies:
       - pyasn1==0.4.8
       - pyasn1-modules==0.2.8
       - pybullet==3.2.5
-      - pycodestyle==2.8.0
+      - pycodestyle==2.10.0
       - pycparser==2.21
-      - pydocstyle==6.1.1
-      - pyflakes==2.4.0
+      - pydocstyle==6.2.3
+      - pyflakes==3.0.1
       - pygame==2.1.2
       - pygifsicle==1.0.7
       - pyglet==1.3.2
       - Pygments==2.12.0
       - pylint==2.14.4
+      - pylint-venv==3.0.1
       - pyls-spyder==0.4.0
       - pynput==1.7.6
       - pyparsing==3.0.9
@@ -192,26 +197,27 @@ dependencies:
       - python-dateutil==2.8.2
       - python-lsp-black==1.2.1
       - python-lsp-jsonrpc==1.0.0
-      - python-lsp-server==1.4.1
+      - python-lsp-server==1.7.1
       - python-slugify==6.1.2
       - python-xlib==0.31
-      - pytoolconfig==1.2.1
+      - pytoolconfig==1.2.5
+      - pytorch-minimize==0.2.0
       - pytz==2022.1
       - pyxdg==0.28
       - PyYAML==6.0
       - pyzmq==23.2.0
       - QDarkStyle==3.0.3
-      - qstylizer==0.2.1
-      - QtAwesome==1.1.1
-      - qtconsole==5.3.1
+      - qstylizer==0.2.2
+      - QtAwesome==1.2.2
+      - qtconsole==5.4.0
       - QtPy==2.1.0
       - requests==2.28.1
       - requests-oauthlib==1.3.1
-      - rope==1.2.0
+      - rope==1.7.0
       - rsa==4.8
       - Rtree==1.0.0
       - scikit-learn==1.1.1
-      - scipy==1.5.0
+      - scipy==1.10.0
       - seaborn==0.12.1
       - SecretStorage==3.3.2
       - Send2Trash==1.8.0
@@ -233,8 +239,8 @@ dependencies:
       - sphinxcontrib-jsmath==1.0.1
       - sphinxcontrib-qthelp==1.0.3
       - sphinxcontrib-serializinghtml==1.1.5
-      - spyder==5.3.1
-      - spyder-kernels==2.3.2
+      - spyder==5.4.1
+      - spyder-kernels==2.4.2
       - support-developer==1.0.5
       - tenacity==8.0.1
       - tensorboard==2.9.1
@@ -253,8 +259,8 @@ dependencies:
       - toolz==0.12.0
       - torch==1.12.0
       - tornado==6.2
-      - tqdm==4.46.1
-      - traitlets==5.3.0
+      - tqdm==4.62.1
+      - traitlets==5.9.0
       - txaio==22.2.1
       - typing-extensions==4.3.0
       - ujson==5.4.0
@@ -268,6 +274,7 @@ dependencies:
       - webencodings==0.5.1
       - websocket-client==1.3.3
       - Werkzeug==2.1.2
+      - whatthepatch==1.0.4
       - wheel==0.37.1
       - widgetsnbextension==3.6.1
       - wrapt==1.14.1
