@@ -2202,7 +2202,7 @@ def experiment(
                 def visualize_training():
                     if not plotting:
                         return
-                    fig, axs = plt.subplots(2)
+                    fig, axs = plt.subplots(2, figsize=(10, 7))
                     s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
                     a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
                     s_mean = einops.rearrange(
@@ -2429,7 +2429,13 @@ def experiment(
                 # plot policy rollouts
                 # a) from i2c mixture starting positions
                 xs, us, xxs = environment.run(s0_vec_mean, global_policy, horizon)
-                environment.plot(xs, us)
+                uvars = []
+                for t in range(horizon):
+                    u_dist = global_policy.predict_dist(xs[t, ...], t=t)
+                    u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
+                    uvars.append(u_var)
+                uvars = torch.stack(uvars)
+                environment.plot(xs, us, uvars=uvars)
                 plt.suptitle(f"{policy_type} policy vs env (from i2c init state)")
                 plt.savefig(
                     results_dir / f"{policy_type}_vs_env_from_s0i2c_{i_iter}.png",
@@ -2454,7 +2460,13 @@ def experiment(
     if plotting:
         ### policy vs env
         xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-        environment.plot(xs, us)
+        uvars = []
+        for t in range(horizon):
+            u_dist = global_policy.predict_dist(xs[t, ...], t=t)
+            u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
+            uvars.append(u_var)
+        uvars = torch.stack(uvars)
+        environment.plot(xs, us, uvars=uvars)
         plt.suptitle(f"{policy_type} policy vs env")
         plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
 
