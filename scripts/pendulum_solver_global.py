@@ -1315,12 +1315,12 @@ def experiment(
     plot_policy: bool = True,  # plot pointwise and rollout prediction
     # #  D1) local time-varying linear gaussian controllers (i2c)
     # policy_type: str = "tvlg",
-    # #  D2) mlp model
-    # policy_type: str = "mlp",
-    # n_hidden_pol: int = 128,
-    # n_hidden_layers_pol: int = 6,  # 2 ~ [in, h, h, out]
-    # lr_pol: float = 5e-4,
-    # n_epochs_pol: int = 1000,
+    #  D2) mlp model
+    policy_type: str = "mlp",
+    n_hidden_pol: int = 256,
+    n_hidden_layers_pol: int = 3,  # 2 ~ [in, h, h, out]
+    lr_pol: float = 5e-4,
+    n_epochs_pol: int = 300,
     # #  D3) resnet model
     # policy_type: str = "resnet",
     # n_hidden_pol: int = 128,
@@ -1348,12 +1348,12 @@ def experiment(
     # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 500,
-    # Dx1) bottleneck mlp with rf features
-    policy_type: str = "nlm_mlp_rff",
-    layer_spec_pol: int = [256, 256, 12],
-    n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    lr_pol: float = 5e-4,
-    n_epochs_pol: int = 300,
+    # # Dx1) bottleneck mlp with rf features
+    # policy_type: str = "nlm_mlp_rff",
+    # layer_spec_pol: int = [256, 256, 12],
+    # n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    # lr_pol: float = 5e-4,
+    # n_epochs_pol: int = 300,
     ############
     ## i2c solver ##
     n_iter_solver: int = 30,  # how many i2c solver iterations to do
