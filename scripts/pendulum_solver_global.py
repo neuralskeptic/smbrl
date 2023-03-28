@@ -1759,6 +1759,7 @@ def experiment(
         logger.weak_line()
         logger.info("START Collecting Dynamics Rollouts")
         global_dynamics.cpu()  # in-place
+        global_dynamics.eval()
         torch.set_grad_enabled(False)
 
         class AddDithering(Decorator[Model]):
@@ -1786,6 +1787,7 @@ def experiment(
             logger.weak_line()
             logger.info("START Training Dynamics")
             global_dynamics.to(device)  # in-place
+            global_dynamics.train()
             torch.set_grad_enabled(True)
 
             ## initial loss
@@ -1870,6 +1872,7 @@ def experiment(
 
             # Save the model after training
             global_dynamics.cpu()  # in-place
+            global_dynamics.eval()
             torch.set_grad_enabled(False)
             torch.save(
                 global_dynamics.model.state_dict(),
@@ -2107,6 +2110,7 @@ def experiment(
             logger.weak_line()
             logger.info("START Training Policy")
             global_policy.to(device)  # in-place
+            global_dynamics.train()
             torch.set_grad_enabled(True)
 
             #### T: distill global policy
@@ -2251,6 +2255,7 @@ def experiment(
 
             # Save the model after training
             global_policy.cpu()  # in-place
+            global_dynamics.eval()
             torch.set_grad_enabled(False)
             torch.save(
                 global_policy.model.state_dict(),
