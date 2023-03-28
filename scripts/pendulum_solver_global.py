@@ -1353,11 +1353,11 @@ def experiment(
     layer_spec_pol: int = [256, 256, 12],
     n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     lr_pol: float = 5e-4,
-    n_epochs_pol: int = 1000,
+    n_epochs_pol: int = 300,
     ############
     ## i2c solver ##
     n_iter_solver: int = 30,  # how many i2c solver iterations to do
-    n_i2c_vec: int = 1,  # how many local policies in the vectorized i2c batch
+    n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
     s0dot_var: float = 1e-6,  # very low initial velocity variance (low energy)
     s0_area_var: float = 1e-2,  # how much the initial states in a batch of i2c should vary
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
