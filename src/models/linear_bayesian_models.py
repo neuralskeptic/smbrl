@@ -9,6 +9,7 @@ from src.feature_fns.nns import (
     MultiLayerPerceptron,
     ResidualNetwork,
     SpectralNormResidualNetwork,
+    MLP_RFF,
 )
 from src.utils.whitening import data_whitening
 
@@ -221,3 +222,10 @@ class NeuralLinearModelResNet(LinearBayesianModel):
         self.features = ResidualNetwork(
             dim_x, n_hidden_layers, dim_hidden, dim_features
         )
+
+
+@data_whitening
+class NLM_MLP_RFF(LinearBayesianModel):
+    def __init__(self, dim_x, layer_spec, dim_features, dim_y):
+        super().__init__(dim_x, dim_y, dim_features)
+        self.features = MLP_RFF(dim_x, layer_spec, dim_features)

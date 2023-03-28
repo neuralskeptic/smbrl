@@ -25,6 +25,7 @@ from tqdm import trange
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
 from src.feature_fns.nns import MultiLayerPerceptron, ResidualNetwork
 from src.models.linear_bayesian_models import (
+    NLM_MLP_RFF,
     NeuralLinearModelMLP,
     NeuralLinearModelResNet,
     SpectralNormalizedNeuralGaussianProcess,
@@ -1339,13 +1340,19 @@ def experiment(
     # n_hidden_layers_pol: int = 15,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 1000,
-    # D6) linear regression w/ spec.norm.-resnet & rf features
-    policy_type: str = "snngp",
-    n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    n_hidden_pol: int = 64,
-    n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    # # D6) linear regression w/ spec.norm.-resnet & rf features
+    # policy_type: str = "snngp",
+    # n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    # n_hidden_pol: int = 128,
+    # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
+    # lr_pol: float = 5e-4,
+    # n_epochs_pol: int = 500,
+    # Dx1) bottleneck mlp with rf features
+    policy_type: str = "nlm_mlp_rff",
+    layer_spec_pol: int = [256, 256, 12],
+    n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     lr_pol: float = 5e-4,
-    n_epochs_pol: int = 100,
+    n_epochs_pol: int = 1000,
     ############
     ## i2c solver ##
     n_iter_solver: int = 30,  # how many i2c solver iterations to do
@@ -1736,6 +1743,19 @@ def experiment(
         )
         global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
+        opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
+    elif policy_type == "nlm_mlp_rff":
+        global_policy = StochasticPolicy(
+            model=NLM_MLP_RFF(
+                dim_x + 1,  # Input1SinCos
+                layer_spec_pol,
+                n_features_pol,
+                dim_u,
+            ),
+            approximate_inference=QuadratureInference(dim_x, quad_params),
+        )
+        global_policy = Input1SinCos(global_policy)
+        # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
 
     #### S: i2c solver

@@ -81,3 +81,22 @@ class SpectralNormResidualNetwork(nn.Module):
             lx = l(x)
             x = x + self.act(lx)
         return torch.cat([torch.cos(x @ self.W), torch.sin(x @ self.W)], -1)
+
+
+class MLP_RFF(nn.Module):
+    def __init__(self, d_in, layer_spec, d_out, activation="leakyrelu"):
+        assert activation in ACTIVATIONS
+        super().__init__()
+        self.layers = nn.ModuleList()
+        _d_first = d_in
+        for d_hidden in layer_spec:
+            self.layers.append(nn.Linear(_d_first, d_hidden))
+            _d_first = d_hidden
+        self.act = ACTIVATIONS[activation]
+        self.W = nn.Parameter(torch.randn(_d_first, d_out // 2))  # learnable
+        # self.register_buffer("W", torch.randn(_d_first, d_out // 2))  # constant
+
+    def forward(self, x):
+        for l in self.layers:
+            x = self.act(l(x))
+        return torch.cat([torch.cos(x @ self.W), torch.sin(x @ self.W)], -1)
