@@ -2283,6 +2283,42 @@ def experiment(
 
             #### T: plot policy
             if plot_policy and plotting:
+                # compute jacobian of policy action & compare with tvlg K_actual
+                with torch.enable_grad():
+                    states = pol_train_buffer.data[0].cpu()  # [(b T) x]
+                    states.requires_grad_(True)
+                    jac_ = jacobian(global_policy.predict, states)
+                    jac = einops.einsum(jac_, "bT y bT2 x -> bT y x")
+                    jac = einops.rearrange(jac, "(b T) y x -> T b y x", T=horizon)
+                    K = local_vec_policy.model.K_actual  # (T b y x)
+
+                    fig, axs = plt.subplots(dim_x, 1, figsize=(10, 7))
+                    yi = 0  # dim_y == 1
+                    for xi in range(dim_x):
+                        for bi in range(K.shape[1]):
+                            axs[xi].plot(K[:, bi, yi, xi], c="C0")
+                        axs[xi].plot(
+                            K[:, bi, yi, xi], c="C0", label="tvlc K"
+                        )  # 1x label
+                        for bi in range(jac.shape[1]):
+                            axs[xi].plot(jac[:, bi, yi, xi], c="C1")
+                        axs[xi].plot(
+                            jac[:, bi, yi, xi], c="C1", label="policy jac"
+                        )  # 1x label
+                        axs[xi].set_ylabel(f"da/ds_{xi}")
+                    axs[xi].set_xlabel("steps")
+                    handles, labels = axs[0].get_legend_handles_labels()
+                    fig.legend(handles, labels, loc="lower center", ncol=2)
+                    fig.suptitle(
+                        f"{policy_type} action jacobian vs tvlg K "
+                        f"({int(pol_train_buffer.size/horizon)} episodes, "
+                        f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
+                    )
+                    plt.savefig(
+                        results_dir / f"{policy_type}_jac_vs_tvlg_K_{i_iter}.png",
+                        dpi=150,
+                    )
+
                 ## test policy in rollouts
                 # TODO extract?
                 ## data traj (from buffer)
