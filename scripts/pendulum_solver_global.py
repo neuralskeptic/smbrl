@@ -20,6 +20,7 @@ from mushroom_rl.core.logger.logger import Logger
 from overrides import override
 from pytorch_minimize.optim import MinimizeWrapper
 from torch.autograd.functional import hessian, jacobian
+from torch.func import jacrev, vmap
 from tqdm import trange
 
 from src.datasets.mutable_buffer_datasets import ReplayBuffer
@@ -1472,7 +1473,7 @@ def experiment(
         # input angles get split sin/cos
         x_sincos_shape = list(x.shape)
         x_sincos_shape[-1] += 1  # add another x dimension
-        x_sincos = torch.empty(x_sincos_shape, device=x.device)
+        x_sincos = x.new_empty(x_sincos_shape, device=x.device)
         x_sincos[..., 0] = x[..., 0].sin()
         x_sincos[..., 1] = x[..., 0].cos()
         x_sincos[..., 2:] = x[..., 1:]
@@ -2304,40 +2305,40 @@ def experiment(
             #### T: plot policy
             if plot_policy and plotting:
                 # compute jacobian of policy action & compare with tvlg K_actual
-                with torch.enable_grad():
-                    states = pol_train_buffer.data[0].cpu()  # [(b T) x]
-                    states.requires_grad_(True)
-                    jac_ = jacobian(global_policy.predict, states)
-                    jac = einops.einsum(jac_, "bT y bT2 x -> bT y x")
-                    jac = einops.rearrange(jac, "(b T) y x -> T b y x", T=horizon)
-                    K = local_vec_policy.model.K_actual  # (T b y x)
+                states = pol_train_buffer.data[0]  # [(b T) x]
+                global_policy.to(device)
+                jac_f = vmap(jacrev(global_policy.predict))
+                jac = jac_f(states)
+                jac = einops.rearrange(jac, "(b T) y x -> T b y x", T=horizon)
+                jac = jac.cpu()
+                global_policy.cpu()
+                torch.cuda.empty_cache()
+                K = local_vec_policy.model.K_actual  # (T b y x)
 
-                    fig, axs = plt.subplots(dim_x, 1, figsize=(10, 7))
-                    yi = 0  # dim_y == 1
-                    for xi in range(dim_x):
-                        for bi in range(K.shape[1]):
-                            axs[xi].plot(K[:, bi, yi, xi], c="C0")
-                        axs[xi].plot(
-                            K[:, bi, yi, xi], c="C0", label="tvlc K"
-                        )  # 1x label
-                        for bi in range(jac.shape[1]):
-                            axs[xi].plot(jac[:, bi, yi, xi], c="C1")
-                        axs[xi].plot(
-                            jac[:, bi, yi, xi], c="C1", label="policy jac"
-                        )  # 1x label
-                        axs[xi].set_ylabel(f"da/ds_{xi}")
-                    axs[xi].set_xlabel("steps")
-                    handles, labels = axs[0].get_legend_handles_labels()
-                    fig.legend(handles, labels, loc="lower center", ncol=2)
-                    fig.suptitle(
-                        f"{policy_type} action jacobian vs tvlg K "
-                        f"({int(pol_train_buffer.size/horizon)} episodes, "
-                        f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
-                    )
-                    plt.savefig(
-                        results_dir / f"{policy_type}_jac_vs_tvlg_K_{i_iter}.png",
-                        dpi=150,
-                    )
+                fig, axs = plt.subplots(dim_x, 1, figsize=(10, 7))
+                yi = 0  # dim_y == 1
+                for xi in range(dim_x):
+                    for bi in range(jac.shape[1]):
+                        axs[xi].plot(jac[:, bi, yi, xi], c="C1")
+                    # add label
+                    axs[xi].plot(jac[:, bi, yi, xi], c="C1", label="policy jac")
+                    for bi in range(K.shape[1]):
+                        axs[xi].plot(K[:, bi, yi, xi], c="C0")
+                    # add label
+                    axs[xi].plot(K[:, bi, yi, xi], c="C0", label="tvlc K")
+                    axs[xi].set_ylabel(f"da/ds_{xi}")
+                axs[xi].set_xlabel("steps")
+                handles, labels = axs[0].get_legend_handles_labels()
+                fig.legend(handles, labels, loc="lower center", ncol=2)
+                fig.suptitle(
+                    f"{policy_type} action jacobian vs tvlg K "
+                    f"({int(pol_train_buffer.size/horizon)} episodes, "
+                    f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
+                )
+                plt.savefig(
+                    results_dir / f"{policy_type}_jac_vs_tvlg_K_{i_iter}.png",
+                    dpi=150,
+                )
 
                 ## test policy in rollouts
                 # TODO extract?
