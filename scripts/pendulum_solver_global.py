@@ -455,6 +455,14 @@ class Stateless:
         pass
 
 
+class NoTraining:
+    def eval(self):
+        return self
+
+    def train(self):
+        return self
+
+
 @dataclass
 class Model(CudaAble):
     r"""Abstract callable Model wrapper
@@ -509,6 +517,14 @@ class Model(CudaAble):
         override to add or remove fields"""
         self.model.to(device)
         self.approximate_inference.to(device)
+
+    def eval(self):
+        self.model.eval()
+        return self
+
+    def train(self):
+        self.model.train()
+        return self
 
 
 @dataclass
@@ -693,7 +709,7 @@ class TimeVaryingLinearGaussian(CudaAble):
         return self
 
 
-class Pendulum(Stateless):
+class Pendulum(Stateless, NoTraining):
 
     dim_x = 2
     dim_u = 1
@@ -1480,7 +1496,7 @@ def experiment(
 
     #### S: cost (model)
     @dataclass
-    class CostModel(DeterministicModel):
+    class CostModel(DeterministicModel, NoTraining):
         model: Callable = None  # unused in model_call
         approximate_inference: QuadratureImportanceSamplingInnovation
 
