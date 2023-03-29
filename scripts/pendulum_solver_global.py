@@ -1761,6 +1761,12 @@ def experiment(
     ####################################################################################################################
     #### TRAINING
 
+    # TODO debug
+    prefix = f"scripts/_dbg{n_i2c_vec}"
+    # load (saved) policy
+    state_dict = torch.load(repo_dir / f"{prefix}_{policy_type}_ep{n_epochs_pol}.pth")
+    global_policy.model.load_state_dict(state_dict)
+
     # for alpha in [1e-1, 1, 10, 100, 1000]:
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
     # for _ in [None]:
@@ -1980,6 +1986,8 @@ def experiment(
                 plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
                 if show_plots:
                     plt.show()
+
+        return  # TODO DEBUG
 
         #### T: i2c
         # i2c: find local (optimal) tvlg policy
@@ -2280,6 +2288,15 @@ def experiment(
                 global_policy.model.state_dict(),
                 results_dir / "pol_model_{i_iter}.pth",
             )
+
+            # TODO debug
+            prefix = f"scripts/_dbg{n_i2c_vec}"
+            # save policy
+            torch.save(
+                global_policy.model.state_dict(),
+                repo_dir / f"{prefix}_{policy_type}_ep{n_epochs_pol}.pth",
+            )
+
             logger.info("END Training policy")
 
             #### T: plot policy
