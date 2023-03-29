@@ -1282,16 +1282,16 @@ def experiment(
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
     n_trajs_plot_dyn: int = 0,  # how many trajs in dyn plot [0 => all trajs]
-    #  D1) true dynamics
-    dyn_model_type: str = "env",
+    # #  D1) true dynamics
+    # dyn_model_type: str = "env",
     # #  D2) mlp model
     # dyn_model_type: str = "mlp",
-    # layer_spec_dyn: int = [*(256,) * 2],  # [in, *layer_spec, out]
-    # lr_dyn: float = 3e-4,
-    # n_epochs_dyn: int = 1000,
+    # layer_spec_dyn: int = [*(256,) * 3],  # [in, *layer_spec, out]
+    # lr_dyn: float = 5e-4,
+    # n_epochs_dyn: int = 300,
     # #  D3) resnet model
     # dyn_model_type: str = "resnet",
-    # layer_spec_dyn: int = [*(256,) * 2],  # [in, *layer_spec, out]
+    # layer_spec_dyn: int = [*(256,) * 5],  # [in, *layer_spec, out]
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 1000,
     # # D4) linear regression w/ mlp features
@@ -1306,12 +1306,13 @@ def experiment(
     # n_features_dyn: int = 128,
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
-    # # D6) linear regression w/ spec.norm.-resnet & rf features
-    # dyn_model_type: str = "snngp",
-    # layer_spec_dyn: int = [*(128,) * 5],  # [in, *layer_spec, feat], W: [feat, out]
-    # n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    # lr_dyn: float = 5e-4,
-    # n_epochs_dyn: int = 500,
+    # D6) linear regression w/ spec.norm.-resnet & rf features
+    dyn_model_type: str = "snngp",
+    layer_spec_dyn: int = [*(128,) * 5],  # [in, *layer_spec, feat], W: [feat, out]
+    # layer_spec_dyn: int = [*(256,) * 3],  # [in, *layer_spec, feat], W: [feat, out]
+    n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    lr_dyn: float = 5e-4,
+    n_epochs_dyn: int = 3000,
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
@@ -1799,7 +1800,7 @@ def experiment(
             @override
             def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
                 y = self.decorated.predict(x, **kw)
-                return y + 2e-1 * torch.randn_like(y)
+                return y + 5e-2 * torch.randn_like(y)
 
         exploration_policy = AddDithering(global_policy)
 
