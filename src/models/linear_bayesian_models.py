@@ -196,32 +196,27 @@ class LinearBayesianModel(nn.Module):
 
 @data_whitening
 class SpectralNormalizedNeuralGaussianProcess(LinearBayesianModel):
-    def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
+    def __init__(self, dim_x, layer_spec, dim_features, dim_y):
         super().__init__(dim_x, dim_y, dim_features)
         self.features = SpectralNormResidualNetwork(
             dim_x,
-            n_hidden_layers,
-            dim_hidden,
+            layer_spec,
             dim_features,
         )
 
 
 @data_whitening
 class NeuralLinearModelMLP(LinearBayesianModel):
-    def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
+    def __init__(self, dim_x, layer_spec, dim_features, dim_y):
         super().__init__(dim_x, dim_y, dim_features)
-        self.features = MultiLayerPerceptron(
-            dim_x, n_hidden_layers, dim_hidden, dim_features
-        )
+        self.features = MultiLayerPerceptron(dim_x, layer_spec, dim_features)
 
 
 @data_whitening
 class NeuralLinearModelResNet(LinearBayesianModel):
-    def __init__(self, dim_x, n_hidden_layers, dim_hidden, dim_features, dim_y):
+    def __init__(self, dim_x, layer_spec, dim_features, dim_y):
         super().__init__(dim_x, dim_y, dim_features)
-        self.features = ResidualNetwork(
-            dim_x, n_hidden_layers, dim_hidden, dim_features
-        )
+        self.features = ResidualNetwork(dim_x, layer_spec, dim_features)
 
 
 @data_whitening

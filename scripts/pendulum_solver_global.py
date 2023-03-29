@@ -1279,35 +1279,30 @@ def experiment(
     dyn_model_type: str = "env",
     # #  D2) mlp model
     # dyn_model_type: str = "mlp",
-    # n_hidden_dyn: int = 256,
-    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    # layer_spec_dyn: int = [*(256,) * 2],  # [in, *layer_spec, out]
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 1000,
     # #  D3) resnet model
     # dyn_model_type: str = "resnet",
-    # n_hidden_dyn: int = 256,
-    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
+    # layer_spec_dyn: int = [*(256,) * 2],  # [in, *layer_spec, out]
     # lr_dyn: float = 3e-4,
     # n_epochs_dyn: int = 1000,
     # # D4) linear regression w/ mlp features
     # dyn_model_type: str = "nlm-mlp",
+    # layer_spec_dyn: int = [*(128,) * 2],  # [in, *layer_spec, feat], W: [feat, out]
     # n_features_dyn: int = 128,
-    # n_hidden_dyn: int = 128,
-    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
     # # D5) linear regression w/ resnet features
     # dyn_model_type: str = "nlm-resnet",
+    # layer_spec_dyn: int = [*(128,) * 2],  # [in, *layer_spec, feat], W: [feat, out]
     # n_features_dyn: int = 128,
-    # n_hidden_dyn: int = 128,
-    # n_hidden_layers_dyn: int = 2,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
     # # D6) linear regression w/ spec.norm.-resnet & rf features
     # dyn_model_type: str = "snngp",
+    # layer_spec_dyn: int = [*(128,) * 5],  # [in, *layer_spec, feat], W: [feat, out]
     # n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    # n_hidden_dyn: int = 128,
-    # n_hidden_layers_dyn: int = 5,  # 2 ~ [in, h, h, out]
     # lr_dyn: float = 5e-4,
     # n_epochs_dyn: int = 500,
     ##############
@@ -1317,35 +1312,30 @@ def experiment(
     # policy_type: str = "tvlg",
     #  D2) mlp model
     policy_type: str = "mlp",
-    n_hidden_pol: int = 256,
-    n_hidden_layers_pol: int = 3,  # 2 ~ [in, h, h, out]
+    layer_spec_pol: int = [*(256,) * 3],  # [in, *layer_spec, out]
     lr_pol: float = 5e-4,
     n_epochs_pol: int = 300,
     # #  D3) resnet model
     # policy_type: str = "resnet",
-    # n_hidden_pol: int = 128,
-    # n_hidden_layers_pol: int = 6,  # 2 ~ [in, h, h, out]
+    # layer_spec_pol: int = [*(128,) * 8],  # [in, *layer_spec, out]
     # lr_pol: float = 5e-4,
-    # n_epochs_pol: int = 1000,
+    # n_epochs_pol: int = 500,
     # # D4) linear regression w/ mlp features
     # policy_type: str = "nlm-mlp",
-    # n_features_pol: int = 128,
-    # n_hidden_pol: int = 512,
-    # n_hidden_layers_pol: int = 4,  # 2 ~ [in, h, h, out]
+    # layer_spec_pol: int = [256, 256],  # [in, *layer_spec, feat], W: [feat, out]
+    # n_features_pol: int = 256,
     # lr_pol: float = 5e-4,
-    # n_epochs_pol: int = 1000,
+    # n_epochs_pol: int = 300,
     # # D5) linear regression w/ resnet features
     # policy_type: str = "nlm-resnet",
-    # n_features_pol: int = 128,
-    # n_hidden_pol: int = 128,
-    # n_hidden_layers_pol: int = 15,  # 2 ~ [in, h, h, out]
+    # layer_spec_pol: int = [*(128,) * 8],  # [in, *layer_spec, feat], W: [feat, out]
+    # n_features_pol: int = 256,
     # lr_pol: float = 5e-4,
-    # n_epochs_pol: int = 1000,
+    # n_epochs_pol: int = 500,
     # # D6) linear regression w/ spec.norm.-resnet & rf features
     # policy_type: str = "snngp",
+    # layer_spec_pol: int = [*(256,) * 2],  # [in, *layer_spec, feat], W: [feat, out]
     # n_features_pol: int = 512,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    # n_hidden_pol: int = 128,
-    # n_hidden_layers_pol: int = 2,  # 2 ~ [in, h, h, out]
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 500,
     # # Dx1) bottleneck mlp with rf features
@@ -1550,8 +1540,7 @@ def experiment(
         global_dynamics = DeterministicDynamics(
             model=MultiLayerPerceptron(
                 dim_xu + 1,  # Input1SinCos
-                n_hidden_layers_dyn,
-                n_hidden_dyn,
+                layer_spec_dyn,
                 dim_x,
             ),
             approximate_inference=QuadratureInference(dim_xu, quad_params),
@@ -1564,8 +1553,7 @@ def experiment(
         global_dynamics = DeterministicDynamics(
             model=ResidualNetwork(
                 dim_xu + 1,  # Input1SinCos
-                n_hidden_layers_dyn,
-                n_hidden_dyn,
+                layer_spec_dyn,
                 dim_x,
             ),
             approximate_inference=QuadratureInference(dim_xu, quad_params),
@@ -1578,8 +1566,7 @@ def experiment(
         global_dynamics = StochasticDynamics(
             model=NeuralLinearModelMLP(
                 dim_xu + 1,  # Input1SinCos
-                n_hidden_layers_dyn,
-                n_hidden_dyn,
+                layer_spec_dyn,
                 n_features_dyn,
                 dim_x,
             ),
@@ -1599,8 +1586,7 @@ def experiment(
         global_dynamics = StochasticDynamics(
             model=NeuralLinearModelResNet(
                 dim_xu + 1,  # Input1SinCos
-                n_hidden_layers_dyn,
-                n_hidden_dyn,
+                layer_spec_dyn,
                 n_features_dyn,
                 dim_x,
             ),
@@ -1621,8 +1607,7 @@ def experiment(
             # global_dynamics = LBMDyn_SinCos1_Uclamp(
             model=SpectralNormalizedNeuralGaussianProcess(
                 dim_xu + 1,  # Input1SinCos
-                n_hidden_layers_dyn,
-                n_hidden_dyn,
+                layer_spec_dyn,
                 n_features_dyn,
                 dim_x,
             ),
@@ -1681,8 +1666,7 @@ def experiment(
         global_policy = DeterministicPolicy(
             model=MultiLayerPerceptron(
                 dim_x + 1,  # Input1SinCos
-                n_hidden_layers_pol,
-                n_hidden_pol,
+                layer_spec_pol,
                 dim_u,
             ),
             approximate_inference=QuadratureInference(dim_x, quad_params),
@@ -1694,8 +1678,7 @@ def experiment(
         global_policy = DeterministicPolicy(
             model=ResidualNetwork(
                 dim_x + 1,  # Input1SinCos
-                n_hidden_layers_pol,
-                n_hidden_pol,
+                layer_spec_pol,
                 dim_u,
             ),
             approximate_inference=QuadratureInference(dim_x, quad_params),
@@ -1707,8 +1690,7 @@ def experiment(
         global_policy = StochasticPolicy(
             model=NeuralLinearModelMLP(
                 dim_x + 1,  # Input1SinCos
-                n_hidden_layers_pol,
-                n_hidden_pol,
+                layer_spec_pol,
                 n_features_pol,
                 dim_u,
             ),
@@ -1721,8 +1703,7 @@ def experiment(
         global_policy = StochasticPolicy(
             model=NeuralLinearModelResNet(
                 dim_x + 1,  # Input1SinCos
-                n_hidden_layers_pol,
-                n_hidden_pol,
+                layer_spec_pol,
                 n_features_pol,
                 dim_u,
             ),
@@ -1735,8 +1716,7 @@ def experiment(
         global_policy = StochasticPolicy(
             model=SpectralNormalizedNeuralGaussianProcess(
                 dim_x + 1,  # Input1SinCos
-                n_hidden_layers_pol,
-                n_hidden_pol,
+                layer_spec_pol,
                 n_features_pol,
                 dim_u,
             ),
