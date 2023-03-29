@@ -1768,6 +1768,8 @@ def experiment(
 
     ####################################################################################################################
     #### TRAINING
+    # fix seed again (different model setups make random numbers diverge)
+    fix_random_seed(seed + 100)
 
     # TODO debug
     prefix = f"scripts/_dbg{n_i2c_vec}"
