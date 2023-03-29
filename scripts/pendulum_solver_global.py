@@ -1795,13 +1795,13 @@ def experiment(
         global_dynamics.eval()
         torch.set_grad_enabled(False)
 
-        class AddDithering(Decorator[Model]):
+        class AddDithering(Decorator[Model]):  # decorate w/o changing policy
             @override
             def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
                 y = self.decorated.predict(x, **kw)
-                return y + torch.randn_like(y)
+                return y + 2e-1 * torch.randn_like(y)
 
-        exploration_policy = AddDithering(global_policy)  # decorate w/o changing policy
+        exploration_policy = AddDithering(global_policy)
 
         # train and test rollouts (env & exploration policy)
         for i in trange(n_dyn_rollout_episodes):  # 80 % train
