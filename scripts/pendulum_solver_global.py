@@ -2012,6 +2012,46 @@ def experiment(
                 if show_plots:
                     plt.show()
 
+        # TODO debug
+        # plot training loss
+        def scaled_xaxis(y_points, n_on_axis):
+            return np.arange(len(y_points)) / len(y_points) * n_on_axis
+
+        fig_loss_dyn, ax_loss_dyn = plt.subplots()
+        x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
+        ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
+        x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
+        ax_loss_dyn.plot(x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss")
+        if dyn_loss_trace[0] > 1 and dyn_loss_trace[-1] < 0.1:
+            ax_loss_dyn.set_yscale("symlog")
+        ax_loss_dyn.set_xlabel("epochs")
+        ax_loss_dyn.set_ylabel("loss")
+        ax_loss_dyn.set_title(
+            f"DYN {dyn_model_type} loss "
+            f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
+        )
+        ax_loss_dyn.legend()
+        plt.savefig(results_dir / "dyn_loss.png", dpi=150)
+        plt.show()
+
+        ### policy vs dyn model
+        if dyn_model_type != "env":
+            xs = torch.zeros((horizon, dim_x))
+            us = torch.zeros((horizon, dim_u))
+            state = initial_state_distribution.sample()
+            for t in range(horizon):
+                action = global_policy.predict(state, t=t)
+                xu = torch.cat((state, action), dim=-1)[None, :]
+                x_ = global_dynamics.predict(xu)
+                xs[t, :] = state
+                us[t, :] = action
+                state = x_[0, :]
+            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
+            plt.savefig(
+                results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
+            )
+
         return  # TODO DEBUG
 
         #### T: i2c
