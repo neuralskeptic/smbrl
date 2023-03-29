@@ -2504,7 +2504,7 @@ def experiment(
             state = initial_state
             for t in range(horizon):
                 action = global_policy.predict(state, t=t)
-                xu = torch.cat((state, action))[None, :]
+                xu = torch.cat((state, action), dim=-1)[None, :]
                 x_ = global_dynamics.predict(xu)
                 xs[t, :] = state
                 us[t, :] = action
