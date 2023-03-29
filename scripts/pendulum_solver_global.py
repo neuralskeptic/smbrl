@@ -797,9 +797,15 @@ def plot_gp(axis, mean, variance, color="b"):
     )
 
 
-def plot_mvn(axis, dists: Sequence[MultivariateGaussian], dim=slice(None), color=None):
-    means = torch.stack([d.mean[..., dim] for d in dists])
-    variances = torch.stack([d.covariance[..., dim, dim].sqrt() for d in dists])
+def plot_mvn(
+    axis,
+    dists: Sequence[MultivariateGaussian],
+    dim=slice(None),
+    batch=slice(None),
+    color=None,
+):
+    means = torch.stack([d.mean[..., batch, dim] for d in dists])
+    variances = torch.stack([d.covariance[..., batch, dim, dim].sqrt() for d in dists])
     plot_gp(axis, means, variances, color=color)
 
 
@@ -1262,7 +1268,7 @@ class Annealing(TemperatureStrategy, Stateless):
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_dyn_rollout_episodes: int = 1,
+    n_dyn_rollout_episodes: int = 5,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_iter: int = 1,  # outer loop
     ## frequency or period: whichever is lower dominates
@@ -1275,6 +1281,7 @@ def experiment(
     early_stop_thresh: float = -3e3,  # stop training when validation loss lower
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
+    n_trajs_plot_dyn: int = 0,  # how many trajs in dyn plot [0 => all trajs]
     #  D1) true dynamics
     dyn_model_type: str = "env",
     # #  D2) mlp model
@@ -1308,6 +1315,7 @@ def experiment(
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
+    n_trajs_plot_pol: int = 0,  # how many trajs in policy plot [0 => all trajs]
     # #  D1) local time-varying linear gaussian controllers (i2c)
     # policy_type: str = "tvlg",
     #  D2) mlp model
@@ -1909,40 +1917,47 @@ def experiment(
             if plot_dyn and plotting:
                 ## test dynamics model in rollouts
                 # TODO extract?
-                ## data traj (from buffer)
-                # sa_env = dyn_test_buffer.data[0][:horizon, :].cpu()  # first
-                sa_env = dyn_test_buffer.data[0][-horizon:, :].cpu()  # last
-                s_env, a_env = sa_env[:, :dim_x], sa_env[:, dim_x:]
-                # ss_env = dyn_test_buffer.data[1][:horizon, :].cpu()  # first
-                ss_env = dyn_test_buffer.data[1][-horizon:, :].cpu()  # last
+                ## data traj (from buffer) -> trailing underscore = on device
+                # sa_env_ = dyn_test_buffer.data[0]  # [(n T) sa]
+                sa_env_ = dyn_train_buffer.data[0]  # [(n T) sa]
+                # ss_env = dyn_test_buffer.data[1].cpu()  # [(n T) sa]
+                ss_env = dyn_train_buffer.data[1].cpu()  # [(n T) sa]
+                sa_env_ = einops.rearrange(sa_env_, "(n T) sa -> T n sa", T=horizon)
+                ss_env = einops.rearrange(ss_env, "(n T) sa -> T n sa", T=horizon)
+                # select how many trajs to plot (take from back of buffer)
+                sa_env_ = sa_env_[:, -n_trajs_plot_dyn:, ...]
+                ss_env = ss_env[:, -n_trajs_plot_dyn:, ...]
+                _n_trajs = sa_env_.shape[1]
+                sa_env = sa_env_.cpu()
+                s_env, a_env = sa_env[..., :dim_x], sa_env[..., dim_x:]
+                # pointwise
                 ss_pred_pw_dists = []
-                ss_pred_pw = torch.zeros((horizon, dim_x))
-                ss_pred_roll_dists = []
-                ss_pred_roll = torch.zeros((horizon, dim_x))
-                state = s_env[0, :]  # for rollouts: data init state
+                global_dynamics.to(device)
+                _ss_pw_vec = global_dynamics.predict_dist(sa_env_[...]).cpu()
+                global_dynamics.cpu()
                 for t in range(horizon):
-                    # pointwise
-                    xu = torch.cat((s_env[t, :], a_env[t, :]))  # pred traj
-                    if isinstance(global_dynamics, StochasticDynamics):
-                        ss_pred_pw[t, :], var, xu_ = global_dynamics(xu)
-                    else:
-                        ss_pred_pw[t, :], xu_ = global_dynamics(xu)
-                    ss_pred_pw_dists.append(global_dynamics.predict_dist(xu))
-                    # rollout (replay action)
-                    xu = torch.cat((state, a_env[t, :]))
+                    ss_pred_pw_dists.append(
+                        MultivariateGaussian(
+                            _ss_pw_vec.mean[t, ...], _ss_pw_vec.covariance[t, ...]
+                        )
+                    )
+                ss_pred_pw = _ss_pw_vec.mean
+                # rollout (replay action)
+                ss_pred_roll_dists = []
+                ss_pred_roll = torch.zeros_like(s_env)
+                state = s_env[0, ...]  # for rollouts: data init state
+                for t in range(horizon):
+                    xu = torch.cat((state, a_env[t, ...]), dim=-1)
                     ss_pred_roll_dists.append(global_dynamics.predict_dist(xu))
-                    if isinstance(global_dynamics, StochasticDynamics):
-                        ss_pred_roll[t, :], var, xu = global_dynamics(xu)
-                    else:
-                        ss_pred_roll[t, :], xu = global_dynamics(xu)
-                    state = ss_pred_roll[t, :]
+                    ss_pred_roll[t, ...] = ss_pred_roll_dists[-1].mean
+                    state = ss_pred_roll[t, ...]
                 # compute costs (except init state use pred next state)
                 c_env = cost.predict(sa_env)
-                s_pred_pw = torch.cat([s_env[:1, :], ss_pred_pw[:-1, :]])
-                sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=1)
+                s_pred_pw = torch.cat([s_env[:1, ...], ss_pred_pw[:-1, ...]])
+                sa_pred_pw = torch.cat([s_pred_pw, a_env], dim=-1)
                 c_pw = cost.predict(sa_pred_pw)
-                s_pred_roll = torch.cat([s_env[:1, :], ss_pred_roll[:-1, :]])
-                sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=1)
+                s_pred_roll = torch.cat([s_env[:1, ...], ss_pred_roll[:-1, ...]])
+                sa_pred_roll = torch.cat([s_pred_roll, a_env], dim=-1)
                 c_roll = cost.predict(sa_pred_roll)
 
                 ### plot pointwise and rollout predictions (1 episode) ###
@@ -1950,36 +1965,44 @@ def experiment(
                 steps = torch.tensor(range(0, horizon))
                 axs[0, 0].set_title("pointwise predictions")
                 axs[0, 1].set_title("rollout predictions")
-                # plot actions (twice: left & right)
-                for ui in range(dim_u):
-                    axs[ui, 0].plot(steps, a_env[:, ui], color="b")
-                    axs[ui, 0].set_ylabel("action")
-                    axs[ui, 1].plot(steps, a_env[:, ui], color="b")
-                    axs[ui, 1].set_ylabel("action")
-                # plot cost
-                ri = dim_u
-                axs[ri, 0].plot(steps, c_env, color="b", label="data")
-                axs[ri, 0].plot(steps, c_pw, color="r", label=dyn_model_type)
-                axs[ri, 0].set_ylabel("cost")
-                axs[ri, 1].plot(steps, c_env, color="b", label="data")
-                axs[ri, 1].plot(steps, c_roll, color="r", label=dyn_model_type)
-                axs[ri, 1].set_ylabel("cost")
-                for xi in range(dim_x):
-                    xi_ = xi + dim_u + 1  # plotting offset
-                    # plot pointwise state predictions
-                    axs[xi_, 0].plot(steps, ss_env[:, xi], color="b")
-                    plot_mvn(axs[xi_, 0], ss_pred_pw_dists, dim=xi, color="r")
-                    axs[xi_, 0].set_ylabel(f"ss[{xi}]")
-                    # plot rollout state predictions
-                    axs[xi_, 1].plot(steps, ss_env[:, xi], color="b")
-                    plot_mvn(axs[xi_, 1], ss_pred_roll_dists, dim=xi, color="r")
-                    axs[xi_, 1].set_ylabel(f"ss[{xi}]")
+                for ti in range(_n_trajs):
+                    # plot actions (twice: left & right)
+                    for ui in range(dim_u):
+                        axs[ui, 0].plot(steps, a_env[:, ti, ui], color="b")
+                        axs[ui, 0].set_ylabel("action")
+                        axs[ui, 1].plot(steps, a_env[:, ti, ui], color="b")
+                        axs[ui, 1].set_ylabel("action")
+                    # plot cost
+                    ri = dim_u
+                    axs[ri, 0].plot(steps, c_env[:, ti], color="b")
+                    axs[ri, 0].plot(steps, c_pw[:, ti], color="r")
+                    axs[ri, 0].set_ylabel("cost")
+                    axs[ri, 1].plot(steps, c_env[:, ti], color="b")
+                    axs[ri, 1].plot(steps, c_roll[:, ti], color="r")
+                    axs[ri, 1].set_ylabel("cost")
+                    for xi in range(dim_x):
+                        xi_ = xi + dim_u + 1  # plotting offset
+                        # plot pointwise state predictions
+                        axs[xi_, 0].plot(steps, ss_env[:, ti, xi], color="b")
+                        plot_mvn(
+                            axs[xi_, 0], ss_pred_pw_dists, dim=xi, batch=ti, color="r"
+                        )
+                        axs[xi_, 0].set_ylabel(f"ss[{xi}]")
+                        # plot rollout state predictions
+                        axs[xi_, 1].plot(steps, ss_env[:, ti, xi], color="b")
+                        plot_mvn(
+                            axs[xi_, 1], ss_pred_roll_dists, dim=xi, batch=ti, color="r"
+                        )
+                        axs[xi_, 1].set_ylabel(f"ss[{xi}]")
                 axs[-1, 0].set_xlabel("steps")
                 axs[-1, 1].set_xlabel("steps")
+                # replot with labels (prevent duplicate labels in legend)
+                axs[ri, 0].plot(steps, c_env[:, ti], color="b", label="data")
+                axs[ri, 0].plot(steps, c_pw[:, ti], color="r", label=dyn_model_type)
                 handles, labels = axs[ri, 0].get_legend_handles_labels()
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
-                    f"{dyn_model_type} pointwise and rollout dynamics on 1 episode "
+                    f"{dyn_model_type} pointwise and rollout dynamics on {_n_trajs} episode "
                     f"({int(dyn_train_buffer.size/horizon)} episodes, "
                     f"{dyn_epoch_counter} epochs, lr={lr_dyn:.0e})"
                 )
@@ -2339,19 +2362,21 @@ def experiment(
 
                 ## test policy in rollouts
                 # TODO extract?
-                ## data traj (from buffer)
-                # s_env = pol_train_buffer.data[0][:horizon, :].cpu()  # first
-                s_env = pol_train_buffer.data[0][-horizon:, :].cpu()  # last
-                # a_env = pol_train_buffer.data[1][:horizon, :].cpu()  # first
-                a_env = pol_train_buffer.data[1][-horizon:, :].cpu()  # last
-                a_pred_pw_dists = []
-                a_pred_pw = torch.zeros((horizon, dim_u))
-                a_pred_roll_dists = []
-                a_pred_roll = torch.zeros((horizon, dim_u))
-                s_pred_roll = torch.zeros((horizon, dim_x))
-                state = s_env[0, :]  # for rollouts: data init state
+                ## data traj (from buffer) -> trailing underscore = on device
+                a_env = dyn_train_buffer.data[0].cpu()  # [(n T) a]
+                s_env_ = dyn_train_buffer.data[1]  # [(n T) s]
+                a_env = einops.rearrange(a_env, "(n T) a -> T n a", T=horizon)
+                s_env_ = einops.rearrange(s_env_, "(n T) s -> T n s", T=horizon)
+                # select how many trajs to plot (take from back of buffer)
+                a_env = a_env[:, -n_trajs_plot_pol:, ...]
+                s_env = s_env_[:, -n_trajs_plot_pol:, ...]
+                _n_trajs = sa_env_.shape[1]
+                s_env = s_env_.cpu()
                 # pointwise
-                _a_pw_vec = global_policy.predict_dist(s_env[...])
+                a_pred_pw_dists = []
+                global_dynamics.to(device)
+                _a_pw_vec = global_policy.predict_dist(s_env_[...])
+                global_dynamics.cpu()
                 for t in range(horizon):
                     a_pred_pw_dists.append(
                         MultivariateGaussian(
@@ -2359,27 +2384,24 @@ def experiment(
                         )
                     )
                 a_pred_pw = _a_pw_vec.mean
-                # if isinstance(global_policy, StochasticPolicy):
-                #     a_pred_pw[t, :], var = global_policy(s_env[t, :])
-                # else:
-                #     a_pred_pw[t, :] = global_policy(s_env[t, :])
+                # rollout
+                a_pred_roll_dists = []
+                a_pred_roll = torch.zeros_like(a_env)
+                s_pred_roll = torch.zeros_like(s_env)
+                state = s_env[0, ...]  # for rollouts: data init state
                 for t in range(horizon):
-                    # rollout
-                    s_pred_roll[t, :] = state
+                    s_pred_roll[t, ...] = state
                     a_pred_roll_dists.append(global_policy.predict_dist(state))
-                    a_pred_roll[t, :] = a_pred_roll_dists[-1].mean
-                    # if isinstance(global_policy, StochasticPolicy):
-                    #     a_pred_roll[t, :], var = global_policy(state)
-                    # else:
-                    #     a_pred_roll[t, :] = global_policy(state)
+                    a_pred_roll[t, ...] = a_pred_roll_dists[-1].mean
                     # next state
-                    state, _ = environment(torch.cat([state, a_pred_roll[t, :]], dim=0))
+                    xu = torch.cat([state, a_pred_roll[t, ...]], dim=-1)
+                    state, _ = environment(xu)
                 # compute costs (except init state use pred next state)
-                sa_env = torch.cat([s_env, a_env], dim=1)
+                sa_env = torch.cat([s_env, a_env], dim=-1)
                 c_env = cost.predict(sa_env)
-                sa_pred_pw = torch.cat([s_env, a_pred_pw], dim=1)
+                sa_pred_pw = torch.cat([s_env, a_pred_pw], dim=-1)
                 c_pw = cost.predict(sa_pred_pw)
-                sa_pred_roll = torch.cat([s_pred_roll, a_pred_roll], dim=1)
+                sa_pred_roll = torch.cat([s_pred_roll, a_pred_roll], dim=-1)
                 c_roll = cost.predict(sa_pred_roll)
 
                 ### plot pointwise and rollout predictions (1 episode) ###
@@ -2387,37 +2409,45 @@ def experiment(
                 steps = torch.tensor(range(0, horizon))
                 axs[0, 0].set_title("pointwise predictions")
                 axs[0, 1].set_title("rollout predictions")
-                # plot actions (twice: left & right)
-                for ui in range(dim_u):
-                    axs[ui, 0].plot(steps, a_env[:, ui], color="b")
-                    plot_mvn(axs[ui, 0], a_pred_pw_dists, dim=ui, color="r")
-                    axs[ui, 0].set_ylabel("action")
-                    axs[ui, 1].plot(steps, a_env[:, ui], color="b")
-                    plot_mvn(axs[ui, 1], a_pred_roll_dists, dim=ui, color="r")
-                    axs[ui, 1].set_ylabel("action")
-                # plot cost
-                ri = dim_u
-                axs[ri, 0].plot(steps, c_env, color="b", label="i2c")
-                axs[ri, 0].plot(steps, c_pw, color="r", label=policy_type)
-                axs[ri, 0].set_ylabel("cost")
-                axs[ri, 1].plot(steps, c_env, color="b", label="i2c")
-                axs[ri, 1].plot(steps, c_roll, color="r", label=policy_type)
-                axs[ri, 1].set_ylabel("cost")
-                for xi in range(dim_x):
-                    xi_ = xi + dim_u + 1  # plotting offset
-                    # plot pointwise state predictions
-                    axs[xi_, 0].plot(steps, s_env[:, xi], color="b")
-                    axs[xi_, 0].set_ylabel(f"s[{xi}]")
-                    # plot rollout state predictions
-                    axs[xi_, 1].plot(steps, s_env[:, xi], color="b")
-                    axs[xi_, 1].plot(steps, s_pred_roll[:, xi], color="r")
-                    axs[xi_, 1].set_ylabel(f"s[{xi}]")
+                for ti in range(_n_trajs):
+                    # plot actions (twice: left & right)
+                    for ui in range(dim_u):
+                        axs[ui, 0].plot(steps, a_env[:, ti, ui], color="b")
+                        plot_mvn(
+                            axs[ui, 0], a_pred_pw_dists, dim=ui, batch=ti, color="r"
+                        )
+                        axs[ui, 0].set_ylabel("action")
+                        axs[ui, 1].plot(steps, a_env[:, ti, ui], color="b")
+                        plot_mvn(
+                            axs[ui, 1], a_pred_roll_dists, dim=ui, batch=ti, color="r"
+                        )
+                        axs[ui, 1].set_ylabel("action")
+                    # plot cost
+                    ri = dim_u
+                    axs[ri, 0].plot(steps, c_env[:, ti], color="b")
+                    axs[ri, 0].plot(steps, c_pw[:, ti], color="r")
+                    axs[ri, 0].set_ylabel("cost")
+                    axs[ri, 1].plot(steps, c_env[:, ti], color="b")
+                    axs[ri, 1].plot(steps, c_roll[:, ti], color="r")
+                    axs[ri, 1].set_ylabel("cost")
+                    for xi in range(dim_x):
+                        xi_ = xi + dim_u + 1  # plotting offset
+                        # plot pointwise state predictions
+                        axs[xi_, 0].plot(steps, s_env[:, ti, xi], color="b")
+                        axs[xi_, 0].set_ylabel(f"s[{xi}]")
+                        # plot rollout state predictions
+                        axs[xi_, 1].plot(steps, s_env[:, ti, xi], color="b")
+                        axs[xi_, 1].plot(steps, s_pred_roll[:, ti, xi], color="r")
+                        axs[xi_, 1].set_ylabel(f"s[{xi}]")
                 axs[-1, 0].set_xlabel("steps")
                 axs[-1, 1].set_xlabel("steps")
+                # replot with labels (prevent duplicate labels in legend)
+                axs[ri, 0].plot(steps, c_env[:, ti], color="b", label="i2c")
+                axs[ri, 0].plot(steps, c_pw[:, ti], color="r", label=policy_type)
                 handles, labels = axs[ri, 0].get_legend_handles_labels()
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
-                    f"{policy_type} pointwise and rollout policy on 1 episode "
+                    f"{policy_type} pointwise and rollout policy on {_n_trajs} episode "
                     f"({int(pol_train_buffer.size/horizon)} episodes, "
                     f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
                 )
