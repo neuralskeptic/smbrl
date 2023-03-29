@@ -1436,10 +1436,9 @@ def experiment(
     dim_xu = environment.dim_xu
     dim_x = environment.dim_x
     dim_u = environment.dim_u
-    initial_state = torch.Tensor([torch.pi, 0.0])
     # initial state variance is part of env, thus should not be hyperparam
     initial_state_distribution = MultivariateGaussian(
-        initial_state,
+        torch.Tensor([torch.pi, 0.0]),
         # low initial velocity variance!!!
         # 1e-6 * torch.eye(dim_x),  # original
         torch.diag_embed(torch.Tensor([1e-2, 1e-6])),  # more exploration
@@ -2470,6 +2469,7 @@ def experiment(
                     dpi=150,
                 )
                 # # b) from env starting position
+                initial_state = initial_state_distribution.sample()
                 # xs, us, xxs = environment.run(initial_state, global_policy, horizon)
                 # environment.plot(xs, us)
                 # plt.suptitle(f"{policy_type} policy vs env")
@@ -2482,8 +2482,8 @@ def experiment(
     #### EVALUATION
 
     # local_policy.plot_metrics()
-    initial_state = torch.Tensor([torch.pi, 0.0])
-    # initial_state = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
+    # initial_state_distribution.mean = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
+    initial_state = initial_state_distribution.sample()
 
     if plotting:
         ### policy vs env
