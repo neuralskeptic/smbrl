@@ -756,8 +756,8 @@ class Pendulum(Stateless, NoTraining):
             state = xxs[t, ...]
         return xs, us, xxs
 
-    def plot(self, xs, us, xvars=None, uvars=None):
-        fig, axs = plt.subplots(self.dim_x + self.dim_u, figsize=(12, 9))
+    def plot(self, xs, us, xvars=None, uvars=None, **fig_kwargs):
+        fig, axs = plt.subplots(self.dim_x + self.dim_u, **fig_kwargs)
         xs = einops.rearrange(xs, "t ... x -> t (...) x")
         us = einops.rearrange(us, "t ... u -> t (...) u")
         if xvars is not None:
@@ -1402,6 +1402,12 @@ def experiment(
 
     device = "cuda" if use_cuda and torch.cuda.is_available() else "cpu"
 
+    # plotting config
+    fig_kwargs = dict(
+        figsize=(12, 9),
+        dpi=150,
+    )
+
     # Save arguments
     save_args(results_dir, locals(), git_repo_path="./")
 
@@ -1963,7 +1969,7 @@ def experiment(
                 c_roll = cost.predict(sa_pred_roll)
 
                 ### plot pointwise and rollout predictions (1 episode) ###
-                fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
+                fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, **fig_kwargs)
                 steps = torch.tensor(range(0, horizon))
                 axs[0, 0].set_title("pointwise predictions")
                 axs[0, 1].set_title("rollout predictions")
@@ -2008,7 +2014,7 @@ def experiment(
                     f"({int(dyn_train_buffer.size/horizon)} episodes, "
                     f"{dyn_epoch_counter} epochs, lr={lr_dyn:.0e})"
                 )
-                plt.savefig(results_dir / f"dyn_eval_{i_iter}.png", dpi=150)
+                plt.savefig(results_dir / f"dyn_eval_{i_iter}.png")
                 if show_plots:
                     plt.show()
 
@@ -2017,7 +2023,7 @@ def experiment(
         def scaled_xaxis(y_points, n_on_axis):
             return np.arange(len(y_points)) / len(y_points) * n_on_axis
 
-        fig_loss_dyn, ax_loss_dyn = plt.subplots()
+        fig_loss_dyn, ax_loss_dyn = plt.subplots(**fig_kwargs)
         x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
         ax_loss_dyn.plot(x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss")
         x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
@@ -2031,7 +2037,7 @@ def experiment(
             f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
         )
         ax_loss_dyn.legend()
-        plt.savefig(results_dir / "dyn_loss.png", dpi=150)
+        plt.savefig(results_dir / "dyn_loss.png")
         plt.show()
 
         ### policy vs dyn model
@@ -2046,11 +2052,11 @@ def experiment(
                 xs[t, :] = state
                 us[t, :] = action
                 state = x_[0, :]
-            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            environment.plot(
+                xs, us, **fig_kwargs
+            )  # env.plot does not use env, it only plots
             plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-            plt.savefig(
-                results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
-            )
+            plt.savefig(results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png")
 
         return  # TODO DEBUG
 
@@ -2102,7 +2108,7 @@ def experiment(
         #### ~ T: plot i2c local controller
         if plotting:
             ## plot (batch) i2c metrics
-            fix, axs = plt.subplots(3)
+            fix, axs = plt.subplots(3, **fig_kwargs)
             temp_strategy_name = (
                 i2c_solver.update_temperature_strategy.__class__.__name__
             )
@@ -2115,7 +2121,7 @@ def experiment(
             plt.suptitle(
                 f"{n_i2c_vec} i2c metrics (temp.strategy: {temp_strategy_name})"
             )
-            plt.savefig(results_dir / "i2c_metrics_{i_iter}.png", dpi=150)
+            plt.savefig(results_dir / "i2c_metrics_{i_iter}.png")
 
             ## plot local policies vs env
             xs, us, xxs = environment.run(s0_vec_mean, local_vec_policy, horizon)
@@ -2125,9 +2131,9 @@ def experiment(
                 u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 uvars.append(u_var)
             uvars = torch.stack(uvars)
-            environment.plot(xs, us, uvars=uvars)
+            environment.plot(xs, us, uvars=uvars, **fig_kwargs)
             plt.suptitle(f"{n_i2c_vec} local policies vs env")
-            plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}.png", dpi=150)
+            plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}.png")
 
             ## tvlg vec vs dyn model
             xs = torch.zeros((horizon, n_i2c_vec, dim_x))
@@ -2144,11 +2150,10 @@ def experiment(
                 xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
                 s_dist = global_dynamics.predict_dist(xu)
             # env.plot does not use env, it only plots
-            environment.plot(xs, us, xvars=xvars, uvars=uvars)
+            environment.plot(xs, us, xvars=xvars, uvars=uvars, **fig_kwargs)
             plt.suptitle(f"{n_i2c_vec} local policies vs {dyn_model_type} dynamics")
             plt.savefig(
                 results_dir / f"{n_i2c_vec}_tvlgs_vs_{dyn_model_type}-dyn_{i_iter}.png",
-                dpi=150,
             )
 
             if plot_local_policy and show_plots:
@@ -2255,7 +2260,7 @@ def experiment(
                 def visualize_training():
                     if not plotting:
                         return
-                    fig, axs = plt.subplots(2, figsize=(10, 7))
+                    fig, axs = plt.subplots(2, **fig_kwargs)
                     s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
                     a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
                     s_mean = einops.rearrange(
@@ -2377,7 +2382,7 @@ def experiment(
                 torch.cuda.empty_cache()
                 K = local_vec_policy.model.K_actual  # (T b y x)
 
-                fig, axs = plt.subplots(dim_x, 1, figsize=(10, 7))
+                fig, axs = plt.subplots(dim_x, 1, **fig_kwargs)
                 yi = 0  # dim_y == 1
                 for xi in range(dim_x):
                     for bi in range(jac.shape[1]):
@@ -2399,7 +2404,6 @@ def experiment(
                 )
                 plt.savefig(
                     results_dir / f"{policy_type}_jac_vs_tvlg_K_{i_iter}.png",
-                    dpi=150,
                 )
 
                 ## test policy in rollouts
@@ -2447,7 +2451,7 @@ def experiment(
                 c_roll = cost.predict(sa_pred_roll)
 
                 ### plot pointwise and rollout predictions (1 episode) ###
-                fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, figsize=(10, 7))
+                fig, axs = plt.subplots(dim_u + 1 + dim_x, 2, **fig_kwargs)
                 steps = torch.tensor(range(0, horizon))
                 axs[0, 0].set_title("pointwise predictions")
                 axs[0, 1].set_title("rollout predictions")
@@ -2493,7 +2497,7 @@ def experiment(
                     f"({int(pol_train_buffer.size/horizon)} episodes, "
                     f"{pol_epoch_counter} epochs, lr={lr_pol:.0e})"
                 )
-                plt.savefig(results_dir / f"pol_eval_{i_iter}.png", dpi=150)
+                plt.savefig(results_dir / f"pol_eval_{i_iter}.png")
 
                 # plot policy rollouts
                 # a) from i2c mixture starting positions
@@ -2504,18 +2508,17 @@ def experiment(
                     u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
                     uvars.append(u_var)
                 uvars = torch.stack(uvars)
-                environment.plot(xs, us, uvars=uvars)
+                environment.plot(xs, us, uvars=uvars, **fig_kwargs)
                 plt.suptitle(f"{policy_type} policy vs env (from i2c init state)")
                 plt.savefig(
                     results_dir / f"{policy_type}_vs_env_from_s0i2c_{i_iter}.png",
-                    dpi=150,
                 )
                 # # b) from env starting position
                 initial_state = initial_state_distribution.sample()
                 # xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-                # environment.plot(xs, us)
+                # environment.plot(xs, us, **fig_kwargs)
                 # plt.suptitle(f"{policy_type} policy vs env")
-                # plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
+                # plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png")
 
                 if show_plots:
                     plt.show()
@@ -2536,9 +2539,9 @@ def experiment(
             u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
             uvars.append(u_var)
         uvars = torch.stack(uvars)
-        environment.plot(xs, us, uvars=uvars)
+        environment.plot(xs, us, uvars=uvars, **fig_kwargs)
         plt.suptitle(f"{policy_type} policy vs env")
-        plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png", dpi=150)
+        plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png")
 
         ### policy vs dyn model
         if dyn_model_type != "env":
@@ -2552,11 +2555,11 @@ def experiment(
                 xs[t, :] = state
                 us[t, :] = action
                 state = x_[0, :]
-            environment.plot(xs, us)  # env.plot does not use env, it only plots
+            environment.plot(
+                xs, us, **fig_kwargs
+            )  # env.plot does not use env, it only plots
             plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
-            plt.savefig(
-                results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png", dpi=150
-            )
+            plt.savefig(results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png")
 
         ### plot data space coverage ###
         if plot_data and plotting:
@@ -2589,7 +2592,7 @@ def experiment(
             return np.arange(len(y_points)) / len(y_points) * n_on_axis
 
         if dyn_model_type != "env":
-            fig_loss_dyn, ax_loss_dyn = plt.subplots()
+            fig_loss_dyn, ax_loss_dyn = plt.subplots(**fig_kwargs)
             x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
             ax_loss_dyn.plot(
                 x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
@@ -2607,10 +2610,10 @@ def experiment(
                 f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
             )
             ax_loss_dyn.legend()
-            plt.savefig(results_dir / "dyn_loss.png", dpi=150)
+            plt.savefig(results_dir / "dyn_loss.png")
 
         if policy_type != "tvlg":
-            fig_loss_pol, ax_loss_pol = plt.subplots()
+            fig_loss_pol, ax_loss_pol = plt.subplots(**fig_kwargs)
             x_train_loss_pol = scaled_xaxis(pol_loss_trace, pol_epoch_counter)
             ax_loss_pol.plot(
                 x_train_loss_pol, pol_loss_trace, c="k", label="train loss"
@@ -2628,7 +2631,7 @@ def experiment(
                 f"({int(pol_train_buffer.size/horizon)} local solutions, lr={lr_pol:.0e})"
             )
             ax_loss_pol.legend()
-            plt.savefig(results_dir / "pol_loss.png", dpi=150)
+            plt.savefig(results_dir / "pol_loss.png")
 
         if show_plots:
             plt.show()
