@@ -1381,7 +1381,7 @@ def experiment(
     use_cuda: bool = True,  # for policy/dynamics training (i2c always on cpu)
 ):
     ####################################################################################################################
-    #### SETUP (saved to yaml)
+    #### ~~~~ SETUP (saved to yaml) ~~~~
 
     if debug:
         # disable wandb logging and redirect normal logging to ./debug directory
@@ -1419,7 +1419,7 @@ def experiment(
     )
 
     ####################################################################################################################
-    #### EXPERIMENT SETUP
+    #### ~~~~ EXPERIMENT SETUP ~~~~
 
     logger.info(f"Env: {env_type}, Dyn: {dyn_model_type}, Pol: {policy_type}")
     logger.info(f"Seed: {seed}")
@@ -1430,7 +1430,7 @@ def experiment(
     torch.set_printoptions(precision=7)
     torch.set_default_dtype(torch.float64)
 
-    #### S: mdp, initial state, cost
+    #### ~ S: mdp, initial state, cost
     if env_type == "localPendulum":
         environment = Pendulum()  # local seed
     dim_xu = environment.dim_xu
@@ -1461,7 +1461,7 @@ def experiment(
     #     [dim_x, dim_u], batchsize=batch_size, device=device, max_size=1e4
     # )
 
-    #### S: approximate inference params
+    #### ~ S: approximate inference params
     quad_params = CubatureQuadrature(1, 0, 0)
     gh_params = GaussHermiteQuadrature(degree=3)
     # if deterministic -> QuadratureInference (unscented gaussian approx)
@@ -1501,7 +1501,7 @@ def experiment(
             pred = x[..., :dim_x].detach() + delta
             return pred, *rest
 
-    #### S: cost (model)
+    #### ~ S: cost (model)
     @dataclass
     class CostModel(DeterministicModel, NoTraining):
         model: Callable = None  # unused in model_call
@@ -1538,7 +1538,7 @@ def experiment(
         ),
     )
 
-    #### S: global dynamics model
+    #### ~ S: global dynamics model
     if dyn_model_type == "env":
         global_dynamics = DeterministicDynamics(
             model=environment,
@@ -1632,7 +1632,7 @@ def experiment(
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
 
-    #### S: local (i2c) policy
+    #### ~ S: local (i2c) policy
     local_policy = TimeVaryingStochasticPolicy(
         model=TimeVaryingLinearGaussian(
             horizon,
@@ -1667,7 +1667,7 @@ def experiment(
         part3 = cov_pred.logdet()
         return sum(part1 + part2 + part3)  # sum over all batch dims
 
-    #### S: global policy model
+    #### ~ S: global policy model
     if policy_type == "tvlg":
         global_policy = deepcopy(local_policy)
     elif policy_type == "mlp":
@@ -1747,7 +1747,7 @@ def experiment(
         # global_policy.model.init_whitening(train_buffer.xs, train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
 
-    #### S: i2c solver
+    #### ~ S: i2c solver
     i2c_solver = PseudoPosteriorSolver(
         dim_x=dim_x,
         dim_u=dim_u,
@@ -1767,7 +1767,7 @@ def experiment(
     )
 
     ####################################################################################################################
-    #### TRAINING
+    #### ~~~~ TRAINING ~~~~
     # fix seed again (different model setups make random numbers diverge)
     fix_random_seed(seed + 100)
 
@@ -1790,7 +1790,7 @@ def experiment(
         logger.strong_line()
         logger.info(f"ITERATION {i_iter + 1}/{n_iter}")
 
-        #### T: global policy rollouts
+        #### ~ T: global policy rollouts
         logger.weak_line()
         logger.info("START Collecting Dynamics Rollouts")
         global_dynamics.cpu()  # in-place
@@ -1816,7 +1816,7 @@ def experiment(
             dyn_test_buffer.add([torch.hstack([s, a]), ss])
         logger.info("END Collecting Dynamics Rollouts")
 
-        #### T: train dynamics model
+        #### ~ T: train dynamics model
         if dyn_model_type != "env":
             # Learn Dynamics
             logger.weak_line()
@@ -1915,7 +1915,7 @@ def experiment(
             )
             logger.info("END Training Dynamics")
 
-            #### T: plot dynamics model
+            #### ~ T: plot dynamics model
             if plot_dyn and plotting:
                 ## test dynamics model in rollouts
                 # TODO extract?
@@ -2054,7 +2054,7 @@ def experiment(
 
         return  # TODO DEBUG
 
-        #### T: i2c
+        #### ~ T: i2c
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
@@ -2099,7 +2099,7 @@ def experiment(
                 log_dict[k] = v[i_]  # one key, n_iter_solver values
             logger.log_data(log_dict)
 
-        #### T: plot i2c local controller
+        #### ~ T: plot i2c local controller
         if plotting:
             ## plot (batch) i2c metrics
             fix, axs = plt.subplots(3)
@@ -2205,7 +2205,7 @@ def experiment(
             global_dynamics.train()
             torch.set_grad_enabled(True)
 
-            #### T: distill global policy
+            #### ~ T: distill global policy
             # store marginal state and conditional action of joint (smoothed) posterior
             # (state covariance not needed for moment matching: policy has no cov input)
             # sample multiple values using quadrature (feedback behaviour)
@@ -2364,7 +2364,7 @@ def experiment(
 
             logger.info("END Training policy")
 
-            #### T: plot policy
+            #### ~ T: plot policy
             if plot_policy and plotting:
                 # compute jacobian of policy action & compare with tvlg K_actual
                 states = pol_train_buffer.data[0]  # [(b T) x]
@@ -2521,7 +2521,7 @@ def experiment(
                     plt.show()
 
     ####################################################################################################################
-    #### EVALUATION
+    #### ~~~~ EVALUATION ~~~~
 
     # local_policy.plot_metrics()
     # initial_state_distribution.mean = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
