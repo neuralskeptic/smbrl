@@ -46,3 +46,13 @@ class Pendulum(Stateless, NoTraining):
             us[t, ...] = action
             state = xxs[t, ...]
         return xs, us, xxs
+
+    def cost(self, x, **kw):
+        """batched version (batch dims first)"""
+        # swing-up: \theta = \pi -> 0
+        theta, theta_dot, u = x[..., 0], x[..., 1], x[..., 2]
+        theta_cost = (torch.cos(theta) - 1.0) ** 2
+        theta_dot_cost = 1e-2 * theta_dot**2
+        u_cost = 1e-2 * u**2
+        total_cost = theta_cost + theta_dot_cost + u_cost
+        return total_cost

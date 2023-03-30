@@ -2,10 +2,11 @@ import torch
 from typing import Callable, Sequence
 from overrides import override
 from dataclasses import dataclass
-from src.utils.torch_tools import CudaAble
+from src.utils.torch_tools import CudaAble, NoTraining
 from functools import partial
 from abc import abstractmethod
 from src.i2c.distributions import MultivariateGaussian
+from src.i2c.approximate_inference import QuadratureInference
 
 
 @dataclass
@@ -21,7 +22,7 @@ class Model(CudaAble):
       Implement the interface by wrapping or overwriting __call__
         model.__call__: x, **_ -> *_
     """
-    approximate_inference: Callable
+    approximate_inference: QuadratureInference
     model: Callable
 
     def __call__(self, x: torch.Tensor, **kw):
@@ -130,3 +131,19 @@ class StochasticDynamics(StochasticModel, InputModifyingModel):
 @dataclass
 class DeterministicDynamics(DeterministicModel, InputModifyingModel):
     pass
+
+
+@dataclass
+class DeterministicCostModel(NoTraining, DeterministicModel):
+    @override
+    def propagate(
+        self, dist: MultivariateGaussian, *, alpha, **kw
+    ) -> MultivariateGaussian:
+        fun = partial(self.call_and_inputs, **kw)
+        return self.approximate_inference(fun, alpha, dist)
+
+    @override
+    def to(self, device):
+        # model = reward function is stateless!
+        self.approximate_inference = self.approximate_inference.to(device)
+        return self

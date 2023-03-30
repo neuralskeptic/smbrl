@@ -40,6 +40,7 @@ from src.models.linear_bayesian_models import (
     SpectralNormalizedNeuralGaussianProcess,
 )
 from src.models.wrappers import (
+    DeterministicCostModel,
     DeterministicDynamics,
     DeterministicModel,
     DeterministicPolicy,
@@ -316,36 +317,8 @@ def experiment(
             return pred, *rest
 
     #### ~ S: cost (model)
-    @dataclass
-    class CostModel(DeterministicModel, NoTraining):
-        model: Callable = None  # unused in model_call
-        approximate_inference: QuadratureImportanceSamplingInnovation
-
-        @override
-        def __call__(self, x, **kw):
-            """batched version (batch dims first)"""
-            # swing-up: \theta = \pi -> 0
-            theta, theta_dot, u = x[..., 0], x[..., 1], x[..., 2]
-            theta_cost = (torch.cos(theta) - 1.0) ** 2
-            theta_dot_cost = 1e-2 * theta_dot**2
-            u_cost = 1e-2 * u**2
-            total_cost = theta_cost + theta_dot_cost + u_cost
-            return total_cost
-
-        @override
-        def propagate(
-            self, dist: MultivariateGaussian, *, alpha, **kw
-        ) -> MultivariateGaussian:
-            fun = partial(self.call_and_inputs, **kw)
-            return self.approximate_inference(fun, alpha, dist)
-
-        @override
-        def to(self, device):
-            # no model!
-            self.approximate_inference = self.approximate_inference.to(device)
-            return self
-
-    cost = CostModel(
+    cost = DeterministicCostModel(
+        model=environment.cost,  # true cost
         approximate_inference=QuadratureImportanceSamplingInnovation(
             dim_xu,
             gh_params,
