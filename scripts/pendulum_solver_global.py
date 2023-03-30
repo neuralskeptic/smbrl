@@ -50,6 +50,7 @@ from src.models.wrappers import (
 )
 from src.utils.decorator_factory import Decorator
 from src.utils.plotting_utils import (
+    add_grid,
     plot_mvn,
     plot_trajectory_distribution,
     rollout_plot,
@@ -787,6 +788,7 @@ def experiment(
                 # replot with labels (prevent duplicate labels in legend)
                 axs[ri, 0].plot(steps, c_env[:, ti], color="b", label="data")
                 axs[ri, 0].plot(steps, c_pw[:, ti], color="r", label=dyn_model_type)
+                add_grid(axs)
                 handles, labels = axs[ri, 0].get_legend_handles_labels()
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
@@ -812,6 +814,7 @@ def experiment(
             ax_loss_dyn.set_yscale("symlog")
         ax_loss_dyn.set_xlabel("epochs")
         ax_loss_dyn.set_ylabel("loss")
+        add_grid(ax_loss_dyn)
         ax_loss_dyn.set_title(
             f"DYN {dyn_model_type} loss "
             f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
@@ -897,6 +900,7 @@ def experiment(
                 for b, c in zip(range(n_i2c_vec), colors):
                     axs[i].plot(v[:, b], color=c)
                 axs[i].set_ylabel(k)
+            add_grid(axs)
             plt.suptitle(
                 f"{n_i2c_vec} i2c metrics (temp.strategy: {temp_strategy_name})"
             )
@@ -1076,6 +1080,7 @@ def experiment(
                             )
                     axs[0].set_ylabel("mean")
                     axs[1].set_ylabel("variance")
+                    add_grid(axs)
                     handles, labels = axs[0].get_legend_handles_labels()
                     fig.legend(handles[:2], labels[:2], loc="lower center", ncol=2)
                     # axs[0].legend()
@@ -1174,6 +1179,7 @@ def experiment(
                     axs[xi].plot(K[:, bi, yi, xi], c="C0", label="tvlc K")
                     axs[xi].set_ylabel(f"da/ds_{xi}")
                 axs[xi].set_xlabel("steps")
+                add_grid(axs)
                 handles, labels = axs[0].get_legend_handles_labels()
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
@@ -1269,6 +1275,7 @@ def experiment(
                 # replot with labels (prevent duplicate labels in legend)
                 axs[ri, 0].plot(steps, c_env[:, ti], color="b", label="i2c")
                 axs[ri, 0].plot(steps, c_pw[:, ti], color="r", label=policy_type)
+                add_grid(axs)
                 handles, labels = axs[ri, 0].get_legend_handles_labels()
                 fig.legend(handles, labels, loc="lower center", ncol=2)
                 fig.suptitle(
@@ -1382,6 +1389,7 @@ def experiment(
                 ax_loss_dyn.set_yscale("symlog")
             ax_loss_dyn.set_xlabel("epochs")
             ax_loss_dyn.set_ylabel("loss")
+            add_grid(ax_loss_dyn)
             ax_loss_dyn.set_title(
                 f"DYN {dyn_model_type} loss "
                 f"({int(dyn_train_buffer.size/horizon)} episodes, lr={lr_dyn:.0e})"
@@ -1403,6 +1411,7 @@ def experiment(
                 ax_loss_pol.set_yscale("symlog")
             ax_loss_pol.set_xlabel("epochs")
             ax_loss_pol.set_ylabel("loss")
+            add_grid(ax_loss_pol)
             ax_loss_pol.set_title(
                 f"POL {policy_type} loss "
                 f"({int(pol_train_buffer.size/horizon)} local solutions, lr={lr_pol:.0e})"

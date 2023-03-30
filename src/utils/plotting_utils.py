@@ -1,4 +1,4 @@
-from typing import Sequence
+from typing import Iterable
 
 import einops
 import numpy as np
@@ -6,6 +6,14 @@ import torch
 from matplotlib import pyplot as plt
 
 from src.i2c.distributions import MultivariateGaussian
+
+
+def add_grid(ax_or_axs):
+    if isinstance(ax_or_axs, Iterable):
+        for ax in ax_or_axs:
+            add_grid(ax)  # recursion if multidim subplots
+    else:
+        ax_or_axs.grid(True)
 
 
 def rollout_plot(xs, us, xvars=None, uvars=None, u_max=None, **fig_kwargs):
@@ -27,7 +35,6 @@ def rollout_plot(xs, us, xvars=None, uvars=None, u_max=None, **fig_kwargs):
             else:
                 axs[i].plot(xs[:, ib, i], color=c)
         axs[i].set_ylabel(f"x{i}")
-        axs[i].grid(True)
     for i in range(dim_u):
         j = dim_x + i
         for ib, c in zip(range(n_batches), colors):
@@ -39,7 +46,7 @@ def rollout_plot(xs, us, xvars=None, uvars=None, u_max=None, **fig_kwargs):
             axs[j].plot(u_max * torch.ones_like(us[:, i]), "k--")
             axs[j].plot(-u_max * torch.ones_like(us[:, i]), "k--")
         axs[j].set_ylabel(f"u{i}")
-        axs[j].grid(True)
+    add_grid(axs)
     axs[-1].set_xlabel("timestep")
 
 
@@ -54,7 +61,7 @@ def plot_gp(axis, mean, variance, color="b"):
 
 def plot_mvn(
     axis,
-    dists: Sequence[MultivariateGaussian],
+    dists: Iterable[MultivariateGaussian],
     dim=slice(None),
     batch=slice(None),
     color=None,
@@ -62,10 +69,11 @@ def plot_mvn(
     means = torch.stack([d.mean[..., batch, dim] for d in dists])
     variances = torch.stack([d.covariance[..., batch, dim, dim].sqrt() for d in dists])
     plot_gp(axis, means, variances, color=color)
+    add_grid(axis)
 
 
 def plot_trajectory_distribution(
-    list_of_distributions: Sequence[MultivariateGaussian], title=""
+    list_of_distributions: Iterable[MultivariateGaussian], title=""
 ):
     means = torch.stack(tuple(d.mean for d in list_of_distributions), dim=0)
     covariances = torch.stack(tuple(d.covariance for d in list_of_distributions), dim=0)
@@ -78,6 +86,7 @@ def plot_trajectory_distribution(
     colors = plt.cm.brg(torch.linspace(0, 1, n_batches))
     fig, axs = plt.subplots(n_plots)
     axs[0].set_title(title)
+    add_grid(axs)
     for i, ax in enumerate(axs):
         for b, c in zip(range(n_batches), colors):
             plot_gp(ax, means[:, b, i], covariances[:, b, i, i], color=c)
