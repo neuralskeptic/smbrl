@@ -1,6 +1,7 @@
 from typing import Sequence
 
 import einops
+import numpy as np
 import torch
 from matplotlib import pyplot as plt
 
@@ -18,7 +19,7 @@ def rollout_plot(xs, us, xvars=None, uvars=None, u_max=None, **fig_kwargs):
     if uvars is not None:
         uvars = einops.rearrange(uvars, "t ... u -> t (...) u")
     n_batches = xs.shape[-2]
-    colors = plt.cm.brg(torch.linspace(0, 1, n_batches))
+    colors = plt.cm.brg(np.linspace(0, 1, n_batches))
     for i in range(dim_x):
         for ib, c in zip(range(n_batches), colors):
             if xvars is not None:

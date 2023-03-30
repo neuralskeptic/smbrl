@@ -862,6 +862,7 @@ def experiment(
             rollout_plot(xs, us, u_max=u_max, **fig_kwargs)
             plt.suptitle(f"{policy_type} policy vs {dyn_model_type} dynamics")
             plt.savefig(results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png")
+            plt.show()
 
         return  # TODO DEBUG
 
