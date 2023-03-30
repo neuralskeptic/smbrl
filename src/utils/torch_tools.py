@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+
 import torch
 
 float32_eps = torch.Tensor([torch.finfo(torch.float32).tiny])
@@ -17,3 +19,28 @@ def autograd_tensor(x):
 
 def map_cpu(iterable):
     return map(lambda x: x.to("cpu"), iterable)
+
+
+class CudaAble(ABC):
+    @abstractmethod
+    def to(self, device):
+        raise NotImplementedError
+
+    def cpu(self):
+        return self.to("cpu")
+
+
+class Stateless:
+    def to(self, device):
+        return self
+
+    def cpu(self):
+        return self
+
+
+class NoTraining:
+    def eval(self):
+        return self
+
+    def train(self):
+        return self
