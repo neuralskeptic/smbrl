@@ -1,11 +1,13 @@
 from copy import deepcopy
-from typing import Callable, Dict, List
+from typing import Dict, List
 
+import einops
 import torch
 from matplotlib import pyplot as plt
 
 from src.i2c.controller import TimeVaryingStochasticPolicy
-from src.i2c.distributions import Distribution
+from src.i2c.distributions import MultivariateGaussian
+from src.i2c.temperature_strategies import TemperatureStrategy
 from src.models.wrappers import Model
 from src.utils.plotting_utils import plot_trajectory_distribution
 from src.utils.torch_tools import CudaAble
@@ -23,24 +25,22 @@ class PseudoPosteriorSolver(CudaAble):
         dynamics: Model,
         cost: Model,
         policy_template: TimeVaryingStochasticPolicy,
-        smoother: Callable,
-        update_temperature_strategy: Callable,
+        update_temperature_strategy: TemperatureStrategy,
     ):
         self.dim_x, self.dim_u = dim_x, dim_u
         self.horizon = horizon
         self.dynamics = dynamics
         self.cost = cost
         self.policy_template = policy_template
-        self.smoother = smoother
         self.update_temperature_strategy = update_temperature_strategy
 
     def forward_pass(
         self,
         policy: Model,
-        initial_state: Distribution,
-        alpha: float,
+        initial_state: MultivariateGaussian,
+        alpha: torch.Tensor,
         open_loop: bool = True,
-    ) -> (List[Distribution], Distribution):
+    ) -> (List[MultivariateGaussian], MultivariateGaussian):
         s = initial_state
         sa_cost_list = []
         next_s_list = []
@@ -57,9 +57,9 @@ class PseudoPosteriorSolver(CudaAble):
 
     def backward_pass(
         self,
-        forward_state_action_distribution,
-        predicted_state_distribution,
-        terminal_state_distribution,
+        forward_state_action_distribution: List[MultivariateGaussian],
+        predicted_state_distribution: List[MultivariateGaussian],
+        terminal_state_distribution: List[MultivariateGaussian],
     ):
         dist = []
         future_state_posterior = terminal_state_distribution
@@ -79,10 +79,39 @@ class PseudoPosteriorSolver(CudaAble):
             dist += [state_action_posterior]
         return list(reversed(dist))
 
+    def smoother(
+        self,
+        current_prior: MultivariateGaussian,
+        predicted_prior: MultivariateGaussian,
+        future_posterior: MultivariateGaussian,
+    ) -> MultivariateGaussian:
+        """linear gaussian smoothing
+        See https://vismod.media.mit.edu/tech-reports/TR-531.pdf , Section 3.2
+        """
+        J = torch.linalg.solve(
+            predicted_prior.covariance, predicted_prior.cross_covariance
+        ).mT
+        try:
+            diff_mean = future_posterior.mean - predicted_prior.mean
+        except:
+            breakpoint()
+        mean = current_prior.mean + einops.einsum(
+            J, diff_mean, "... xu u, ... u -> ... xu"
+        )
+        diff_cov = future_posterior.covariance - predicted_prior.covariance
+        covariance = current_prior.covariance + J.matmul(diff_cov).matmul(J.mT)
+        return MultivariateGaussian(
+            mean,
+            covariance,
+            J.matmul(future_posterior.covariance),
+            future_posterior.mean,
+            future_posterior.covariance,
+        )
+
     def __call__(
         self,
         n_iteration: int,
-        initial_state: Distribution,
+        initial_state: MultivariateGaussian,
         policy_prior: Model = None,
         plot_posterior: bool = True,
     ):
@@ -166,6 +195,5 @@ class PseudoPosteriorSolver(CudaAble):
         self.dynamics.to(device)
         self.cost.to(device)
         self.policy_template.to(device)
-        self.smoother.to(device)
         self.update_temperature_strategy.to(device)
         return self

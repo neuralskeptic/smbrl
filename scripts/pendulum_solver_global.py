@@ -57,34 +57,6 @@ from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
 from src.utils.torch_tools import NoTraining
 
-
-def linear_gaussian_smoothing(
-    current_prior: MultivariateGaussian,
-    predicted_prior: MultivariateGaussian,
-    future_posterior: MultivariateGaussian,
-) -> MultivariateGaussian:
-    """.
-    See https://vismod.media.mit.edu/tech-reports/TR-531.pdf , Section 3.2
-    """
-    J = torch.linalg.solve(
-        predicted_prior.covariance, predicted_prior.cross_covariance
-    ).mT
-    try:
-        diff_mean = future_posterior.mean - predicted_prior.mean
-    except:
-        breakpoint()
-    mean = current_prior.mean + einops.einsum(J, diff_mean, "... xu u, ... u -> ... xu")
-    diff_cov = future_posterior.covariance - predicted_prior.covariance
-    covariance = current_prior.covariance + J.matmul(diff_cov).matmul(J.mT)
-    return MultivariateGaussian(
-        mean,
-        covariance,
-        J.matmul(future_posterior.covariance),
-        future_posterior.mean,
-        future_posterior.covariance,
-    )
-
-
 # class HitCounter:
 #     spd_counter = 0  # static
 
@@ -597,7 +569,6 @@ def experiment(
         dynamics=global_dynamics,
         cost=cost,
         policy_template=local_policy,
-        smoother=linear_gaussian_smoothing,
         # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=Constant(0.2 * torch.ones(n_i2c_vec, 1)),
