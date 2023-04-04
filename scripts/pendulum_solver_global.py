@@ -167,7 +167,6 @@ def experiment(
     n_iter_solver: int = 30,  # how many i2c solver iterations to do
     n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
     s0dot_var: float = 1e-6,  # very low initial velocity variance (low energy)
-    s0_area_var: float = 1e-2,  # how much the initial states in a batch of i2c should vary
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
@@ -850,13 +849,8 @@ def experiment(
         # i2c: find local (optimal) tvlg policy
         logger.weak_line()
         logger.info(f"START i2c [{n_iter_solver} iters]")
-        # choose starting area for all i2c solutions (low inital velocity var)
-        s0_area_mean = initial_state_distribution.sample()
-        s0_area_cov = torch.diag_embed(torch.tensor([s0_area_var, s0dot_var]))
-        s0_area_dist = MultivariateGaussian(s0_area_mean, s0_area_cov)
-        # sample (similar) init state distributions for all i2c solutions
-        # (low inital velocity var)
-        s0_vec_mean = s0_area_dist.sample([n_i2c_vec])
+        # create initial state distributions for all i2c solutions (low inital velocity var)
+        s0_vec_mean = initial_state_distribution.sample([n_i2c_vec])
         s0_i2c_cov = torch.diag_embed(torch.tensor([s0_i2c_var, s0dot_var]))
         s0_vec_cov = s0_i2c_cov.repeat(n_i2c_vec, 1, 1)
         s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
