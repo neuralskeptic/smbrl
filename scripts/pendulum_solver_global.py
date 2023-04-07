@@ -826,15 +826,15 @@ def experiment(
         if dyn_model_type != "env":
             xs = torch.zeros((horizon, dim_x))
             us = torch.zeros((horizon, dim_u))
-            xvars = []
-            uvars = []
+            uvars = torch.zeros_like(us)
+            xvars = torch.zeros_like(xs)
             state = initial_state_distribution.sample()
             for t in range(horizon):
                 action_dist = global_policy.predict_dist(state, t=t)
-                uvars.append(action_dist.covariance.diagonal(dim1=-2, dim2=-1))
+                uvars[t, :] = action_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 xu = torch.cat((state, action_dist.mean), dim=-1)[None, :]
                 nstate_dist = global_dynamics.predict_dist(xu)
-                xvars.append(action_dist.covariance.diagonal(dim1=-2, dim2=-1))
+                xvars[t, :] = nstate_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 xs[t, :] = state
                 us[t, :] = action_dist.mean
                 state = nstate_dist.mean[0, :]
@@ -1300,12 +1300,10 @@ def experiment(
                 # # b) from env starting position
                 # initial_state = initial_state_distribution.sample()
                 # xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-                # uvars = []
+                # uvars = torch.zeros_like(us)
                 # for t in range(horizon):
                 #     u_dist = global_policy.predict_dist(xs[t, ...], t=t)
-                #     u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
-                #     uvars.append(u_var)
-                # uvars = torch.stack(uvars)
+                #     uvar[t, :] = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 # rollout_plot(xs, us, uvars=uvars, u_max=u_max, **fig_kwargs)
                 # plt.suptitle(f"{policy_type} policy vs env")
                 # plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png")
@@ -1323,12 +1321,10 @@ def experiment(
     if plotting:
         ### policy vs env
         xs, us, xxs = environment.run(initial_state, global_policy, horizon)
-        uvars = []
+        uvars = torch.zeros_like(us)
         for t in range(horizon):
             u_dist = global_policy.predict_dist(xs[t, ...], t=t)
-            u_var = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
-            uvars.append(u_var)
-        uvars = torch.stack(uvars)
+            uvars[t, :] = u_dist.covariance.diagonal(dim1=-2, dim2=-1)
         rollout_plot(xs, us, uvars=uvars, u_max=u_max, **fig_kwargs)
         plt.suptitle(f"{policy_type} policy vs env")
         plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}.png")
@@ -1337,15 +1333,15 @@ def experiment(
         if dyn_model_type != "env":
             xs = torch.zeros((horizon, dim_x))
             us = torch.zeros((horizon, dim_u))
-            xvars = []
-            uvars = []
+            xvars = torch.zeros_like(xs)
+            uvars = torch.zeros_like(us)
             state = initial_state
             for t in range(horizon):
                 action_dist = global_policy.predict_dist(state, t=t)
-                uvars.append(action_dist.covariance.diagonal(dim1=-2, dim2=-1))
+                uvars[t, :] = action_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 xu = torch.cat((state, action_dist.mean), dim=-1)[None, :]
                 nstate_dist = global_dynamics.predict_dist(xu)
-                xvars.append(action_dist.covariance.diagonal(dim1=-2, dim2=-1))
+                xvars[t, :] = action_dist.covariance.diagonal(dim1=-2, dim2=-1)
                 xs[t, :] = state
                 us[t, :] = action_dist.mean
                 state = nstate_dist.mean[0, :]
