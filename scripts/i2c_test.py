@@ -3,15 +3,16 @@ Linear Gaussian Covariance Control with Input Inference for Control
 """
 import os
 
-import i2c.env as i2c_env
-import i2c.model as i2c_model
 import matplotlib.pyplot as plt
 import numpy as np
 import tikzplotlib
+from tqdm import tqdm
+
+import i2c.env as i2c_env
+import i2c.model as i2c_model
 from i2c.i2c import I2cGraph
 from i2c.policy.linear import TimeIndexedLinearGaussianPolicy
 from i2c.utils import covariance_2d, make_results_folder
-from tqdm import tqdm
 
 DIR_NAME = os.path.dirname(__file__)
 
