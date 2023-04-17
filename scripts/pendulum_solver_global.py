@@ -589,7 +589,24 @@ def experiment(
                 y = self.decorated.predict(x, **kw)
                 return y + 5e-2 * torch.randn_like(y)
 
-        exploration_policy = AddDithering(global_policy)
+        class RandomWalkPredict(Decorator[Model]):  # decorate w/o changing policy
+            @override
+            def predict(self, x: torch.Tensor, *, t, **kw) -> torch.Tensor:
+                if hasattr(self, "current"):
+                    prev = self.current
+                else:
+                    y_ = self.decorated.predict(x, **kw)
+                    prev = torch.zeros_like(y_)
+                if t == 0:  # reset
+                    prev *= 0.0
+                self.current = prev + 5e-2 * torch.randn_like(prev)
+                return self.current
+
+        if i_iter == 0:  # untrained policy => use random noise (tvlg)
+            # exploration_policy = AddDithering(global_policy)
+            exploration_policy = RandomWalkPredict(global_policy)
+        else:
+            exploration_policy = AddDithering(global_policy)
 
         # train and test rollouts (env & exploration policy)
         for i in trange(n_dyn_rollout_episodes):  # 80 % train
