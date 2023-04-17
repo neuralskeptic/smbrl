@@ -125,7 +125,7 @@ class LinearBayesianModel(nn.Module):
         vars_pred_in = vars_feat + 1
         cov_pred_out = self.error_cov_out()
         cov_pred = einops.einsum(vars_pred_in, cov_pred_out, "..., o1 o2 -> ... o1 o2")
-        cov_pred += self.pred_var_bias().diag()
+        # cov_pred += self.pred_var_bias().diag()
         return mu, cov_pred
 
     def elbo(self, x, y):
