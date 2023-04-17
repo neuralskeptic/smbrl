@@ -1199,7 +1199,7 @@ def experiment(
                 # select how many trajs to plot (take from back of buffer)
                 a_env = a_env[:, -n_trajs_plot_pol:, ...]
                 s_env = s_env_[:, -n_trajs_plot_pol:, ...]
-                _n_trajs = sa_env_.shape[1]
+                _n_trajs = s_env_.shape[1]
                 s_env = s_env_.cpu()
                 # pointwise
                 a_pred_pw_dists = []
