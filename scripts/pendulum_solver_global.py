@@ -42,7 +42,6 @@ from src.models.linear_bayesian_models import (
 from src.models.wrappers import (
     DeterministicCostModel,
     DeterministicDynamics,
-    DeterministicModel,
     DeterministicPolicy,
     Model,
     StochasticDynamics,
@@ -57,7 +56,6 @@ from src.utils.plotting_utils import (
 )
 from src.utils.seeds import fix_random_seed
 from src.utils.time_utils import timestamp
-from src.utils.torch_tools import NoTraining
 
 # class HitCounter:
 #     spd_counter = 0  # static
@@ -87,7 +85,7 @@ def experiment(
     model_save_period: int = 500,  # every N epochs
     ##########
     min_epochs_per_train: int = 100,  # train at least N epochs (even if early stop)
-    early_stop_thresh: float = -3e3,  # stop training when validation loss lower
+    early_stop_thresh: float = -1e3,  # stop training when training & validation loss lower
     ## dynamics ##
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
     n_trajs_plot_dyn: int = 0,  # how many trajs in dyn plot [0 => all trajs]
@@ -121,7 +119,7 @@ def experiment(
     # layer_spec_dyn: int = [*(256,) * 3],  # [in, *layer_spec, feat], W: [feat, out]
     n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
     lr_dyn: float = 5e-4,
-    n_epochs_dyn: int = 3000,
+    n_epochs_dyn: int = 1000,
     ##############
     ## policy ##
     plot_policy: bool = True,  # plot pointwise and rollout prediction
@@ -557,11 +555,11 @@ def experiment(
     # fix seed again (different model setups make random numbers diverge)
     fix_random_seed(seed + 100)
 
-    # TODO debug
-    prefix = f"scripts/_dbg{n_i2c_vec}"
-    # load (saved) policy
-    state_dict = torch.load(repo_dir / f"{prefix}_{policy_type}_ep{n_epochs_pol}.pth")
-    global_policy.model.load_state_dict(state_dict)
+    # # TODO debug
+    # prefix = f"scripts/_dbg{n_i2c_vec}"
+    # # load (saved) policy
+    # state_dict = torch.load(repo_dir / f"{prefix}_{policy_type}_ep{n_epochs_pol}.pth")
+    # global_policy.model.load_state_dict(state_dict)
 
     # for alpha in [1e-1, 1, 10, 100, 1000]:
     # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
@@ -843,7 +841,7 @@ def experiment(
             plt.savefig(results_dir / f"{policy_type}_vs_{dyn_model_type}_{i_iter}.png")
             plt.show()
 
-        return  # TODO DEBUG
+        # return  # TODO DEBUG
 
         #### ~ T: i2c
         # i2c: find local (optimal) tvlg policy
@@ -854,28 +852,28 @@ def experiment(
         s0_i2c_cov = torch.diag_embed(torch.tensor([s0_i2c_var, s0dot_var]))
         s0_vec_cov = s0_i2c_cov.repeat(n_i2c_vec, 1, 1)
         s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
-        # # learn a batch of local policies
-        # local_vec_policy, sa_posterior = i2c_solver(
-        #     n_iteration=n_iter_solver,
-        #     initial_state=s0_vec_dist,
-        #     # initial_state=initial_state_distribution,  # TODO debug
-        #     policy_prior=global_policy if i_iter != 0 else None,  # always start clean
-        #     plot_posterior=plot_posterior and show_plots and plotting,
-        # )
+        # learn a batch of local policies
+        local_vec_policy, sa_posterior = i2c_solver(
+            n_iteration=n_iter_solver,
+            initial_state=s0_vec_dist,
+            # initial_state=initial_state_distribution,  # TODO debug
+            policy_prior=global_policy if i_iter != 0 else None,  # always start clean
+            plot_posterior=plot_posterior and show_plots and plotting,
+        )
 
-        # TODO debug
-        prefix = f"scripts/_dbg{n_i2c_vec}_"
-        # # save i2c
-        # torch.save(local_vec_policy, repo_dir / f'{prefix}local_vec_i2c.obj')
-        # torch.save(sa_posterior, repo_dir / f'{prefix}sa_posterior.obj')
-        # torch.save(i2c_solver.metrics, repo_dir / f'{prefix}i2c_solver-metrics.obj')
-        # torch.save(s0_vec_mean, repo_dir / f'{prefix}s0_vec_mean.obj')
-        # load (saved) i2c
-        local_vec_policy = torch.load(repo_dir / f"{prefix}local_vec_i2c.obj")
-        sa_posterior = torch.load(repo_dir / f"{prefix}sa_posterior.obj")
-        i2c_solver.metrics = torch.load(repo_dir / f"{prefix}i2c_solver-metrics.obj")
-        s0_vec_mean = torch.load(repo_dir / f"{prefix}s0_vec_mean.obj")
-        plot_trajectory_distribution(sa_posterior, "sa_posterior")
+        # # TODO debug
+        # prefix = f"scripts/_dbg{n_i2c_vec}_"
+        # # # save i2c
+        # # torch.save(local_vec_policy, repo_dir / f'{prefix}local_vec_i2c.obj')
+        # # torch.save(sa_posterior, repo_dir / f'{prefix}sa_posterior.obj')
+        # # torch.save(i2c_solver.metrics, repo_dir / f'{prefix}i2c_solver-metrics.obj')
+        # # torch.save(s0_vec_mean, repo_dir / f'{prefix}s0_vec_mean.obj')
+        # # load (saved) i2c
+        # local_vec_policy = torch.load(repo_dir / f"{prefix}local_vec_i2c.obj")
+        # sa_posterior = torch.load(repo_dir / f"{prefix}sa_posterior.obj")
+        # i2c_solver.metrics = torch.load(repo_dir / f"{prefix}i2c_solver-metrics.obj")
+        # s0_vec_mean = torch.load(repo_dir / f"{prefix}s0_vec_mean.obj")
+        # plot_trajectory_distribution(sa_posterior, "sa_posterior")
 
         logger.info("END i2c")
         # log i2c metrics
