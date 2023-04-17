@@ -248,19 +248,18 @@ class Annealing(TemperatureStrategy, Stateless):
         assert start > 0.0
         assert end > start
         # self.schedule = iter(torch.exp(torch.linspace(math.log(start), math.log(end), iterations)).tolist())
-        self.schedule = iter(
-            (
-                start
-                + (end - start)
-                # ### linear schedule
-                # * (torch.linspace(0, iterations, iterations)) / (iterations)
-                ### quadratic schedule
-                * (torch.linspace(0, iterations, iterations)) ** 2 / (iterations) ** 2
-                # ### square root schedule
-                # * torch.sqrt(torch.linspace(0, iterations, iterations))
-                # / math.sqrt(iterations)
-            ).tolist()
-        )
+        self._schedule_list = (
+            start
+            + (end - start)
+            # ### linear schedule
+            # * (torch.linspace(0, iterations, iterations)) / (iterations)
+            ### quadratic schedule
+            * (torch.linspace(0, iterations, iterations)) ** 2 / (iterations) ** 2
+            # ### square root schedule
+            # * torch.sqrt(torch.linspace(0, iterations, iterations))
+            # / math.sqrt(iterations)
+        ).tolist()
+        self.schedule = iter(self._schedule_list)
 
     def __call__(
         self,
@@ -269,4 +268,8 @@ class Annealing(TemperatureStrategy, Stateless):
         state_action_policy,
         current_alpha: float,
     ):
-        return next(self.schedule) * torch.ones_like(current_alpha)
+        try:
+            return next(self.schedule) * torch.ones_like(current_alpha)
+        except:
+            self.schedule = iter(self._schedule_list)
+            return next(self.schedule) * torch.ones_like(current_alpha)
