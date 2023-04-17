@@ -24,6 +24,7 @@ class PseudoPosteriorSolver(CudaAble):
         horizon: int,
         dynamics: Model,
         cost: Model,
+        delta_cost_thresh: float,
         policy_template: TimeVaryingStochasticPolicy,
         update_temperature_strategy: TemperatureStrategy,
     ):
@@ -31,8 +32,11 @@ class PseudoPosteriorSolver(CudaAble):
         self.horizon = horizon
         self.dynamics = dynamics
         self.cost = cost
+        self.delta_cost_thresh = delta_cost_thresh
         self.policy_template = policy_template
         self.update_temperature_strategy = update_temperature_strategy
+
+        self.convergence_horizon = 5
 
     def forward_pass(
         self,
@@ -128,7 +132,7 @@ class PseudoPosteriorSolver(CudaAble):
             policy_created = True
 
         for i in range(n_iteration):
-            print(f"alpha {i}: {alpha.flatten().cpu()}")
+            # print(f"alpha {i}: {alpha.flatten().cpu()}")
             sa_filter, s_filter, s_T = self.forward_pass(
                 policy,
                 initial_state,
@@ -144,6 +148,8 @@ class PseudoPosteriorSolver(CudaAble):
                 open_loop=False,  # to evaluate use feedback
             )
             self.compute_metrics(sa_smoother, sa_policy_fb, alpha)
+            policy_cost = self.metrics["policy_cost"]
+            print(f"policy cost {i}: {policy_cost[-1]}")
 
             if not policy_created:  # switch from prior policy to local policy
                 policy = deepcopy(self.policy_template)
@@ -161,11 +167,23 @@ class PseudoPosteriorSolver(CudaAble):
                 plot_trajectory_distribution(sa_smoother, f"posterior {i}")
                 plot_trajectory_distribution(sa_policy_fb, f"rollout {i}")
                 plt.show()
+
+            if self.check_convergence():
+                break
         # if plot_posterior:
         #     # plot_trajectory_distribution(sa_filter, f"filter")
         #     plot_trajectory_distribution(sa_smoother, f"posterior")
         #     plt.show()
         return policy, sa_smoother
+
+    def check_convergence(self):
+        policy_cost = torch.stack(self.metrics["policy_cost"])
+        delta_cost = policy_cost[:-1, :] - policy_cost[1:, :]
+        if delta_cost.shape[0] < self.convergence_horizon:
+            return False
+        res = delta_cost[-self.convergence_horizon :, :] < self.delta_cost_thresh
+        # print(f"delta cost < thres: {res}")
+        return torch.all(res)
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
         posterior_cost = self.cost.predict(

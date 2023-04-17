@@ -166,6 +166,7 @@ def experiment(
     n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
     s0dot_var: float = 1e-6,  # very low initial velocity variance (low energy)
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
+    delta_cost_thresh: float = 1.0,  # lower cost change means convergence
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
     # plot_local_policy: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
@@ -539,11 +540,12 @@ def experiment(
         horizon=horizon,
         dynamics=global_dynamics,
         cost=cost,
+        delta_cost_thresh=delta_cost_thresh,
         policy_template=local_policy,
         # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
-        # update_temperature_strategy=Constant(0.2 * torch.ones(n_i2c_vec, 1)),
-        update_temperature_strategy=Annealing(1e-2, 5, n_iter_solver),
+        update_temperature_strategy=Constant(0.2 * torch.ones(n_i2c_vec, 1)),
+        # update_temperature_strategy=Annealing(1e-2, 5, n_iter_solver),
         # update_temperature_strategy=KullbackLeiblerDivergence(QuadratureInference(dim_xu, gh_params), epsilon=kl_bound),
         # update_temperature_strategy=PolyakStepSize(
         #     QuadratureInference(dim_xu, quad_params)
@@ -877,10 +879,10 @@ def experiment(
 
         logger.info("END i2c")
         # log i2c metrics
-        for i_ in range(n_iter_solver):
-            log_dict = {"iter": i_iter, "i2c_iter": i_}
-            for (k, v) in i2c_solver.metrics.items():
-                log_dict[k] = v[i_]  # one key, n_iter_solver values
+        for (k, v) in i2c_solver.metrics.items():
+            for i_, vi in enumerate(v):
+                log_dict = {"iter": i_iter, "i2c_iter": i_}
+                log_dict[k] = vi  # one key, n_iter_solver values
             logger.log_data(log_dict)
 
         #### ~ T: plot i2c local controller
