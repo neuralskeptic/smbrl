@@ -274,7 +274,7 @@ def experiment(
     )
 
     pol_train_buffer = ReplayBuffer(
-        [dim_x, dim_u, (dim_u, dim_u)],  # [s_mean, a_mean, a_cov]
+        [dim_x, dim_u, (dim_u, dim_u), 1],  # [s_mean, a_mean, a_cov]
         batchsize=batch_size,
         device=device,
         max_size=50 * horizon,
@@ -552,8 +552,8 @@ def experiment(
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
 
     # all policies have same structure, so same loss
-    def loss_fn_pol(s, a):
-        return -global_policy.model.elbo(sincos1(s), a)
+    def loss_fn_pol(s, a, **kw):
+        return -global_policy.model.elbo(sincos1(s), a, **kw)
 
     #### ~ S: i2c solver
     i2c_solver = PseudoPosteriorSolver(
@@ -1014,6 +1014,69 @@ def experiment(
         #     g.savefig(results_dir / "test_data.png", dpi=150)
 
         # Fit global policy to local policy
+        def dagger_rollout(s_init, p_expert, stoch=False, var_factor=1.0):
+            s_roll = torch.empty([horizon, n_i2c_vec, dim_x]).to(s_init.device)
+            a_means = torch.empty([horizon, n_i2c_vec, dim_u]).to(s_init.device)
+            a_covs = torch.empty([horizon, n_i2c_vec, dim_u, dim_u]).to(s_init.device)
+            importances = torch.empty([horizon, n_i2c_vec, 1]).to(s_init.device)
+            s_current = s_init
+            for t, dist_vec in enumerate(sa_posterior):  # t in range(horizon)
+                dist_vec.to(s_current.device)
+                # repeat state for each vec tvlg component
+                s_roll_vec = einops.repeat(s_current, "b s -> b v s", v=n_i2c_vec)
+                # get controller state distribution for t
+                # (controller was optimized in local area around this)
+                s_local_dist = dist_vec.marginalize(slice(0, dim_x))
+                # compute importance weight: how close s_local_t is to s_roll
+                eps = 1e-16  # prevent division by zero => when this is zero, numerator is also zero :)
+                s_local_dist.covariance *= 1  # higher spread
+                importance_vec = s_local_dist.prob(s_roll_vec)
+                # importance_vec = importance_vec.log().sigmoid()
+                importance_sum = importance_vec.sum(dim=-2) + eps
+                # get conditional action distribution
+                # equiv. to tvlgc prediction, but with true conditional covariance
+                a_cond_f = dist_vec.conditional(slice(dim_x, None))
+                a_expert_dist = a_cond_f(s_roll_vec)
+                # weight each prediction (mean & cov) by its importance ...
+                a_expert_mean_weighted = a_expert_dist.mean * importance_vec
+                a_expert_vars_weighted = einops.einsum(
+                    a_expert_dist.covariance,
+                    importance_vec,
+                    "... a a, ... a -> ... a",
+                )
+                # ... then sum and divide by sum of importances (normalize)
+                a_expert_mean = a_expert_mean_weighted.sum(dim=-2) / (importance_sum)
+                a_expert_vars = a_expert_vars_weighted.sum(dim=-2) / (importance_sum)
+                a_expert_cov = torch.diag_embed(a_expert_vars + eps)  # prevent zero var
+                # store expert prediction data for buffer
+                s_roll[t, ...] = s_current
+                a_means[t, ...] = a_expert_mean
+                a_covs[t, ...] = a_expert_cov
+                importances[t, ...] = importance_sum / (a_expert_vars + eps)
+                # s = s': p% expert vs policy step
+                # if torch.rand(1) < p_expert:
+                #     if stoch:
+                #         a_dist = MultivariateGaussian(a_expert_mean, a_expert_cov/10)
+                #         a_step = a_dist.sample()
+                #     else:
+                #         a_step = a_expert_mean
+                # else:
+                #     # predict 1 step with trained policy & dynamics model step => (s, a)
+                #     a_step = global_policy.predict(s_current)
+                a_step = a_expert_mean
+                # dynamics: predict next state (no policy uncertainty?)
+                sa = torch.cat((s_current, a_step), dim=-1)
+                s_current = global_dynamics.predict(sa)
+            # add batched rollouts sequentially (not interleaved) => time dim last batch dim
+            s_roll = einops.rearrange(s_roll, "T ... s -> (... T) s")
+            a_means = einops.rearrange(a_means, "T ... a -> (... T) a")
+            a_covs = einops.rearrange(a_covs, "T ... a1 a2 -> (... T) a1 a2")
+            importances = einops.rearrange(importances, "T ... one -> (... T) one")
+            # for b in range(n_i2c_vec):
+            #     rollout_plot(s_roll[:, b, :], a_means[:, b, :], uvars=a_covs[:, b, :], u_max=u_max, **fig_kwargs)
+            # return collected data
+            return [s_roll, a_means, a_covs, importances]
+
         if policy_type == "tvlg":
             # create mixture (mean) policy
             global_policy = deepcopy(local_vec_policy)
@@ -1063,61 +1126,20 @@ def experiment(
                 a_means = einops.rearrange(a_means, "T ... a -> (... T) a")
                 a_covs = einops.rearrange(a_covs, "T ... a1 a2 -> (... T) a1 a2")
                 pol_train_buffer.clear()  # only train policy on last controller
-                pol_train_buffer.add([s_pts, a_means, a_covs])
+                pol_train_buffer.add([s_pts, a_means, a_covs, 1])
             elif strategy == 2:
-                # just one rollout from controllers (i.e. conditional action posterior)
-                s_roll = torch.empty([horizon, n_i2c_vec, dim_x])
-                a_means = torch.empty([horizon, n_i2c_vec, dim_u])
-                a_covs = torch.empty([horizon, n_i2c_vec, dim_u, dim_u])
-                s_roll_dist = MultivariateGaussian.from_deterministic(s0_vec_mean)
-                for t, dist_vec_t in enumerate(sa_posterior):  # t in range(horizon)
-                    s_roll[t, ...] = s_roll_dist.mean
-                    # get controller state distribution for t
-                    # (controller was optimized in local area around this)
-                    s_local_dist_t = dist_vec_t.marginalize(slice(0, dim_x))
-                    # compute importance weight: how close s_local_t is to s_roll
-                    s_roll_vec = einops.repeat(
-                        s_roll[t, ...], "b s -> b v s", v=n_i2c_vec
-                    )
-                    importance_vec = s_local_dist_t.prob(s_roll_vec)
-                    # get conditional action distribution
-                    # equiv. to tvlgc prediction, but with true conditional covariance
-                    a_cond_f_t = dist_vec_t.conditional(slice(dim_x, None))
-                    a_pred_dist_t = a_cond_f_t(s_roll_vec)
-                    # weight each prediction (mean & cov) by its importance ...
-                    a_pred_mean_weighted = a_pred_dist_t.mean * importance_vec
-                    a_pred_vars_weighted = einops.einsum(
-                        a_pred_dist_t.covariance,
-                        importance_vec,
-                        "... a a, ... a -> ... a",
-                    )
-                    # ... then sum and divide by sum of importances (normalize)
-                    eps = 1e-16  # prevent division by zero => when this is zero, numerator is also zero :)
-                    a_means[t, ...] = a_pred_mean_weighted.sum(dim=-2) / (
-                        importance_vec.sum(dim=-2) + eps
-                    )
-                    a_vars = a_pred_vars_weighted.sum(dim=-2) / (
-                        importance_vec.sum(dim=-2) + eps
-                    )
-                    a_covs[t, ...] = torch.diag_embed(a_vars)
-                    # dynamics: predict next state (no policy uncertainty?)
-                    xu = torch.cat((s_roll[t, ...], a_means[t, ...]), dim=-1)
-                    s_roll_dist = global_dynamics.predict_dist(xu)
-                # add batched rollouts sequentially (not interleaved) => time dim last batch dim
-                s_roll = einops.rearrange(s_roll, "T ... s -> (... T) s")
-                a_means = einops.rearrange(a_means, "T ... a -> (... T) a")
-                a_covs = einops.rearrange(a_covs, "T ... a1 a2 -> (... T) a1 a2")
-                # add collected rollout to buffer
-                # pol_train_buffer.clear()  # only train policy on last controller
-                pol_train_buffer.add([s_roll, a_means, a_covs])
-                # for b in range(n_i2c_vec):
-                #     rollout_plot(s_roll[:, b, :], a_means[:, b, :], uvars=a_covs[:, b, :], u_max=u_max, **fig_kwargs)
+                # # p%=100: always step with expert
+                s_init = s0_vec_mean.to(device)
+                new_data = dagger_rollout(s_init, 1.0, stoch=False)
+                # # new_data = dagger_rollout(s_init, 1.0, stoch=True)
+                # # pol_train_buffer.clear()  # only train policy on last controller
+                pol_train_buffer.add(new_data)
 
             _train_losses = []
             for i_epoch_pol in trange(n_epochs_pol + 1):
                 if strategy == 1:  # for every epoch fit train data
                     for i_minibatch, minibatch in enumerate(pol_train_buffer):
-                        s_mean, a_mean, a_cov = minibatch
+                        s_mean, a_mean, a_cov, _ = minibatch
                         opt_pol.zero_grad()
                         if isinstance(global_policy, StochasticPolicy):
                             a_pred_dist = global_policy.predict_dist(s_mean)
@@ -1137,14 +1159,13 @@ def experiment(
                                 "policy/train/loss": pol_loss_trace[-1],
                             },
                         )
-                elif (
-                    strategy == 2
-                ):  # for every epoch go through episode and fit after each dagger step
-                    # fit trained policy to aggregated data for 1 batch (n batches)
-                    # for minibatch in pol_train_buffer.get_random_batches(1):
+                elif strategy == 2:
+                    # fit trained policy to aggregated data
                     for minibatch in pol_train_buffer:
-                        s_mean, a_mean, a_covs = minibatch
+                        s_mean, a_mean, a_covs, importance = minibatch
                         opt_pol.zero_grad()
+                        # importance = importance.log().sigmoid()
+                        # loss = loss_fn_pol(s_mean, a_mean, loss_factor=importance)
                         loss = loss_fn_pol(s_mean, a_mean)
                         loss.backward()
                         opt_pol.step()
@@ -1160,81 +1181,29 @@ def experiment(
 
                     if i_epoch_pol % n_epochs_between_rollouts == 0:
                         with torch.no_grad():
-                            s_current_T = torch.empty([horizon, n_i2c_vec, dim_x])
-                            a_expert_T = torch.empty([horizon, n_i2c_vec, dim_u])
-                            a_covs_T = torch.empty([horizon, n_i2c_vec, dim_u, dim_u])
-                            # s_current = initial_state_distribution.sample().to(device).unsqueeze(0) # (1, s)
-                            s_current = s0_vec_mean.to(device)
-                            for t in range(horizon):
-                                # predict 1 step with trained policy & dynamics model step => (s, a)
-                                a_train = global_policy.predict(s_current)
-                                # TODO abstract importance averaging of vec tvlg into method
-                                # predict importance weighted conditional on state: s -> a^
-                                s_local_dist = (
-                                    sa_posterior[t]
-                                    .to(device)
-                                    .marginalize(slice(0, dim_x))
-                                )
-                                # compute importance weight: how close s_local_t is to s_roll
-                                s_roll_vec = einops.repeat(
-                                    s_current, "... s -> ... v s", v=n_i2c_vec
-                                )
-                                importance_vec = s_local_dist.prob(s_roll_vec)
-
-                                # get conditional action distribution
-                                # equiv. to tvlgc prediction, but with true conditional covariance
-                                a_cond_f = (
-                                    sa_posterior[t]
-                                    .to(device)
-                                    .conditional(slice(dim_x, None))
-                                )
-                                a_expert_dist = a_cond_f(s_roll_vec)
-                                # weight each prediction mean by its variance and its importance ...
-                                a_expert_mean_weighted = (
-                                    a_expert_dist.mean * importance_vec
-                                )
-                                a_pred_vars_weighted = einops.einsum(
-                                    a_expert_dist.covariance,
-                                    importance_vec,
-                                    "... a a, ... a -> ... a",
-                                )
-                                # ... then sum and divide by sum of importances (normalize)
-                                eps = 1e-16  # prevent division by zero => when this is zero, numerator is also zero :)
-                                a_expert = a_expert_mean_weighted.sum(dim=-2) / (
-                                    importance_vec.sum(dim=-2) + eps
-                                )
-                                a_vars = a_pred_vars_weighted.sum(dim=-2) / (
-                                    importance_vec.sum(dim=-2) + eps
-                                )
-                                a_covs = torch.diag_embed(a_vars)
-                                s_current_T[t, ...] = s_current
-                                a_expert_T[t, ...] = a_expert
-                                a_covs_T[t, ...] = a_covs
-                                # s = s'
-                                sa = torch.cat((s_current, a_expert), dim=-1)
-                                s_current = global_dynamics.predict(sa)
-                            # aggregate collected states with expert predictions => training data += (s, a^)
-                            s_current_T = einops.rearrange(
-                                s_current_T, "T ... s -> (... T) s"
-                            )
-                            a_expert_T = einops.rearrange(
-                                a_expert_T, "T ... a -> (... T) a"
-                            )
-                            a_covs_T = einops.rearrange(
-                                a_covs_T, "T ... a1 a2 -> (... T) a1 a2"
-                            )
-                            pol_train_buffer.add([s_current_T, a_expert_T, a_covs_T])
+                            # p% step with expert vs policy
+                            s_init = s0_vec_mean.to(device)
+                            # new_data = dagger_rollout(s_init, 0.7, stoch=True)
+                            # p_epoch = 0.999**i_epoch_pol
+                            # new_data = dagger_rollout(s_init, p_epoch, stoch=True)
+                            new_data = dagger_rollout(s_init, 1.0, stoch=False)
+                            # new_data = dagger_rollout(s_init, 1.0, stoch=True)
+                            # pol_train_buffer.clear()  # only train policy on last controller
+                            pol_train_buffer.add(new_data)
 
                 def visualize_training():
                     if not plotting:
                         return
-                    fig, axs = plt.subplots(2, **fig_kwargs)
-                    s_mean, a_mean, a_cov = pol_train_buffer.data  # sorted
+                    fig, axs = plt.subplots(3, **fig_kwargs)
+                    s_mean, a_mean, a_cov, importance = pol_train_buffer.data  # sorted
                     a_cov_diag = einops.einsum(a_cov, "... x x -> ... x")
                     s_mean = einops.rearrange(s_mean, "(n T) s -> n T s", T=horizon)
                     a_mean = einops.rearrange(a_mean, "(n T) a -> n T a", T=horizon)
                     a_cov_diag = einops.rearrange(
                         a_cov_diag, "(n T) a -> n T a", T=horizon
+                    )
+                    importance = einops.rearrange(
+                        importance, "(n T) one -> n T one", T=horizon
                     )
                     if isinstance(global_policy, StochasticPolicy):
                         a_pred_dist = global_policy.predict_dist(s_mean)
@@ -1259,8 +1228,15 @@ def experiment(
                                 label="pred",
                                 c="C1",
                             )
+                        axs[2].semilogy(
+                            importance[i, ...].detach().cpu(),
+                            label="importance",
+                            c="C2",
+                        )
+
                     axs[0].set_ylabel("mean")
                     axs[1].set_ylabel("variance")
+                    axs[2].set_ylabel("importance")
                     add_grid(axs)
                     handles, labels = axs[0].get_legend_handles_labels()
                     fig.legend(handles[:2], labels[:2], loc="lower center", ncol=2)
@@ -1317,7 +1293,7 @@ def experiment(
 
             # Save the model after training
             global_policy.cpu()  # in-place
-            global_dynamics.eval()
+            global_dynamics.cpu()
             torch.set_grad_enabled(False)
             torch.save(
                 global_policy.model.state_dict(),
@@ -1522,7 +1498,7 @@ def experiment(
 
     # local_policy.plot_metrics()
     # initial_state_distribution.mean = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
-    initial_state = initial_state_distribution.sample()
+    initial_state = initial_state_distribution.sample([1])
 
     if plotting:
         ### policy vs env

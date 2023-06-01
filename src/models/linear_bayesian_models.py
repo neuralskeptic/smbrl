@@ -128,7 +128,7 @@ class LinearBayesianModel(nn.Module):
         # cov_pred += self.pred_var_bias().diag()
         return mu, cov_pred
 
-    def elbo(self, x, y):
+    def elbo(self, x, y, loss_factor=None):
         """
         should be equivalent to `ellh(x, y) - kl()`
         - is matrix normal compatible
@@ -159,6 +159,11 @@ class LinearBayesianModel(nn.Module):
         part1a = -n / 2 * self.dim_y * math.log(2 * math.pi)
         part1b = -n / 2 * self.error_cov_out().logdet()
         y_pred = phi @ self.post_mean
+        ### inject loss factor
+        if loss_factor is not None:  # multiply error (pointwise) with loss factor
+            y *= loss_factor
+            y_pred *= loss_factor
+        ### end inject
         part2 = -0.5 * torch.trace(
             (1 / self.error_vars_out()).diag()
             * (y.T @ y - 2 * y.T @ y_pred + y_pred.T @ y_pred)

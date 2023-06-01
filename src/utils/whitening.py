@@ -55,12 +55,12 @@ def data_whitening(wrapped):
                 return self.dewhitenY(out)
             return out
 
-        def elbo(self, x, y):
+        def elbo(self, x, y, *args, **kwargs):
             if self.do_whitening_x:
                 x = self.whitenX(x)
             if self.do_whitening_y:
                 y = self.whitenY(y)
-            return super().elbo(x, y)
+            return super().elbo(x, y, *args, **kwargs)
 
         def whitenX(self, x):
             return (x - self.x_mean) @ self.w_ZCA
