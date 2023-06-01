@@ -79,6 +79,17 @@ class ReplayBuffer(object):
         else:
             raise StopIteration
 
+    def get_random_batch(self):
+        indices = torch.randint(self.size, (self.batchsize,))
+        batch_list = [data_i[indices] for data_i in self._data]
+        return batch_list
+
+    def get_random_batches(self, n_batches):
+        batches = []
+        for _ in range(n_batches):
+            batches.append(self.get_random_batch())
+        return batches
+
     def to(self, device):
         for i, _ in enumerate(self.dim_list):
             self._data[i].to(device)

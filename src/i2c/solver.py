@@ -24,7 +24,6 @@ class PseudoPosteriorSolver(CudaAble):
         horizon: int,
         dynamics: Model,
         cost: Model,
-        delta_cost_thresh: float,
         policy_template: TimeVaryingStochasticPolicy,
         update_temperature_strategy: TemperatureStrategy,
     ):
@@ -32,7 +31,6 @@ class PseudoPosteriorSolver(CudaAble):
         self.horizon = horizon
         self.dynamics = dynamics
         self.cost = cost
-        self.delta_cost_thresh = delta_cost_thresh
         self.policy_template = policy_template
         self.update_temperature_strategy = update_temperature_strategy
 
@@ -48,6 +46,7 @@ class PseudoPosteriorSolver(CudaAble):
         s = initial_state
         sa_cost_list = []
         next_s_list = []
+        # entropy_list = []
         for t in range(self.horizon):
             a = policy.propagate(s, t=t, open_loop=open_loop)
             sa_policy = a.full_joint(reverse=True)
@@ -56,6 +55,12 @@ class PseudoPosteriorSolver(CudaAble):
             # update state_action_cost with dynamics correlations
             next_s = self.dynamics.propagate(sa_cost)
             next_s_list += [next_s]
+            #             # compute entropy of dynamics model
+            #             # breakpoint()
+            #             x_pts = self.dynamics.approximate_inference.get_x_pts(sa_cost.mean, sa_cost.covariance)
+            #             y_dist_pts = self.dynamics.predict_dist(x_pts)
+            #             variance = y_dist_pts.covariance.diagonal(dim1=-2, dim2=-1)
+            #             entropy_list += [self.dynamics()]
             s = next_s
         return sa_cost_list, next_s_list, s
 
@@ -118,6 +123,7 @@ class PseudoPosteriorSolver(CudaAble):
         initial_state: MultivariateGaussian,
         policy_prior: Model = None,
         plot_posterior: bool = True,
+        delta_cost_thresh: float = None,
     ):
         # A1: tempstrat can be modified/tweaked
         # A2: forward to get filter is always on feedforward (also prior)
@@ -125,14 +131,14 @@ class PseudoPosteriorSolver(CudaAble):
         # create as many alphas as batches (0:1 -> trailing 1 dimension)
         alpha = 0.0 * torch.ones_like(initial_state.mean[..., 0:1])
         policy_created = False
-        if policy_prior:  # run once with prior to initialize policy
+        if policy_prior is not None:  # run once with prior to initialize policy
             policy = policy_prior
         else:  # create new (blank) policy
             policy = deepcopy(self.policy_template)
             policy_created = True
 
         for i in range(n_iteration):
-            # print(f"alpha {i}: {alpha.flatten().cpu()}")
+            print(f"alpha {i}: {alpha.flatten().cpu()}")
             sa_filter, s_filter, s_T = self.forward_pass(
                 policy,
                 initial_state,
@@ -168,7 +174,7 @@ class PseudoPosteriorSolver(CudaAble):
                 plot_trajectory_distribution(sa_policy_fb, f"rollout {i}")
                 plt.show()
 
-            if self.check_convergence():
+            if self.check_convergence(delta_cost_thresh):
                 break
         # if plot_posterior:
         #     # plot_trajectory_distribution(sa_filter, f"filter")
@@ -176,12 +182,14 @@ class PseudoPosteriorSolver(CudaAble):
         #     plt.show()
         return policy, sa_smoother
 
-    def check_convergence(self):
+    def check_convergence(self, delta_cost_thresh: float):
+        if delta_cost_thresh is None:
+            return False
         policy_cost = torch.stack(self.metrics["policy_cost"])
         delta_cost = policy_cost[:-1, :] - policy_cost[1:, :]
         if delta_cost.shape[0] < self.convergence_horizon:
             return False
-        res = delta_cost[-self.convergence_horizon :, :] < self.delta_cost_thresh
+        res = delta_cost[-self.convergence_horizon :, :] < delta_cost_thresh
         # print(f"delta cost < thres: {res}")
         return torch.all(res)
 

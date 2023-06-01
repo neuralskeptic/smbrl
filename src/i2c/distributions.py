@@ -68,15 +68,23 @@ class MultivariateGaussian(Distribution):
             # mu_y_cond_x = y_mean + Cov[this, other] @ other_cov**-1 @ (x - x_mean)
             this_mean = self.mean[..., indices]
             other_mean = self.mean[..., other_indices]
-            other_mean = einops.rearrange(other_mean, "... x -> ... 1 x")  # unsqueeze
-            this_mean = einops.rearrange(this_mean, "... y -> ... 1 y")  # unsqueeze
+            cross_inv_other_ = cross_inv_other
+            conditional_cov_ = conditional_cov
+            # unsqueeze to match input batch size
+            x_batch_dims = len(x.shape) - 1  # m: do not count u/x
+            other_batch_dims = len(other_mean.shape) - 1  # n: do not count u/x
+            for _ in range(
+                x_batch_dims - other_batch_dims
+            ):  # for every extra batch dim in x
+                # add 1 dimension before u/x (so dims match)
+                this_mean = this_mean.unsqueeze(0)
+                other_mean = other_mean.unsqueeze(0)
+                cross_inv_other_ = cross_inv_other_.unsqueeze(0)
+                conditional_cov_ = conditional_cov_.unsqueeze(0)
             conditional_mean = this_mean + einops.einsum(
-                cross_inv_other, (x - other_mean), "b y x, b p x -> b p y"
+                cross_inv_other_, (x - other_mean), "... y x, ... x -> ... y"
             )
-            conditional_cov_p = einops.repeat(
-                conditional_cov, "b y1 y2 -> b p y1 y2", p=x.shape[1]
-            )
-            return MultivariateGaussian(conditional_mean, conditional_cov_p)
+            return MultivariateGaussian(conditional_mean, conditional_cov_)
 
         return conditional_f
 
@@ -120,6 +128,13 @@ class MultivariateGaussian(Distribution):
             ) - 0.5 * torch.einsum("bi,ij,bj->b", diff, previous_precision, diff)
 
         return llh
+
+    def prob(self, x):
+        """Evaluates pdf at x"""
+        dist = torch.distributions.MultivariateNormal(self.mean, self.covariance)
+        return (
+            dist.log_prob(x).exp().unsqueeze(-1)
+        )  # unsqueeze because log_prop removes last dim
 
     def reverse(self):
         return MultivariateGaussian(

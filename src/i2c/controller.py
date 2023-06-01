@@ -68,9 +68,9 @@ class TimeVaryingLinearGaussian(CudaAble):
         K_batch_dims = len(K_t.shape) - 2  # n: do not count u,x
         sigma = self.sigma[t, ...]
         for _ in range(x_batch_dims - K_batch_dims):  # for every extra batch dim in x
-            K_t = K_t.unsqueeze(-2)  # add 1 dimension before u,x (so dims match)
-            k_t = k_t.unsqueeze(-1)  # add 1 dimension before u (so dims match)
-            sigma = sigma.unsqueeze(-2)  # add 1 dimension before u,u (so dims match)
+            K_t = K_t.unsqueeze(-3)  # add 1 dimension before u,x (so dims match)
+            k_t = k_t.unsqueeze(-2)  # add 1 dimension before u (so dims match)
+            sigma = sigma.unsqueeze(-3)  # add 1 dimension before u,u (so dims match)
         return (
             k_t + einops.einsum(K_t, x, "... u x, ... x -> ... u"),
             torch.tile(sigma, x.shape[K_batch_dims:-1] + (self.dim_u, self.dim_u)),
@@ -118,6 +118,11 @@ class TimeVaryingLinearGaussian(CudaAble):
                     self.K_opt[t, ...], x.mean, "... u x, ... x -> ... u"
                 )
                 self.sigma[t, ...] = u.covariance
+                # TRUE conditional covariance: unstable? iirc this is usually not used in optim.
+                # cross_cov = dist.covariance[..., self.dim_x :, : self.dim_x]
+                # self.sigma[t, ...] = u.covariance - cross_cov @ torch.linalg.solve(
+                #     x.covariance, cross_cov.mT
+                # )
                 self.chol[t, ...] = torch.linalg.cholesky(self.sigma[t, ...])
         else:
             raise ValueError("Cannot update from this distribution!")
