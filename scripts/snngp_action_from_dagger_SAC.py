@@ -29,16 +29,18 @@ def experiment(
     max_replay_buffer_size: int = int(1e4),
     n_test_episodes: int = 10,
     n_epochs_between_rollouts: int = 10,  # epochs before dagger rollout & aggregation
-    n_epochs: int = 5000,
+    n_epochs: int = 10000,
     batch_size: int = 200 * 100,  # lower if gpu out of memory
-    n_features: int = 128,
-    lr: float = 1e-3,
+    n_rff_features: int = 256,
+    layer_spec: int = [*(128,) * 2],  # [in, *layer_spec, out]
+    lr: float = 1e-4,
     use_cuda: bool = True,
     # verbose: bool = False,
     plot_data: bool = False,
     # plot_data: bool = True,
     plotting: bool = False,
-    log_frequency: float = 0.01,  # every p% epochs of n_epochs
+    # DEBUG -> halved log frequency to get same training as 5k epoch model
+    log_frequency: float = 0.005,  # every p% epochs of n_epochs
     model_save_frequency: float = 0.1,  # every n-th of n_epochs
     # log_wandb: bool = True,
     # wandb_project: str = "smbrl",
@@ -90,14 +92,18 @@ def experiment(
     dim_out = len(y_cols)
 
     train_buffer = ReplayBuffer(
-        dim_in,
-        dim_out,
+        [dim_in, dim_out],
         batchsize=batch_size,
         device=device,
         max_size=max_replay_buffer_size,
     )
 
-    test_buffer = ReplayBuffer(dim_in, dim_out, batchsize=batch_size, device=device)
+    test_buffer = ReplayBuffer(
+        [dim_in, dim_out],
+        batchsize=batch_size,
+        device=device,
+        max_size=max_replay_buffer_size,
+    )
 
     ### mdp ###
     with open(os.path.join(sac_results_dir, "args.yaml")) as f:
@@ -126,7 +132,7 @@ def experiment(
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s)]))
         new_ys = np2torch(a)
-        train_buffer.add(new_xs, new_ys)
+        train_buffer.add([new_xs, new_ys])
         # test buffer
         test_dataset = rollout(
             mdp, sac_policy, n_episodes=n_test_episodes, show_progress=True
@@ -134,18 +140,20 @@ def experiment(
         s, a, r, ss, absorb, last = parse_dataset(test_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s)]))
         new_ys = np2torch(a)
-        test_buffer.add(new_xs, new_ys)
+        test_buffer.add([new_xs, new_ys])
         print("Done.")
 
     ### agent ###
-    model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features)
+    model = SpectralNormalizedNeuralGaussianProcess(
+        dim_in, layer_spec, n_rff_features, dim_out
+    )
     # model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
-    model.init_whitening(train_buffer.xs, train_buffer.ys)
+    model.init_whitening(*train_buffer.data)
     model.to(device)
 
     def model_policy(state4):
         state6_torch = np2torch(state4to6(state4)).to(device)
-        action_torch = model(state6_torch, covs=False)
+        action_torch, covs = model(state6_torch)
         return action_torch.cpu().reshape(-1).numpy()
 
     ### optimizer
@@ -184,7 +192,7 @@ def experiment(
                     )  # take explored states ...
                     a_sac = sac_policy(s).reshape(-1, 1)
                     new_ys = np2torch(a_sac)  # ... and (true) sac actions
-                    train_buffer.add(new_xs, new_ys)
+                    train_buffer.add([new_xs, new_ys])
                     # store dataset with sac actions
                     modified_dataset = arrays_as_dataset(s, a_sac, r, ss, absorb, last)
                     # logging
@@ -202,7 +210,7 @@ def experiment(
                         _n_sqr_residuals_ = 0
                         for minibatch in train_buffer:
                             _x, _y = minibatch
-                            _y_pred = model(_x, covs=False)
+                            _y_pred, covs = model(_x)
                             _sqr_residual = torch.pow(_y_pred - _y, 2)
                             _sqr_residuals_sum.append(_sqr_residual.sum().item())
                             _n_sqr_residuals_ += len(_sqr_residual)
@@ -250,7 +258,7 @@ def experiment(
     s, a, r, ss, absorb, last = parse_dataset(test_dataset)
     _x = np2torch(np.hstack([state4to6(s)]))
     with torch.no_grad():
-        a_pred = model(_x.to(device), covs=False)
+        a_pred, covs_ = model(_x.to(device))
         a_pred = a_pred.cpu()
     a = a.reshape(-1, mdp.info.horizon)
     a_pred = a_pred.reshape(-1, mdp.info.horizon)

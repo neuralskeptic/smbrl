@@ -186,12 +186,15 @@ class PseudoPosteriorSolver(CudaAble):
         if delta_cost_thresh is None:
             return False
         policy_cost = torch.stack(self.metrics["policy_cost"])
-        delta_cost = policy_cost[:-1, :] - policy_cost[1:, :]
-        if delta_cost.shape[0] < self.convergence_horizon:
+        posterior_cost = torch.stack(self.metrics["posterior_cost"])
+        delta_policy_cost = policy_cost[:-1, :] - policy_cost[1:, :]
+        delta_posterior_cost = posterior_cost[:-1, :] - posterior_cost[1:, :]
+        if delta_policy_cost.shape[0] < self.convergence_horizon:
             return False
-        res = delta_cost[-self.convergence_horizon :, :] < delta_cost_thresh
+        res1 = delta_policy_cost[-self.convergence_horizon :, :] < delta_cost_thresh
+        res2 = delta_posterior_cost[-self.convergence_horizon :, :] < delta_cost_thresh
         # print(f"delta cost < thres: {res}")
-        return torch.all(res)
+        return torch.all(res1) and torch.all(res2)
 
     def compute_metrics(self, posterior_distribution, policy_distribution, alpha):
         posterior_cost = self.cost.predict(

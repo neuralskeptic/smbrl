@@ -76,22 +76,23 @@ from src.utils.time_utils import timestamp
 def experiment(
     env_type: str = "localPendulum",  # Pendulum
     horizon: int = 200,
-    n_dyn_rollout_episodes: int = 5,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
     n_iter: int = 1,  # outer loop
+    train_test_ratio: float = 80 / 20,
     ## frequency or period: whichever is lower dominates
     log_frequency: float = 0.1,  # every p-th of n_epochs
-    log_period: int = 100,  # every N epochs
+    log_period: int = 20,  # every N epochs
     model_save_frequency: float = 0.5,  # every p-th of n_epochs
     model_save_period: int = 500,  # every N epochs
     ##########
-    min_epochs_per_train: int = 100,  # train at least N epochs (even if early stop)
+    min_epochs_per_train: int = 1,  # train at least N epochs (even if early stop)
     early_stop_thresh: float = -1e3,  # stop training when training & validation loss lower
     ## dynamics ##
+    n_dyn_train_episodes: int = 50,
     plot_dyn: bool = True,  # plot pointwise and rollout prediction
-    n_trajs_plot_dyn: int = 0,  # how many trajs in dyn plot [0 => all trajs]
-    #  D1) true dynamics
-    dyn_model_type: str = "env",
+    n_trajs_plot_dyn: int = 1,  # how many trajs in dyn plot [0 => all trajs]
+    # #  D1) true dynamics
+    # dyn_model_type: str = "env",
     # #  D2) mlp model
     # dyn_model_type: str = "mlp",
     # layer_spec_dyn: int = [*(256,) * 3],  # [in, *layer_spec, out]
@@ -114,18 +115,20 @@ def experiment(
     # n_features_dyn: int = 128,
     # lr_dyn: float = 1e-4,
     # n_epochs_dyn: int = 1000,
-    # # D6) linear regression w/ spec.norm.-resnet & rf features
-    # dyn_model_type: str = "snngp",
-    # layer_spec_dyn: int = [*(128,) * 5],  # [in, *layer_spec, feat], W: [feat, out]
-    # # layer_spec_dyn: int = [*(256,) * 3],  # [in, *layer_spec, feat], W: [feat, out]
-    # n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    # lr_dyn: float = 5e-4,
-    # n_epochs_dyn: int = 200,
+    # D6) linear regression w/ spec.norm.-resnet & rf features
+    dyn_model_type: str = "sngp",
+    layer_spec_dyn: int = [*(128,) * 5],  # [in, *layer_spec, feat], W: [feat, out]
+    # layer_spec_dyn: int = [*(256,) * 3],  # [in, *layer_spec, feat], W: [feat, out]
+    n_features_dyn: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
+    lr_dyn: float = 5e-4,
+    n_epochs_dyn: int = 100,
     ##############
     ## policy ##
-    plot_policy: bool = True,  # plot pointwise and rollout prediction
-    n_trajs_plot_pol: int = 0,  # how many trajs in policy plot [0 => all trajs]
+    pol_strategy: str = "moment matching",  # quadrature augmented moment matching
+    # pol_strategy: str = "dagger",  # dagger + importance weighting
     n_epochs_between_rollouts: int = 10,  # dagger policy distillation
+    plot_policy: bool = True,  # plot pointwise and rollout prediction
+    n_trajs_plot_pol: int = 1,  # how many trajs in policy plot [0 => all trajs]
     # #  D1) local time-varying linear gaussian controllers (i2c)
     # policy_type: str = "tvlg",
     # #  D2) mlp model
@@ -151,13 +154,13 @@ def experiment(
     # lr_pol: float = 5e-4,
     # n_epochs_pol: int = 500,
     # D6) linear regression w/ spec.norm.-resnet & rf features
-    policy_type: str = "snngp",
+    policy_type: str = "sngp",
     # layer_spec_pol: int = [*(64,) * 8],  # [in, *layer_spec, feat], W: [feat, out]
-    layer_spec_pol: int = [*(128,) * 5],  # [in, *layer_spec, feat], W: [feat, out]
+    layer_spec_pol: int = [*(128,) * 2],  # [in, *layer_spec, feat], W: [feat, out]
     # layer_spec_pol: int = [*(256,) * 2],  # [in, *layer_spec, feat], W: [feat, out]
     n_features_pol: int = 256,  # RFFs require ~512-1024 for accuracy (but greatly increase NN param #)
-    lr_pol: float = 5e-4,
-    n_epochs_pol: int = 300,
+    lr_pol: float = 1e-4,
+    n_epochs_pol: int = 10000,
     # # Dx1) bottleneck mlp with rf features
     # policy_type: str = "nlm_mlp_rff",
     # layer_spec_pol: int = [256, 256, 12],
@@ -170,7 +173,7 @@ def experiment(
     n_i2c_vec: int = 10,  # how many local policies in the vectorized i2c batch
     s0dot_i2c_var: float = 1e-6,  # very low initial velocity variance (low energy)
     s0_i2c_var: float = 1e-6,  # how much initial state variance i2c should start with
-    delta_cost_thresh: float = 1.0,  # lower cost change means convergence
+    delta_cost_thresh: float = 1,  # if cost change lower stop optim
     # plot_posterior: bool = False,  # plot state-action-posterior over time
     plot_posterior: bool = True,  # plot state-action-posterior over time
     # plot_local_policy: bool = False,  # plot time-cum. sa-posterior cost, local policy cost, and alpha per iter
@@ -185,7 +188,7 @@ def experiment(
     wandb_project: str = "smbrl_i2c",
     wandb_entity: str = "showmezeplozz",
     wandb_job_type: str = "train",
-    seed: int = 0,
+    seed: int = 1,
     results_dir: str = "logs/tmp/",
     debug: bool = True,  # prepends logdir with 'debug/', disables wandb, enables console logging
     # debug: bool = False,  # prepends logdir with 'debug/', disables wandb, enables console logging
@@ -218,6 +221,9 @@ def experiment(
         figsize=(12, 9),
         dpi=150,
     )
+    if dyn_model_type != "env":
+        n_epochs_between_eval_dyn = min(n_epochs_dyn * log_frequency, log_period)
+    n_epochs_between_eval_pol = min(n_epochs_pol * log_frequency, log_period)
 
     # Save arguments
     save_args(results_dir, locals(), git_repo_path="./")
@@ -234,10 +240,6 @@ def experiment(
         log_console=log_console,
         log_wandb=log_wandb,
     )
-
-    #### policy loss strategy selection
-    # strategy = 1 # quadrature augmented moment matching
-    strategy = 2  # importance weighted predictions
 
     ####################################################################################################################
     #### ~~~~ EXPERIMENT SETUP ~~~~
@@ -274,14 +276,17 @@ def experiment(
     )
 
     pol_train_buffer = ReplayBuffer(
-        [dim_x, dim_u, (dim_u, dim_u), 1],  # [s_mean, a_mean, a_cov]
+        [dim_x, dim_u, (dim_u, dim_u), 1],  # [s_mean, a_mean, a_cov, importance]
         batchsize=batch_size,
         device=device,
         max_size=50 * horizon,
     )
-    # pol_test_buffer = ReplayBuffer(
-    #     [dim_x, dim_u], batchsize=batch_size, device=device, max_size=1e4
-    # )
+    pol_test_buffer = ReplayBuffer(
+        [dim_x, dim_u, (dim_u, dim_u), 1],  # [s_mean, a_mean, a_cov, importance]
+        batchsize=batch_size,
+        device=device,
+        max_size=50 * horizon,
+    )
 
     #### ~ S: approximate inference params
     quad_params = CubatureQuadrature(1, 0, 0)
@@ -414,7 +419,7 @@ def experiment(
             return -global_dynamics.model.elbo(xu_sincos, delta_x)
 
         opt_dyn = torch.optim.Adam(global_dynamics.model.parameters(), lr=lr_dyn)
-    elif dyn_model_type == "snngp":
+    elif dyn_model_type == "sngp":
         global_dynamics = StochasticDynamics(
             # global_dynamics = LBMDyn_SinCos1_Uclamp(
             model=SpectralNormalizedNeuralGaussianProcess(
@@ -524,7 +529,7 @@ def experiment(
         global_policy = Input1SinCos(global_policy)
         # global_policy.model.init_whitening(pol_train_buffer.xs, pol_train_buffer.ys)
         opt_pol = torch.optim.Adam(global_policy.model.parameters(), lr=lr_pol)
-    elif policy_type == "snngp":
+    elif policy_type == "sngp":
         global_policy = StochasticPolicy(
             model=SpectralNormalizedNeuralGaussianProcess(
                 dim_x + 1,  # Input1SinCos
@@ -565,28 +570,27 @@ def experiment(
         policy_template=local_policy,
         # update_temperature_strategy=MaximumLikelihood(QuadratureInference(dim_xu, quad_params)),
         # update_temperature_strategy=QuadraticModel(QuadratureInference(dim_xu, quad_params)),
-        update_temperature_strategy=Constant(2.0 * torch.ones(n_i2c_vec, 1)),
+        # update_temperature_strategy=Constant(0.5 * torch.ones(n_i2c_vec, 1)),
         # update_temperature_strategy=Annealing(1e-2, 5, 35),
         # update_temperature_strategy=KullbackLeiblerDivergence(QuadratureInference(dim_xu, gh_params), epsilon=kl_bound),
-        # update_temperature_strategy=PolyakStepSize(
-        #     QuadratureInference(dim_xu, quad_params)
-        # ),
+        update_temperature_strategy=PolyakStepSize(
+            QuadratureInference(dim_xu, quad_params)
+        ),
     )
 
     ####################################################################################################################
-    #### ~~~~ TRAINING ~~~~
+    #### ~~~~~~ TRAINING ~~~~~~
     # fix seed again (different model setups make random numbers diverge)
     fix_random_seed(seed + 100)
 
-    # # TODO debug
-    # prefix = f"scripts/_dbg{n_i2c_vec}"
-    # # load (saved) policy
-    # state_dict = torch.load(repo_dir / f"{prefix}_{policy_type}_ep{n_epochs_pol}.pth")
-    # global_policy.model.load_state_dict(state_dict)
+    # TODO debug
+    prefix = f"scripts/_dbg{n_i2c_vec}"
+    # load (saved) policy
+    state_dict = torch.load(
+        repo_dir / f"{prefix}_pol_{policy_type}_ep{n_epochs_pol}.pth"
+    )
+    global_policy.model.load_state_dict(state_dict)
 
-    # for alpha in [1e-1, 1, 10, 100, 1000]:
-    # for kl_bound in [1e-4, 1e-3, 1e-2, 1e-1, 1]:
-    # for _ in [None]:
     dyn_epoch_counter = 0
     dyn_loss_trace = []
     dyn_test_loss_trace = []
@@ -597,55 +601,62 @@ def experiment(
         logger.strong_line()
         logger.info(f"ITERATION {i_iter + 1}/{n_iter}")
 
-        #### ~ T: global policy rollouts
-        logger.weak_line()
-        logger.info("START Collecting Dynamics Rollouts")
-        global_dynamics.cpu()  # in-place
-        global_dynamics.eval()
-        torch.set_grad_enabled(False)
+        # # TODO debug
+        # prefix = f"scripts/_dbg{n_i2c_vec}"
+        # # load (saved) dynamics model
+        # state_dict = torch.load(repo_dir / f"{prefix}_dyn_{dyn_model_type}_ep{n_epochs_dyn}.pth")
+        # global_dynamics.model.load_state_dict(state_dict)
 
-        class AddDithering(Decorator[Model]):  # decorate w/o changing policy
-            @override
-            def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
-                y = self.decorated.predict(x, **kw)
-                return y + 5e-2 * torch.randn_like(y)
-
-        class RandomWalkPredict(Decorator[Model]):  # decorate w/o changing policy
-            @override
-            def predict(self, x: torch.Tensor, *, t, **kw) -> torch.Tensor:
-                if not hasattr(self, "y_current"):
-                    y_ = self.decorated.predict(x, **kw)
-                    self.y_current = torch.zeros_like(y_)
-                    self.dy_current = torch.zeros_like(y_)
-                y_old = self.y_current
-                dy_old = self.dy_current
-                if t == 0:  # reset
-                    y_old *= 0.0
-                    dy_old *= 0.0
-                self.dy_current = dy_old + 0.1 * torch.randn_like(dy_old)
-                self.y_current = y_old + 5e-2 * self.dy_current
-                return self.y_current
-
-        if i_iter == 0:  # untrained policy => use random noise (tvlg)
-            exploration_policy = AddDithering(global_policy)
-            # exploration_policy = RandomWalkPredict(global_policy)
-        else:
-            exploration_policy = AddDithering(global_policy)
-
-        # train and test rollouts (env & exploration policy)
-        for i in trange(n_dyn_rollout_episodes):  # 80 % train
-            state = initial_state_distribution.sample()
-            s, a, ss = environment.run(state, exploration_policy, horizon)
-            dyn_train_buffer.add([torch.hstack([s, a]), ss])
-        for i in trange(max(1, int(n_dyn_rollout_episodes / 4))):  # 20 % test
-            state = initial_state_distribution.sample()
-            s, a, ss = environment.run(state, exploration_policy, horizon)
-            dyn_test_buffer.add([torch.hstack([s, a]), ss])
-        logger.info("END Collecting Dynamics Rollouts")
-
-        #### ~ T: train dynamics model
+        # if False:
         if dyn_model_type != "env":
-            # Learn Dynamics
+            #### ~ T: collect dynamics model data
+            logger.weak_line()
+            logger.info("START Collecting Dynamics Rollouts")
+            global_dynamics.cpu()  # in-place
+            global_dynamics.eval()
+            torch.set_grad_enabled(False)
+
+            class AddDithering(Decorator[Model]):  # decorate w/o changing policy
+                @override
+                def predict(self, x: torch.Tensor, **kw) -> torch.Tensor:
+                    y = self.decorated.predict(x, **kw)
+                    return y + 5e-2 * torch.randn_like(y)
+
+            class RandomWalkPredict(Decorator[Model]):  # decorate w/o changing policy
+                @override
+                def predict(self, x: torch.Tensor, *, t, **kw) -> torch.Tensor:
+                    if not hasattr(self, "y_current"):
+                        y_ = self.decorated.predict(x, **kw)
+                        self.y_current = torch.zeros_like(y_)
+                        self.dy_current = torch.zeros_like(y_)
+                    y_old = self.y_current
+                    dy_old = self.dy_current
+                    if t == 0:  # reset
+                        y_old *= 0.0
+                        dy_old *= 0.0
+                    self.dy_current = dy_old + 0.1 * torch.randn_like(dy_old)
+                    self.y_current = y_old + 5e-2 * self.dy_current
+                    return self.y_current
+
+            if i_iter == 0:  # untrained policy => use random noise (tvlg)
+                exploration_policy = AddDithering(global_policy)
+                # exploration_policy = RandomWalkPredict(global_policy)
+            else:
+                exploration_policy = AddDithering(global_policy)
+
+            # train and test rollouts (env & exploration policy)
+            for i in trange(n_dyn_train_episodes):
+                state = initial_state_distribution.sample()
+                s, a, ss = environment.run(state, exploration_policy, horizon)
+                dyn_train_buffer.add([torch.hstack([s, a]), ss])
+            n_dyn_test_episodes = max(1, int(n_dyn_train_episodes / train_test_ratio))
+            for i in trange(n_dyn_test_episodes):
+                state = initial_state_distribution.sample()
+                s, a, ss = environment.run(state, exploration_policy, horizon)
+                dyn_test_buffer.add([torch.hstack([s, a]), ss])
+            logger.info("END Collecting Dynamics Rollouts")
+
+            #### ~ T: train dynamics model
             logger.weak_line()
             logger.info("START Training Dynamics")
             global_dynamics.to(device)  # in-place
@@ -696,7 +707,7 @@ def experiment(
 
                 # save logs & test
                 logger.save_logs()
-                if i_epoch_dyn % min(n_epochs_dyn * log_frequency, log_period) == 0:
+                if i_epoch_dyn % n_epochs_between_eval_dyn == 0:
                     with torch.no_grad():
                         # test loss
                         dyn_test_buffer.shuffling = False  # TODO only for plotting?
@@ -724,7 +735,10 @@ def experiment(
 
                 # stop condition
                 if i_epoch_dyn > min_epochs_per_train:
-                    if dyn_test_loss_trace[-1] < early_stop_thresh:
+                    if (
+                        dyn_test_loss_trace[-1] < early_stop_thresh
+                        and dyn_loss_trace[-1] < early_stop_thresh
+                    ):
                         break  # stop if test loss good
 
                 # TODO save model more often than in each global iter?
@@ -738,8 +752,18 @@ def experiment(
             torch.set_grad_enabled(False)
             torch.save(
                 global_dynamics.model.state_dict(),
-                results_dir / "dyn_model_{i_iter}.pth",
+                results_dir / f"dyn_model_{i_iter}.pth",
             )
+
+            # TODO debug
+            prefix = f"scripts/_dbg{n_i2c_vec}"
+            # save dynamics model
+            torch.save(
+                global_dynamics.model.state_dict(),
+                # repo_dir / f"{prefix}_dyn_rand_{dyn_model_type}_ep{n_epochs_dyn}.pth",
+                repo_dir / f"{prefix}_dyn_pol_{dyn_model_type}_ep{n_epochs_dyn}.pth",
+            )
+
             logger.info("END Training Dynamics")
 
             #### ~ T: plot dynamics model
@@ -747,10 +771,10 @@ def experiment(
                 ## test dynamics model in rollouts
                 # TODO extract?
                 ## data traj (from buffer) -> trailing underscore = on device
-                # sa_env_ = dyn_test_buffer.data[0]  # [(n T) sa]
-                sa_env_ = dyn_train_buffer.data[0]  # [(n T) sa]
-                # ss_env = dyn_test_buffer.data[1].cpu()  # [(n T) sa]
-                ss_env = dyn_train_buffer.data[1].cpu()  # [(n T) sa]
+                sa_env_ = dyn_test_buffer.data[0]  # [(n T) sa]
+                # sa_env_ = dyn_train_buffer.data[0]  # [(n T) sa]
+                ss_env = dyn_test_buffer.data[1].cpu()  # [(n T) sa]
+                # ss_env = dyn_train_buffer.data[1].cpu()  # [(n T) sa]
                 sa_env_ = einops.rearrange(sa_env_, "(n T) sa -> T n sa", T=horizon)
                 ss_env = einops.rearrange(ss_env, "(n T) sa -> T n sa", T=horizon)
                 # select how many trajs to plot (take from back of buffer)
@@ -841,11 +865,13 @@ def experiment(
                     plt.show()
 
             fig_loss_dyn, ax_loss_dyn = plt.subplots(**fig_kwargs)
-            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
+            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_x_ticks=dyn_epoch_counter)
             ax_loss_dyn.plot(
                 x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
             )
-            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
+            x_test_loss_dyn = scaled_xaxis(
+                dyn_test_loss_trace, dist_x_ticks=n_epochs_between_eval_dyn
+            )
             ax_loss_dyn.plot(
                 x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss"
             )
@@ -898,29 +924,29 @@ def experiment(
         s0_i2c_cov = torch.diag_embed(torch.tensor([s0_i2c_var, s0dot_i2c_var]))
         s0_vec_cov = s0_i2c_cov.repeat(n_i2c_vec, 1, 1)
         s0_vec_dist = MultivariateGaussian(s0_vec_mean, s0_vec_cov)
-        # # learn a batch of local policies
-        # local_vec_policy, sa_posterior = i2c_solver(
-        #     n_iteration=n_iter_solver,
-        #     initial_state=s0_vec_dist,
-        #     # initial_state=initial_state_distribution,  # TODO debug
-        #     policy_prior=global_policy if i_iter != 0 else None,  # always start clean
-        #     plot_posterior=plot_posterior and show_plots and plotting,
-        #     delta_cost_thresh=delta_cost_thresh,
-        # )
+        # learn a batch of local policies
+        local_vec_policy, sa_posterior = i2c_solver(
+            n_iteration=n_iter_solver,
+            initial_state=s0_vec_dist,
+            # initial_state=initial_state_distribution,  # TODO debug
+            policy_prior=global_policy if i_iter != 0 else None,  # always start clean
+            plot_posterior=plot_posterior and show_plots and plotting,
+            delta_cost_thresh=delta_cost_thresh,
+        )
 
-        # TODO debug
-        prefix = f"scripts/_dbg{n_i2c_vec}_"
-        # # save i2c
-        # torch.save(local_vec_policy, repo_dir / f'{prefix}local_vec_i2c.obj')
-        # torch.save(sa_posterior, repo_dir / f'{prefix}sa_posterior.obj')
-        # torch.save(i2c_solver.metrics, repo_dir / f'{prefix}i2c_solver-metrics.obj')
-        # torch.save(s0_vec_mean, repo_dir / f'{prefix}s0_vec_mean.obj')
-        # load (saved) i2c
-        local_vec_policy = torch.load(repo_dir / f"{prefix}local_vec_i2c.obj")
-        sa_posterior = torch.load(repo_dir / f"{prefix}sa_posterior.obj")
-        i2c_solver.metrics = torch.load(repo_dir / f"{prefix}i2c_solver-metrics.obj")
-        s0_vec_mean = torch.load(repo_dir / f"{prefix}s0_vec_mean.obj")
-        plot_trajectory_distribution(sa_posterior, "sa_posterior")
+        # # TODO debug
+        # prefix = f"scripts/_dbg{n_i2c_vec}_"
+        # # # save i2c
+        # # torch.save(local_vec_policy, repo_dir / f'{prefix}local_vec_i2c.obj')
+        # # torch.save(sa_posterior, repo_dir / f'{prefix}sa_posterior.obj')
+        # # torch.save(i2c_solver.metrics, repo_dir / f'{prefix}i2c_solver-metrics.obj')
+        # # torch.save(s0_vec_mean, repo_dir / f'{prefix}s0_vec_mean.obj')
+        # # load (saved) i2c
+        # local_vec_policy = torch.load(repo_dir / f"{prefix}local_vec_i2c.obj")
+        # sa_posterior = torch.load(repo_dir / f"{prefix}sa_posterior.obj")
+        # i2c_solver.metrics = torch.load(repo_dir / f"{prefix}i2c_solver-metrics.obj")
+        # s0_vec_mean = torch.load(repo_dir / f"{prefix}s0_vec_mean.obj")
+        # plot_trajectory_distribution(sa_posterior, "sa_posterior")
 
         logger.info("END i2c")
         # log i2c metrics
@@ -929,6 +955,37 @@ def experiment(
                 log_dict = {"iter": i_iter, "i2c_iter": i_}
                 log_dict[k] = vi  # one key, n_iter_solver values
             logger.log_data(log_dict)
+
+        def mixture_tvlg(s, t):
+            dist_vec = sa_posterior[t].to(s.device)
+            # repeat state for each vec tvlg component
+            s_roll_vec = einops.repeat(s, "b s -> b v s", v=n_i2c_vec)
+            # get controller state distribution for t
+            # (controller was optimized in local area around this)
+            s_local_dist = dist_vec.marginalize(slice(0, dim_x))
+            # compute importance weight: how close s_local_t is to s_roll
+            eps = 1e-16  # prevent division by zero => when this is zero, numerator is also zero :)
+            # s_local_dist.covariance *= 5  # higher spread
+            importance_vec = s_local_dist.prob(s_roll_vec)
+            # importance_vec = importance_vec.log().sigmoid()
+            importance_sum = importance_vec.sum(dim=-2) + eps
+            # get conditional action distribution
+            # equiv. to tvlgc prediction, but with true conditional covariance
+            a_cond_f = dist_vec.conditional(slice(dim_x, None))
+            a_expert_dist = a_cond_f(s_roll_vec)
+            # weight each prediction (mean & cov) by its importance ...
+            a_expert_mean_weighted = a_expert_dist.mean * importance_vec
+            a_expert_vars_weighted = einops.einsum(
+                a_expert_dist.covariance,
+                importance_vec,
+                "... a a, ... a -> ... a",
+            )
+            # ... then sum and divide by sum of importances (normalize)
+            a_expert_mean = a_expert_mean_weighted.sum(dim=-2) / (importance_sum)
+            a_expert_vars = a_expert_vars_weighted.sum(dim=-2) / (importance_sum)
+            a_expert_cov = torch.diag_embed(a_expert_vars + eps)  # prevent zero var
+            importance = importance_sum / (a_expert_vars + eps)
+            return MultivariateGaussian(a_expert_mean, a_expert_cov), importance
 
         #### ~ T: plot i2c local controller
         if plotting:
@@ -982,10 +1039,29 @@ def experiment(
                 results_dir / f"{n_i2c_vec}_tvlgs_vs_{dyn_model_type}-dyn_{i_iter}.png",
             )
 
+            ## plot mixture policy vs env
+            xs = torch.zeros((horizon, n_i2c_vec, dim_x))
+            xvars = torch.zeros((horizon, n_i2c_vec, dim_x))
+            us = torch.zeros((horizon, n_i2c_vec, dim_u))
+            uvars = torch.zeros((horizon, n_i2c_vec, dim_u))
+            s_dist = MultivariateGaussian.from_deterministic(s0_vec_mean)
+            for t in range(horizon):
+                xs[t, ...] = s_dist.mean
+                xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
+                a_dist, importance = mixture_tvlg(xs[t, ...], t=t)
+                us[t, ...] = a_dist.mean
+                uvars[t, ...] = a_dist.covariance.diagonal(dim1=-2, dim2=-1)
+                xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
+                s_dist = global_dynamics.predict_dist(xu)
+            # env.plot does not use env, it only plots
+            rollout_plot(xs, us, xvars=xvars, uvars=uvars, u_max=u_max, **fig_kwargs)
+            plt.suptitle(f"mixture policy vs env")
+            plt.savefig(results_dir / f"mixture_tvlg_vs_env_{i_iter}.png")
+
             if plot_local_policy and show_plots:
                 plt.show()
 
-        # return  # TODO DEBUG
+        return  # TODO DEBUG
 
         # ### plot data space coverage ###
         # if plot_data:
@@ -1013,70 +1089,6 @@ def experiment(
         #     g.fig.suptitle(f"test data ({df.shape[0] // horizon} episodes)", y=1.01)
         #     g.savefig(results_dir / "test_data.png", dpi=150)
 
-        # Fit global policy to local policy
-        def dagger_rollout(s_init, p_expert, stoch=False, var_factor=1.0):
-            s_roll = torch.empty([horizon, n_i2c_vec, dim_x]).to(s_init.device)
-            a_means = torch.empty([horizon, n_i2c_vec, dim_u]).to(s_init.device)
-            a_covs = torch.empty([horizon, n_i2c_vec, dim_u, dim_u]).to(s_init.device)
-            importances = torch.empty([horizon, n_i2c_vec, 1]).to(s_init.device)
-            s_current = s_init
-            for t, dist_vec in enumerate(sa_posterior):  # t in range(horizon)
-                dist_vec.to(s_current.device)
-                # repeat state for each vec tvlg component
-                s_roll_vec = einops.repeat(s_current, "b s -> b v s", v=n_i2c_vec)
-                # get controller state distribution for t
-                # (controller was optimized in local area around this)
-                s_local_dist = dist_vec.marginalize(slice(0, dim_x))
-                # compute importance weight: how close s_local_t is to s_roll
-                eps = 1e-16  # prevent division by zero => when this is zero, numerator is also zero :)
-                s_local_dist.covariance *= 1  # higher spread
-                importance_vec = s_local_dist.prob(s_roll_vec)
-                # importance_vec = importance_vec.log().sigmoid()
-                importance_sum = importance_vec.sum(dim=-2) + eps
-                # get conditional action distribution
-                # equiv. to tvlgc prediction, but with true conditional covariance
-                a_cond_f = dist_vec.conditional(slice(dim_x, None))
-                a_expert_dist = a_cond_f(s_roll_vec)
-                # weight each prediction (mean & cov) by its importance ...
-                a_expert_mean_weighted = a_expert_dist.mean * importance_vec
-                a_expert_vars_weighted = einops.einsum(
-                    a_expert_dist.covariance,
-                    importance_vec,
-                    "... a a, ... a -> ... a",
-                )
-                # ... then sum and divide by sum of importances (normalize)
-                a_expert_mean = a_expert_mean_weighted.sum(dim=-2) / (importance_sum)
-                a_expert_vars = a_expert_vars_weighted.sum(dim=-2) / (importance_sum)
-                a_expert_cov = torch.diag_embed(a_expert_vars + eps)  # prevent zero var
-                # store expert prediction data for buffer
-                s_roll[t, ...] = s_current
-                a_means[t, ...] = a_expert_mean
-                a_covs[t, ...] = a_expert_cov
-                importances[t, ...] = importance_sum / (a_expert_vars + eps)
-                # s = s': p% expert vs policy step
-                # if torch.rand(1) < p_expert:
-                #     if stoch:
-                #         a_dist = MultivariateGaussian(a_expert_mean, a_expert_cov/10)
-                #         a_step = a_dist.sample()
-                #     else:
-                #         a_step = a_expert_mean
-                # else:
-                #     # predict 1 step with trained policy & dynamics model step => (s, a)
-                #     a_step = global_policy.predict(s_current)
-                a_step = a_expert_mean
-                # dynamics: predict next state (no policy uncertainty?)
-                sa = torch.cat((s_current, a_step), dim=-1)
-                s_current = global_dynamics.predict(sa)
-            # add batched rollouts sequentially (not interleaved) => time dim last batch dim
-            s_roll = einops.rearrange(s_roll, "T ... s -> (... T) s")
-            a_means = einops.rearrange(a_means, "T ... a -> (... T) a")
-            a_covs = einops.rearrange(a_covs, "T ... a1 a2 -> (... T) a1 a2")
-            importances = einops.rearrange(importances, "T ... one -> (... T) one")
-            # for b in range(n_i2c_vec):
-            #     rollout_plot(s_roll[:, b, :], a_means[:, b, :], uvars=a_covs[:, b, :], u_max=u_max, **fig_kwargs)
-            # return collected data
-            return [s_roll, a_means, a_covs, importances]
-
         if policy_type == "tvlg":
             # create mixture (mean) policy
             global_policy = deepcopy(local_vec_policy)
@@ -1095,14 +1107,70 @@ def experiment(
             global_policy.model.sigma = local_vec_policy.model.sigma[:, 0, ...]
             global_policy.model.chol = local_vec_policy.model.chol[:, 0, ...]
         else:
+            #### ~ T: collect policy data
             logger.weak_line()
-            logger.info("START Training Policy")
-            global_policy.to(device)  # in-place
-            global_dynamics.to(device)  # in-place
-            torch.set_grad_enabled(True)
+            logger.info("START Collecting Policy Rollouts")
+            global_dynamics.cpu()  # in-place
+            global_dynamics.eval()
+            torch.set_grad_enabled(False)
 
-            #### ~ T: distill global policy
-            if strategy == 1:
+            # Fit global policy to local policy
+            def dagger_rollout(s_init, p_expert=1.0, stoch=False, var_factor=1.0):
+                s_roll = torch.empty([horizon, n_i2c_vec, dim_x]).to(s_init.device)
+                a_means = torch.empty([horizon, n_i2c_vec, dim_u]).to(s_init.device)
+                a_covs = torch.empty([horizon, n_i2c_vec, dim_u, dim_u]).to(
+                    s_init.device
+                )
+                importances = torch.empty([horizon, n_i2c_vec, 1]).to(s_init.device)
+                s_current = s_init
+                for t in range(horizon):
+                    a_expert_dist, importance = mixture_tvlg(s_current, t)
+                    # store expert prediction data for buffer
+                    s_roll[t, ...] = s_current
+                    a_means[t, ...] = a_expert_dist.mean
+                    a_covs[t, ...] = a_expert_dist.covariance
+                    importances[t, ...] = importance
+                    # asdf = torch.rand(1)
+                    # s = s': p% expert vs policy step
+                    # if torch.rand(1) < p_expert:
+                    #     if stoch:
+                    #         a_expert_dist.covariance /= 10
+                    #         a_step = a_expert_dist.sample()
+                    #     else:
+                    #         a_step = a_expert_dist.mean
+                    # else:
+                    #     # predict 1 step with trained policy & dynamics model step => (s, a)
+                    #     a_step = global_policy.predict(s_current)
+                    a_step = a_expert_dist.mean
+                    # dynamics: predict next state (no policy uncertainty?)
+                    sa = torch.cat((s_current, a_step), dim=-1)
+                    s_current = global_dynamics.predict(sa)
+                # for b in range(n_i2c_vec):
+                #     rollout_plot(s_roll[:, b, :], a_means[:, b, :], uvars=a_covs[:, b, :], u_max=u_max, **fig_kwargs)
+                # split train/test (split different i2c trajs)
+                n_train = max(
+                    1, int(n_i2c_vec * train_test_ratio / (train_test_ratio + 1))
+                )
+                train_test_data = []
+                for indices in [slice(0, n_train), slice(n_train, None)]:
+                    # add batched rollouts sequentially (not interleaved) => time dim last batch dim
+                    s_roll_ = einops.rearrange(
+                        s_roll[:, indices, :], "T ... s -> (... T) s"
+                    )
+                    a_means_ = einops.rearrange(
+                        a_means[:, indices, :], "T ... a -> (... T) a"
+                    )
+                    a_covs_ = einops.rearrange(
+                        a_covs[:, indices, :], "T ... a1 a2 -> (... T) a1 a2"
+                    )
+                    importances_ = einops.rearrange(
+                        importances[:, indices, :], "T ... one -> (... T) one"
+                    )
+                    train_test_data.append([s_roll_, a_means_, a_covs_, importances_])
+                return train_test_data
+
+            # collect train & test data
+            if pol_strategy == "moment matching":
                 # store marginal state and conditional action of joint (smoothed) posterior
                 # (state covariance not needed for moment matching: policy has no cov input)
                 # sample multiple values using quadrature (feedback behaviour)
@@ -1121,26 +1189,41 @@ def experiment(
                     a_dist = a_dist_f(s_pts[t, ...])
                     a_means[t, ...] = a_dist.mean
                     a_covs[t, ...] = a_dist.covariance
-                # add local solutions sequentially (not interleaved) => time dim last batch dim
-                s_pts = einops.rearrange(s_pts, "T ... s -> (... T) s")
-                a_means = einops.rearrange(a_means, "T ... a -> (... T) a")
-                a_covs = einops.rearrange(a_covs, "T ... a1 a2 -> (... T) a1 a2")
-                pol_train_buffer.clear()  # only train policy on last controller
-                pol_train_buffer.add([s_pts, a_means, a_covs, 1])
-            elif strategy == 2:
-                # # p%=100: always step with expert
+                # split train/test (split different i2c trajs)
+                n_train = max(
+                    1, int(n_i2c_vec * train_test_ratio / (train_test_ratio + 1))
+                )
+                for buf, indices in [
+                    (pol_train_buffer, slice(0, n_train)),
+                    (pol_test_buffer, slice(n_train, None)),
+                ]:
+                    # add local solutions sequentially (not interleaved) => time dim last batch dim
+                    s_pts = einops.rearrange(s_pts, "T ... s -> (... T) s")
+                    a_means = einops.rearrange(a_means, "T ... a -> (... T) a")
+                    a_covs = einops.rearrange(a_covs, "T ... a1 a2 -> (... T) a1 a2")
+                    importances = torch.ones_like(s_pts[..., 0:1])  # equal importance
+                    buf.clear()  # only train policy on last controller
+                    buf.add([s_pts, a_means, a_covs, importances])
+            elif pol_strategy == "dagger":
                 s_init = s0_vec_mean.to(device)
-                new_data = dagger_rollout(s_init, 1.0, stoch=False)
-                # # new_data = dagger_rollout(s_init, 1.0, stoch=True)
-                # # pol_train_buffer.clear()  # only train policy on last controller
-                pol_train_buffer.add(new_data)
+                train_data, test_data = dagger_rollout(s_init)
+                pol_train_buffer.add(train_data)
+                pol_test_buffer.add(test_data)
+
+            #### ~ T: train policy
+            logger.weak_line()
+            logger.info("START Training Policy")
+            global_policy.to(device)  # in-place
+            global_dynamics.to(device)  # in-place
+            torch.set_grad_enabled(True)
 
             _train_losses = []
             for i_epoch_pol in trange(n_epochs_pol + 1):
-                if strategy == 1:  # for every epoch fit train data
-                    for i_minibatch, minibatch in enumerate(pol_train_buffer):
-                        s_mean, a_mean, a_cov, _ = minibatch
-                        opt_pol.zero_grad()
+                # for every epoch fit train data
+                for i_minibatch, minibatch in enumerate(pol_train_buffer):
+                    s_mean, a_mean, a_cov, importance = minibatch
+                    opt_pol.zero_grad()
+                    if pol_strategy == "moment matching":
                         if isinstance(global_policy, StochasticPolicy):
                             a_pred_dist = global_policy.predict_dist(s_mean)
                             a_dist = MultivariateGaussian(a_mean, a_cov)
@@ -1148,48 +1231,30 @@ def experiment(
                         else:
                             a_pred_mean = global_policy.predict(s_mean)
                             loss = torch.nn.MSELoss()(a_pred_mean, a_mean)
-                        loss.backward()
-                        opt_pol.step()
-
-                        pol_loss_trace.append(loss.detach().item())
-                        _train_losses.append(pol_loss_trace[-1])
-                        logger.log_data(
-                            **{
-                                # "policy/train/epoch": pol_epoch_counter,
-                                "policy/train/loss": pol_loss_trace[-1],
-                            },
-                        )
-                elif strategy == 2:
-                    # fit trained policy to aggregated data
-                    for minibatch in pol_train_buffer:
-                        s_mean, a_mean, a_covs, importance = minibatch
-                        opt_pol.zero_grad()
+                    elif pol_strategy == "dagger":
                         # importance = importance.log().sigmoid()
                         # loss = loss_fn_pol(s_mean, a_mean, loss_factor=importance)
                         loss = loss_fn_pol(s_mean, a_mean)
-                        loss.backward()
-                        opt_pol.step()
+                    loss.backward()
+                    opt_pol.step()
 
-                        pol_loss_trace.append(loss.detach().item())
-                        _train_losses.append(pol_loss_trace[-1])
-                        logger.log_data(
-                            **{
-                                # "policy/train/epoch": pol_epoch_counter,
-                                "policy/train/loss": pol_loss_trace[-1],
-                            },
-                        )
+                    pol_loss_trace.append(loss.detach().item())
+                    _train_losses.append(pol_loss_trace[-1])
+                    logger.log_data(
+                        **{
+                            # "policy/train/epoch": pol_epoch_counter,
+                            "policy/train/loss": pol_loss_trace[-1],
+                        },
+                    )
 
-                    if i_epoch_pol % n_epochs_between_rollouts == 0:
-                        with torch.no_grad():
-                            # p% step with expert vs policy
+                if i_epoch_pol % n_epochs_between_rollouts == 0:
+                    with torch.no_grad():
+                        if pol_strategy == "dagger":
+                            # dagger rollouts
                             s_init = s0_vec_mean.to(device)
-                            # new_data = dagger_rollout(s_init, 0.7, stoch=True)
-                            # p_epoch = 0.999**i_epoch_pol
-                            # new_data = dagger_rollout(s_init, p_epoch, stoch=True)
-                            new_data = dagger_rollout(s_init, 1.0, stoch=False)
-                            # new_data = dagger_rollout(s_init, 1.0, stoch=True)
-                            # pol_train_buffer.clear()  # only train policy on last controller
-                            pol_train_buffer.add(new_data)
+                            train_data, test_data = dagger_rollout(s_init)
+                            pol_train_buffer.add(train_data)
+                            pol_test_buffer.add(test_data)
 
                 def visualize_training():
                     if not plotting:
@@ -1253,17 +1318,32 @@ def experiment(
 
                 # save logs & test
                 logger.save_logs()
-                if i_epoch_pol % min(n_epochs_pol * log_frequency, log_period) == 0:
+                if i_epoch_pol % n_epochs_between_eval_pol == 0:
                     with torch.no_grad():
-                        visualize_training()
+                        # visualize_training()
                         # test loss
-                        # pol_test_buffer.shuffling = False  # TODO only for plotting?
-                        # _test_losses = []
-                        # for minibatch in pol_test_buffer:  # TODO not whole buffer!
-                        #     _x_test, _y_test = minibatch
-                        #     _test_loss = loss_fn_pol(_x_test, _y_test)
-                        #     _test_losses.append(_test_loss.item())
-                        # pol_test_loss_trace.append(np.mean(_test_losses))
+                        pol_test_buffer.shuffling = False  # TODO only for plotting?
+                        _test_losses = []
+                        for minibatch in pol_test_buffer:  # TODO not whole buffer!
+                            _s_test, _a_test, _a_cov_test, _importance = minibatch
+                            if pol_strategy == "moment matching":
+                                if isinstance(global_policy, StochasticPolicy):
+                                    _a_pred_dist = global_policy.predict_dist(_s_test)
+                                    _a_test_dist = MultivariateGaussian(
+                                        _a_test, _a_cov_test
+                                    )
+                                    _test_loss = m_projection_loss(
+                                        _a_pred_dist, _a_test_dist
+                                    )
+                                else:
+                                    _a_pred = global_policy.predict(_s_test)
+                                    _test_loss = torch.nn.MSELoss()(_a_pred, _a_test)
+                            elif pol_strategy == "dagger":
+                                # _importance = _importance.log().sigmoid()
+                                # _test_loss = loss_fn_pol(_s_test, _a_test, loss_factor=_importance)
+                                _test_loss = loss_fn_pol(_s_test, _a_test)
+                            _test_losses.append(_test_loss.item())
+                        pol_test_loss_trace.append(np.mean(_test_losses))
                         mean_train_loss = np.mean(_train_losses)
                         _train_losses = []
                         logger.log_data(
@@ -1273,18 +1353,20 @@ def experiment(
                                 # "policy/eval/loss": pol_test_loss_trace[-1],
                             },
                         )
-
                         logstring = (
                             f"POL: Epoch {i_epoch_pol} ({pol_epoch_counter}), "
                             f"Train Loss={mean_train_loss:.2}, "
-                            # f"Test Loss={pol_test_loss_trace[-1]:.2}"
+                            f"Test Loss={pol_test_loss_trace[-1]:.2}"
                         )
                         logger.info(logstring)
 
-                # # stop condition
-                # if i_epoch_pol >= min_epochs_per_train:
-                #     if pol_test_loss_trace[-1] < early_stop_thresh:
-                #         break  # stop if test loss good
+                # stop condition
+                if i_epoch_pol > min_epochs_per_train:
+                    if (
+                        pol_test_loss_trace[-1] < early_stop_thresh
+                        and pol_loss_trace[-1] < early_stop_thresh
+                    ):
+                        break  # stop if test loss good
 
                 # TODO save model more often than in each global iter?
                 # if n % min(n_epochs * model_save_frequency, model_save_period) == 0:
@@ -1293,27 +1375,27 @@ def experiment(
 
             # Save the model after training
             global_policy.cpu()  # in-place
-            global_dynamics.cpu()
+            global_policy.eval()
             torch.set_grad_enabled(False)
             torch.save(
                 global_policy.model.state_dict(),
                 results_dir / f"pol_model_{i_iter}.pth",
             )
-
-            # TODO debug
-            prefix = f"scripts/_dbg{n_i2c_vec}"
-            # save policy
-            torch.save(
-                global_policy.model.state_dict(),
-                repo_dir / f"{prefix}_{policy_type}_ep{n_epochs_pol}.pth",
-            )
-
             logger.info("END Training policy")
+
+            # # TODO debug
+            # prefix = f"scripts/_dbg{n_i2c_vec}"
+            # # save policy
+            # torch.save(
+            #     global_policy.model.state_dict(),
+            #     repo_dir / f"{prefix}_pol_{policy_type}_ep{n_epochs_pol}.pth",
+            # )
 
             #### ~ T: plot policy
             if plot_policy and plotting:
                 # compute jacobian of policy action & compare with tvlg K_actual
-                states = pol_train_buffer.data[0]  # [(b T) x]
+                states = pol_test_buffer.data[0]  # [(b T) x]
+                # states = pol_train_buffer.data[0]  # [(b T) x]
                 global_policy.to(device)
                 jac_f = vmap(jacrev(global_policy.predict))
                 jac = jac_f(states)
@@ -1351,8 +1433,10 @@ def experiment(
                 ## test policy in rollouts
                 # TODO extract?
                 ## data traj (from buffer) -> trailing underscore = on device
-                s_env_ = pol_train_buffer.data[0]  # [(n T) s]
-                a_env = pol_train_buffer.data[1].cpu()  # [(n T) a]
+                s_env_ = pol_test_buffer.data[0]  # [(n T) s]
+                a_env = pol_test_buffer.data[1].cpu()  # [(n T) a]
+                # s_env_ = pol_train_buffer.data[0]  # [(n T) s]
+                # a_env = pol_train_buffer.data[1].cpu()  # [(n T) a]
                 s_env_ = einops.rearrange(s_env_, "(n T) s -> T n s", T=horizon)
                 a_env = einops.rearrange(a_env, "(n T) a -> T n a", T=horizon)
                 # select how many trajs to plot (take from back of buffer)
@@ -1471,11 +1555,13 @@ def experiment(
                     plt.show()
 
             fig_loss_pol, ax_loss_pol = plt.subplots(**fig_kwargs)
-            x_train_loss_pol = scaled_xaxis(pol_loss_trace, pol_epoch_counter)
+            x_train_loss_pol = scaled_xaxis(pol_loss_trace, n_x_ticks=pol_epoch_counter)
             ax_loss_pol.plot(
                 x_train_loss_pol, pol_loss_trace, c="k", label="train loss"
             )
-            x_test_loss_pol = scaled_xaxis(pol_test_loss_trace, pol_epoch_counter)
+            x_test_loss_pol = scaled_xaxis(
+                pol_test_loss_trace, dist_x_ticks=n_epochs_between_eval_pol
+            )
             ax_loss_pol.plot(
                 x_test_loss_pol, pol_test_loss_trace, c="g", label="test loss"
             )
@@ -1494,7 +1580,7 @@ def experiment(
         # return  # TODO DEBUG
 
     ####################################################################################################################
-    #### ~~~~ EVALUATION ~~~~
+    #### ~~~~~~ EVALUATION ~~~~~~
 
     # local_policy.plot_metrics()
     # initial_state_distribution.mean = torch.Tensor([torch.pi + 0.4, 0.0])  # breaks local_policy!!
@@ -1560,11 +1646,13 @@ def experiment(
         # plot training loss
         if dyn_model_type != "env":
             fig_loss_dyn, ax_loss_dyn = plt.subplots(**fig_kwargs)
-            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, dyn_epoch_counter)
+            x_train_loss_dyn = scaled_xaxis(dyn_loss_trace, n_x_ticks=dyn_epoch_counter)
             ax_loss_dyn.plot(
                 x_train_loss_dyn, dyn_loss_trace, c="k", label="train loss"
             )
-            x_test_loss_dyn = scaled_xaxis(dyn_test_loss_trace, dyn_epoch_counter)
+            x_test_loss_dyn = scaled_xaxis(
+                dyn_test_loss_trace, dist_x_ticks=n_epochs_between_eval_pol
+            )
             ax_loss_dyn.plot(
                 x_test_loss_dyn, dyn_test_loss_trace, c="g", label="test loss"
             )
@@ -1582,11 +1670,13 @@ def experiment(
 
         if policy_type != "tvlg":
             fig_loss_pol, ax_loss_pol = plt.subplots(**fig_kwargs)
-            x_train_loss_pol = scaled_xaxis(pol_loss_trace, pol_epoch_counter)
+            x_train_loss_pol = scaled_xaxis(pol_loss_trace, n_x_ticks=pol_epoch_counter)
             ax_loss_pol.plot(
                 x_train_loss_pol, pol_loss_trace, c="k", label="train loss"
             )
-            x_test_loss_pol = scaled_xaxis(pol_test_loss_trace, pol_epoch_counter)
+            x_test_loss_pol = scaled_xaxis(
+                pol_test_loss_trace, dist_x_ticks=n_epochs_between_eval_pol
+            )
             ax_loss_pol.plot(
                 x_test_loss_pol, pol_test_loss_trace, c="g", label="test loss"
             )
@@ -1616,7 +1706,7 @@ def experiment(
     # new: (breaks local_policy!!)
     initial_state_distribution.covariance = torch.diag_embed(torch.Tensor([1, 1e-6]))
 
-    n_mod_inits = 10
+    n_mod_inits = 2
     mod_inits = initial_state_distribution.sample([n_mod_inits])
 
     ## plot local policies vs env
@@ -1634,14 +1724,19 @@ def experiment(
         xsl.append(xs)
         usl.append(us)
         uvarsl.append(uvars)
-    xs = torch.cat(xsl, dim=-2)
-    us = torch.cat(usl, dim=-2)
-    uvars = torch.cat(uvarsl, dim=-2)
-    rollout_plot(xs, us, uvars=uvars, u_max=u_max, **fig_kwargs)
-    plt.suptitle(
-        f"{n_i2c_vec} local policies vs env ({n_mod_inits} modified init states)"
-    )
-    plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}_modinit.png")
+        rollout_plot(xs, us, uvars=uvars, u_max=u_max, **fig_kwargs)
+        plt.suptitle(
+            f"{n_i2c_vec} local policies vs env ({n_mod_inits} modified init states[{i}])"
+        )
+        plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}_modinit{i}.png")
+    # xs = torch.cat(xsl, dim=-2)
+    # us = torch.cat(usl, dim=-2)
+    # uvars = torch.cat(uvarsl, dim=-2)
+    # rollout_plot(xs, us, uvars=uvars, u_max=u_max, **fig_kwargs)
+    # plt.suptitle(
+    #     f"{n_i2c_vec} local policies vs env ({n_mod_inits} modified init states[{i}])"
+    # )
+    # plt.savefig(results_dir / f"{n_i2c_vec}_tvlgs_vs_env_{i_iter}_modinit.png")
 
     ### policy vs env
     xs, us, xxs = environment.run(mod_inits, global_policy, horizon)
@@ -1653,9 +1748,29 @@ def experiment(
         uvars.append(u_var)
     uvars = torch.stack(uvars)
     rollout_plot(xs, us, uvars=uvars, u_max=u_max, **fig_kwargs)
-    plt.suptitle(f"{policy_type} policy vs env ({n_mod_inits} modified init statess)")
+    plt.suptitle(f"{policy_type} policy vs env ({n_mod_inits} modified init states)")
     # plt.suptitle(f"{n_i2c_vec} local policies vs env (modified init state)")
     plt.savefig(results_dir / f"{policy_type}_vs_env_{i_iter}_modinit.png")
+
+    ## mixture policy vs env
+    xs = torch.zeros((horizon, n_mod_inits, dim_x))
+    xvars = torch.zeros((horizon, n_mod_inits, dim_x))
+    us = torch.zeros((horizon, n_mod_inits, dim_u))
+    uvars = torch.zeros((horizon, n_mod_inits, dim_u))
+    s_dist = MultivariateGaussian.from_deterministic(mod_inits)
+    for t in range(horizon):
+        xs[t, ...] = s_dist.mean
+        xvars[t, ...] = s_dist.covariance.diagonal(dim1=-2, dim2=-1)
+        a_dist, importance = mixture_tvlg(xs[t, ...], t=t)
+        us[t, ...] = a_dist.mean
+        uvars[t, ...] = a_dist.covariance.diagonal(dim1=-2, dim2=-1)
+        # uvars[t, ...] = importance.log().sigmoid()
+        xu = torch.cat((xs[t, ...], us[t, ...]), dim=-1)
+        s_dist = global_dynamics.predict_dist(xu)
+    # env.plot does not use env, it only plots
+    rollout_plot(xs, us, xvars=xvars, uvars=uvars, u_max=u_max, **fig_kwargs)
+    plt.suptitle(f"mixture policy vs env")
+    plt.savefig(results_dir / f"mixture_tvlg_vs_env_{i_iter}.png")
 
     logger.strong_line()
     logger.info(f"Seed: {seed} - Took {time.time()-time_begin:.2f} seconds")

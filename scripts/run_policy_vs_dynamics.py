@@ -2,7 +2,6 @@ import json
 import os
 
 import numpy as np
-import quanser_robots
 import torch
 import yaml
 from experiment_launcher import run_experiment
@@ -14,26 +13,30 @@ from tqdm import tqdm
 
 from src.models.dnns import DNN3
 from src.models.linear_bayesian_models import (
-    NeuralLinearModel,
+    NeuralLinearModelResNet,
     SpectralNormalizedNeuralGaussianProcess,
 )
 from src.utils.conversion_utils import np2torch
 from src.utils.environment_tools import state4to6, state6to4
 from src.utils.seeds import fix_random_seed
+from src.utils.time_utils import timestamp
 
 
 def render_policy(
     sac_policy_dir: str = "models/2022_07_15__14_57_42",
     mlp_policy_dir: str = "models/mlp_clone_SAC/2022_11_17__00_53_25",
     nlm_policy_dir: str = "models/nlm_clone_SAC/2022_11_17__00_17_24",
-    snngp_policy_dir: str = "models/snngp_clone_SAC/2022_11_17__14_56_23",
+    # snngp_policy_dir: str = "models/snngp_clone_SAC/2022_11_17__14_56_23",
+    # snngp_policy_dir: str = "debug/logs/tmp/snngp_clone_SAC/0/2023_06_23__15_23_23",
+    snngp_policy_dir: str = "debug/logs/tmp/snngp_clone_SAC/0/2023_06_23__16_38_26",
     mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_31_35",  # no y whitening
     # mlp_dynamics_dir: str = "debug/logs/tmp/mlp_learn_dynamics/0/2022_11_10__05_30_01",  # y whitening
     nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__20_00_34",  # assump 1 (exc)
     # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_56_40",  # assump 2 (ok)
     # nlm_dynamics_dir: str = "debug/logs/tmp/nlm_learn_dynamics/0/2022_11_15__19_58_51",  # assump 3 (ok)
-    snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_23_45",
-    policy_alg: str = "mlp",  # of ['sac', 'mlp', 'nlm', 'snngp']
+    # snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2022_11_10__04_23_45",
+    snngp_dynamics_dir: str = "debug/logs/tmp/snngp_learn_dynamics/0/2023_06_22__18_48_15",
+    policy_alg: str = "snngp",  # of ['sac', 'mlp', 'nlm', 'snngp']
     dynamics_alg: str = "gym",  # of ['gym', 'mlp', 'nlm', 'snngp']
     use_cuda: bool = True,  # gp too slow on cpu
     n_runs: int = 10,
@@ -43,7 +46,7 @@ def render_policy(
     plot: bool = True,
     show_plots: bool = False,
     seed: int = 0,
-    results_dir: str = "",  ## IGNORED (only needed to run with with run_experiment)
+    results_dir: str = "logs/tmp/",
 ):
     ####################################################################################################################
     #### SETUP
@@ -51,8 +54,12 @@ def render_policy(
     # Fix seeds
     fix_random_seed(seed)
 
-    # dirs & paths
+    # Results directory
     repo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.pardir)
+    results_dir = os.path.join(repo_dir, results_dir, str(seed), timestamp())
+    os.makedirs(results_dir, exist_ok=True)
+
+    # dirs & paths
     sac_agent_path = os.path.join(repo_dir, sac_policy_dir, "agent_end.msh")
     mlp_agent_path = os.path.join(repo_dir, mlp_policy_dir, "agent_end.pth")
     nlm_agent_path = os.path.join(repo_dir, nlm_policy_dir, "agent_end.pth")
@@ -89,6 +96,8 @@ def render_policy(
     #### EXPERIMENT SETUP
 
     # MDP
+    import quanser_robots
+
     mdp = Gym(sac_args["env_id"], horizon=sac_args["horizon"], gamma=sac_args["gamma"])
 
     # Agent
@@ -114,19 +123,22 @@ def render_policy(
             return action_torch.cpu().reshape(-1).numpy()
 
     elif policy_alg == "nlm":
-        agent = NeuralLinearModel(s6_dim, a_dim, nlm_args["n_features"])
+        agent = NeuralLinearModelResNet(s6_dim, a_dim, nlm_args["n_features"])
         agent.to(device)
         state_dict = torch.load(nlm_agent_path)
         agent.load_state_dict(state_dict)
 
         def policy(state):
             state_torch = np2torch(state).reshape(1, -1).to(device)
-            mu = agent(state_torch, covs=False)
+            mu, covs = agent(state_torch)
             return mu.cpu().reshape(-1).numpy()
 
     elif policy_alg == "snngp":
         agent = SpectralNormalizedNeuralGaussianProcess(
-            s6_dim, a_dim, snngp_args["n_features"]
+            s6_dim,
+            snngp_args["layer_spec"],
+            snngp_args["n_rff_features"],
+            a_dim,
         )
         agent.to(device)
         state_dict = torch.load(snngp_agent_path)
@@ -134,7 +146,7 @@ def render_policy(
 
         def policy(state):
             state_torch = np2torch(state).reshape(1, -1).to(device)
-            mu = agent(state_torch, covs=False)
+            mu, covs = agent(state_torch)
             return mu.cpu().reshape(-1).numpy()
 
     else:
@@ -168,7 +180,7 @@ def render_policy(
             return next_state4, reward, False, False
 
     elif dynamics_alg == "nlm":
-        model = NeuralLinearModel(
+        model = NeuralLinearModelResNet(
             dim_x=s6_dim + a_dim,
             dim_y=s4_dim,
             dim_features=nlm_dyn_args["n_features"],
@@ -179,8 +191,8 @@ def render_policy(
 
         def dynamics(state4, action):
             _x = np2torch(np.hstack([state4to6(state4), action]))
-            ss_delta_pred = model(_x.to(device), covs=False).cpu()
-            next_state4 = state4 + ss_delta_pred.numpy()
+            ss_delta_pred, covs = model(_x.to(device))
+            next_state4 = state4 + ss_delta_pred.cpu().numpy()
             reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
             # next_state, reward, absorbing, last
             return next_state4, reward, False, False
@@ -188,8 +200,10 @@ def render_policy(
     elif dynamics_alg == "snngp":
         model = SpectralNormalizedNeuralGaussianProcess(
             dim_x=s6_dim + a_dim,
-            dim_y=s4_dim,
+            # layer_spec=[*(256,) * 2],
+            layer_spec=snngp_dyn_args["layer_spec"],
             dim_features=snngp_dyn_args["n_features"],
+            dim_y=s4_dim,
         )
         model.to(device)
         state_dict = torch.load(snngp_dynamics_path)
@@ -197,8 +211,8 @@ def render_policy(
 
         def dynamics(state4, action):
             _x = np2torch(np.hstack([state4to6(state4), action]))
-            ss_delta_pred = model(_x.to(device), covs=False).cpu()
-            next_state4 = state4 + ss_delta_pred.numpy()
+            ss_delta_pred, covs = model(_x.to(device))
+            next_state4 = state4 + ss_delta_pred.cpu().numpy()
             reward, absorbing = mdp.env.unwrapped._rwd(next_state4, action)
             # next_state, reward, absorbing, last
             return next_state4, reward, False, False
@@ -271,13 +285,14 @@ def render_policy(
             axs[yi + 1, 1].set_ylabel(f"ss[{yi}]")
         axs[-1, 0].set_xlabel("steps")
         axs[-1, 1].set_xlabel("steps")
-        fig.suptitle(
-            f"run {n_runs}x {policy_alg} policy against {dynamics_alg} dynamics"
-        )
-        # plt.savefig(os.path.join(results_dir, "action_rollout.png"), dpi=150)
+        title = f"run {n_runs}x {policy_alg} policy against {dynamics_alg} dynamics"
+        fig.suptitle(title)
+        plt.savefig(os.path.join(results_dir, f"{title}.png"), dpi=150)
 
     if show_plots:
         plt.show()
+
+    print(f"Logs in {results_dir}")
 
 
 if __name__ == "__main__":

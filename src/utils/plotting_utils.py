@@ -16,9 +16,13 @@ def add_grid(ax_or_axs):
         ax_or_axs.grid(True)
 
 
-def scaled_xaxis(y_points, n_on_axis):
-    # create an xaxis range that has len(y_points) values going from 0 to n_on_axis
-    return np.arange(len(y_points)) / len(y_points) * n_on_axis
+def scaled_xaxis(y_points, n_x_ticks=None, dist_x_ticks=1):
+    if n_x_ticks is not None:
+        # create an xaxis range that has len(y_points) values going from 0 to n_x_ticks
+        return np.arange(len(y_points)) / len(y_points) * n_x_ticks
+    else:
+        # create an xaxis range that has len(y_points) values spaced by dist_x_ticks
+        return np.arange(len(y_points)) * dist_x_ticks
 
 
 def rollout_plot(xs, us, xvars=None, uvars=None, u_max=None, **fig_kwargs):

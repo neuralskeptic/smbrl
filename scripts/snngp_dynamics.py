@@ -26,10 +26,11 @@ def experiment(
     alg: str = "snngp",
     sac_agent_dir: str = "models/2022_07_15__14_57_42",
     n_train_episodes: int = 100,
-    n_epochs: int = 300,
+    n_epochs: int = 500,
     batch_size: int = 200 * 10,  # lower if gpu out of memory
+    layer_spec: int = [*(128,) * 2],  # [in, *layer_spec, out]
     n_features: int = 256,
-    lr: float = 5e-3,
+    lr: float = 1e-3,
     use_cuda: bool = True,
     # verbose: bool = False,
     plot_data: bool = False,
@@ -87,11 +88,11 @@ def experiment(
     dim_out = len(y_cols)
 
     train_buffer = ReplayBuffer(
-        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+        [dim_in, dim_out], batchsize=batch_size, device=device, max_size=1e5
     )
 
     test_buffer = ReplayBuffer(
-        dim_in, dim_out, batchsize=batch_size, device=device, max_size=1e5
+        [dim_in, dim_out], batchsize=batch_size, device=device, max_size=1e5
     )
 
     ### mdp ###
@@ -128,7 +129,7 @@ def experiment(
         s, a, r, ss, absorb, last = parse_dataset(train_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
         new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
-        train_buffer.add(new_xs, new_ys)
+        train_buffer.add([new_xs, new_ys])
         # test buffer
         test_episodes = int(train_episodes / 4)
         test_dataset = rollout(
@@ -137,13 +138,15 @@ def experiment(
         s, a, r, ss, absorb, last = parse_dataset(test_dataset)  # everything 4dim
         new_xs = np2torch(np.hstack([state4to6(s), a]))
         new_ys = np2torch(ss - s)  # delta state4 = ss4 - s4
-        test_buffer.add(new_xs, new_ys)
+        test_buffer.add([new_xs, new_ys])
         print("Done.")
 
     ### dynamics model ###
-    model = SpectralNormalizedNeuralGaussianProcess(dim_in, dim_out, n_features)
+    model = SpectralNormalizedNeuralGaussianProcess(
+        dim_in, layer_spec, n_features, dim_out
+    )
     # model.init_whitening(train_buffer.xs, train_buffer.ys, disable_y=True)
-    model.init_whitening(train_buffer.xs, train_buffer.ys)
+    model.init_whitening(*train_buffer.data)
     model.to(device)
 
     ### optimizer
@@ -171,7 +174,7 @@ def experiment(
             # log
             with torch.no_grad():
                 # use latest minibatch
-                y_pred = model(x, covs=False)
+                y_pred, covs = model(x)
                 rmse = torch.sqrt(torch.pow(y_pred - y, 2).mean()).item()
 
                 # test loss
@@ -210,7 +213,7 @@ def experiment(
     s, a, r, ss, absorb, last = select_first_episodes(test_dataset, 1, parse=True)
     _x = np2torch(np.hstack([state4to6(s), a]))
     with torch.no_grad():
-        ss_delta_pred = model(_x.to(device), covs=False)
+        ss_delta_pred, covs = model(_x.to(device))
         ss_delta_pred = ss_delta_pred.cpu()
     ss_pred = np2torch(s) + ss_delta_pred
 
@@ -249,7 +252,7 @@ def experiment(
         # dynamics model
         _x = np2torch(np.hstack([state4to6(state4), action]))
         with torch.no_grad():
-            ss_delta_pred = model(_x.to(device), covs=False)
+            ss_delta_pred, covs = model(_x.to(device))
         next_state4 = state4 + ss_delta_pred.cpu().numpy()
         episode_steps += 1
         if episode_steps >= mdp.info.horizon:

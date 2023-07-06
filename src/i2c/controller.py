@@ -107,9 +107,8 @@ class TimeVaryingLinearGaussian(CudaAble):
             for t, dist in enumerate(distribution):
                 x = dist.marginalize(slice(0, self.dim_x))
                 u = dist.marginalize(slice(self.dim_x, None))
-                K = torch.linalg.solve(
-                    x.covariance, dist.covariance[..., : self.dim_x, self.dim_x :]
-                ).mT
+                cross_cov_xu = dist.covariance[..., : self.dim_x, self.dim_x :]
+                K = torch.linalg.solve(x.covariance, cross_cov_xu).mT
                 self.K_actual[t, ...] = K
                 self.k_actual[t, ...] = u.mean - einops.einsum(
                     K, x.mean, "... u x, ... x -> ... u"
@@ -118,11 +117,8 @@ class TimeVaryingLinearGaussian(CudaAble):
                     self.K_opt[t, ...], x.mean, "... u x, ... x -> ... u"
                 )
                 self.sigma[t, ...] = u.covariance
-                # TRUE conditional covariance: unstable? iirc this is usually not used in optim.
-                # cross_cov = dist.covariance[..., self.dim_x :, : self.dim_x]
-                # self.sigma[t, ...] = u.covariance - cross_cov @ torch.linalg.solve(
-                #     x.covariance, cross_cov.mT
-                # )
+                # # TRUE conditional covariance: unstable? iirc this is usually not used in optim.
+                # self.sigma[t, ...] = u.covariance - K @ cross_cov_xu
                 self.chol[t, ...] = torch.linalg.cholesky(self.sigma[t, ...])
         else:
             raise ValueError("Cannot update from this distribution!")

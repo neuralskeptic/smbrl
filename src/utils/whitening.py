@@ -1,4 +1,5 @@
 from functools import wraps
+from typing import Sequence
 
 import torch
 
@@ -14,6 +15,8 @@ def whitening_metrics_x(X):
 
 
 def whitening_metrics_y(Y):
+    if isinstance(Y, Sequence):
+        Y = Y[0]  # only first is prediction
     # z-score for Y
     y_mean = Y.mean(axis=0)  # along N
     y_std = Y.std(axis=0)  # along N
@@ -66,9 +69,17 @@ def data_whitening(wrapped):
             return (x - self.x_mean) @ self.w_ZCA
 
         def whitenY(self, y):
-            return (y - self.y_mean) / self.y_std
+            if isinstance(y, Sequence):
+                y_, *rest = y  # only first is prediction
+                return (y_ - self.y_mean) / self.y_std, *rest
+            else:
+                return (y - self.y_mean) / self.y_std
 
         def dewhitenY(self, y):
-            return y * self.y_std + self.y_mean
+            if isinstance(y, Sequence):
+                y_, *rest = y  # only first is prediction
+                return y_ * self.y_std + self.y_mean, *rest
+            else:
+                return y * self.y_std + self.y_mean
 
     return _WhiteningWrapper
